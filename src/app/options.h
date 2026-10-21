@@ -301,6 +301,10 @@ struct Options {
     const char* disasterPeriod[4]    = {nullptr, nullptr, nullptr, nullptr};
     const char* forceSickDisease     = nullptr;
 
+    // ── the map-cell diagnostics (src/diag/cell_trace.cpp; tools/cell_dump/cell_dump.sh)
+    const char* cellDump             = nullptr;// BANISHED_CELL_DUMP — directory; each save load writes cells_raw.txt / cells_fixed.txt
+    bool        cellTrace            = false;  // BANISHED_CELL_TRACE — log footprintCount wraps and buildable -> unbuildable re-sorts
+
     // ── NOT read by the exe ──────────────────────────────────────────────────
     // BANISHED_DIR      — Makefile only (where sa-deploy copies the exe).
     // BANISHED_GAME_DIR — tools/game_dir_lock.sh only (the shared game directory).

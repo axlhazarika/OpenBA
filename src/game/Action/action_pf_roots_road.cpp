@@ -31,6 +31,7 @@
 #include <cstdint>
 #include "Component/still_terrain.h"   // STILLTERRAIN: StillTerrain::Bump (the terrain epoch)
 #include "Game/cell_stamp.h"   // AMBMEMO: CellStamp::NoteWrite after a cell store
+#include "cell_trace.h"   // red square: BANISHED_CELL_TRACE (src/diag/cell_trace.h)
 
 typedef unsigned int  uint;
 typedef unsigned short ushort;
@@ -202,6 +203,7 @@ void Map::FinishRoadCell(int param_2, uint8_t param_3, uint param_4) {
 
     lVar4 = &cells.GetData()[param_2];
     if (param_4 == 2) {
+        CellTrace::NoteCount(this, lVar4, lVar4->footprintCount, -1, "FinishRoadCell");
         lVar4->footprintCount = lVar4->footprintCount + -1;
         lVar4->field_0x2A = 0xff;          // disasm: MOV word ptr,0xff over +0x2a / +0x2b (H7)
         lVar4->field_0x2B = 0;

@@ -60,6 +60,7 @@
 #include "Component/exe_bodies.h"   // CreateNaturalResource_helper_e2c0
 #include "Component/ComponentDescription.h"   // B8 RT2: ::Object::SerializeExternal<ComponentDescription> (the downcast needs it complete)
 #include "Game/cell_stamp.h"   // AMBMEMO: CellStamp::NoteWrite after a cell store
+#include "cell_trace.h"   // red square: BANISHED_CELL_DUMP (src/diag/cell_trace.h)
 
 // ============================================================
 // Functions ported elsewhere, called by name through their declaring headers:
@@ -234,6 +235,7 @@ void Map::Serialize(IO::Stream& stream) {
         field_0xA2 = true;
 
         int version = serializer.GetVersion();
+        CellTrace::DumpCells(this, "raw", version);   // the cells as saved, before the fix-up
 
         if (version < 2) {
             int32_t width = size;
@@ -291,6 +293,7 @@ void Map::Serialize(IO::Stream& stream) {
             }
         }
 
+        CellTrace::DumpCells(this, "fixed", version);
         TerrainSidecar::Invalidate();   // [terrain sidecar] the whole array was just streamed in
         CellStamp::Invalidate();          // [AMBMEMO] the whole array was just streamed in
         // 0x14009c480 zone refresh. Retail's call (0x14009f29e) sets only RCX = this;

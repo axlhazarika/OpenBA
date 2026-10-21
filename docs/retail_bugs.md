@@ -213,3 +213,65 @@ falls into the common tail at `0x1400d61c3`, which stores R15D into the record's
 No instruction on that arm writes R15.
 
 **Lever.** Return the computed cost on the not-found arm, that is, the value just stored.
+
+## 7. "Red squares": cells that turn unbuildable and stay that way
+
+**Symptom.** Reported by a player 2026-10-20 (with a screenshot: one isolated red cell, nothing
+on it, inside an otherwise green placement rectangle). A cell that was buildable turns red in
+the placement overlay for no visible reason. Three shapes:
+- a house demolished and re-placed one cell over: one cell is red;
+- a mountain road built in one drag succeeds, the same road built tile by tile hits red cells;
+- a bridge deleted and then rebuilt over the same span is refused.
+
+**Status: findings from reading the code, not yet reproduced.** The bridge case is read in
+Ghidra; the other two are candidates waiting on the player's before / after saves.
+`tools/cell_dump/` (README alongside) dumps a save's cells and diffs two dumps;
+`BANISHED_CELL_TRACE=1` logs the count wraps and re-sorts named below while a game runs.
+
+**What red means.** `Map::TestPlacement` (`0x14009f5d0`, `Player/tool_base_path.cpp`) fails a
+cell on any of: (a) its terrain type (MapCell `+0x29`) is outside the tool's mask; (b) a
+blocker entity (`+0x00`); (c) `footprintCount` (`+0x28`) non-zero while the tested cell is not
+a '.' cell of the new footprint; (d) height. `footprintCount` is one `uint8_t` refcount shared
+by roads (+1 in `Map::PlaceRoadCell` `0x14009c960`, -1 in `Map::FinishRoadCell` `0x14009c640`
+type 2 and `Map::RemovePendingRoad` `0x14009c700`) and the '.' cells of building footprints
+(±1 in the stamp `0x14009d360`, from `ZoneComponent::OnAdded` / `OnRemove`). The loader's
+fix-up pass in `Map::Serialize` (`0x14009f100`) turns a count of 0xFF back into 0, so retail's
+author met the count wrapping below 0.
+
+**The house: its own lifecycle is symmetric.** Placement, clearing, construction, demolition,
+fire / tornado and save / load write and undo the same cells with the same rectangle and
+rotation: blocker and '.' count through `0x14009d360` on add and remove, occupant and terrain
+through `0x14009dc20` / `0x14009dee0` gated on component flag `0x100000` (saved), and a load
+does not re-run `OnAdded`. The single red cell most likely comes from a road sharing the count
+on the house's door cell. Candidates, both unconfirmed:
+1. Removal of one road cell completes twice (the removal tool dragged over a road twice while a
+   worker is already on its first marker): `FinishRoadCell` type 2 subtracts 1 unconditionally,
+   so a door cell holding a road (count 2) reaches 0, and the house's removal wraps it to 0xFF.
+   Red for the rest of the session; a reload clears it (the 0xFF fix-up).
+2. A pending road cancelled while a citizen already carries its `CompleteRoad`, then a save /
+   load: the fix-up pass sets the count to 1 on a road cell, and `RemovePendingRoad`'s
+   `+0x2A == 0xFF` arm never subtracts. Survives a reload.
+
+**The tile-by-tile road: the removal re-sort.** `FinishRoadCell` resets the height grid at the
+finished cell's four corners (`Map::ResetTerrainHeights` `0x14009e0e0`). When an entity later
+leaves a neighbouring cell (a tree, rock or pile cleared, a building demolished), `0x14009dee0`
+re-sorts that cell with `ClassifyTerrain` (`0x14009e2c0`) from the changed heights; on a slope
+it can come out as type 10 (too steep), outside the road mask `0xa17`, and nothing sorts it
+again. In one long drag the neighbouring cells are already queued, and finishing them
+overwrites the re-sorted type. Open: what the height grid `ResetTerrainHeights` writes really
+is, and whether the port's slope sample (`MapQuery_SampleNormal`, `Game/mapquery.cpp`) matches
+retail's `0x14009a810` at the 0.9 threshold.
+
+**The bridge: the far bank must not be road (Ghidra-confirmed).** Deleting a bridge undoes
+everything it wrote (body cells re-sorted back to water, the zone stamp cleared, no road and no
+heights written). `BridgeTool::ValidatePath` (`0x1400fb2d0`, `Player/bridgetool_validate.cpp`)
+runs its clearance ring from the first body cell to `bodyCol + bodyCount` inclusive, so it also
+tests the first bank cell past the water on the higher-index end (east, or south), and that
+cell must hold no road (terrain 0 / 1, `+0x2A` set, or pending). The near bank is never
+tested. A bridge's connecting road on the far bank therefore blocks the rebuild, and the
+preview paints the whole span red without naming the cell. Removing that road tile makes the
+span valid. Looks like an off-by-one, not a rule.
+
+**Levers, if these are ever changed** (each a `fix.*` row, `docs/extensions/DESIGN.md` §3):
+end the bridge ring at the last body cell; clamp the count at 0 in `FinishRoadCell`; re-sort
+the cells around a finished road tile, or exclude road-adjacent cells from the removal re-sort.
