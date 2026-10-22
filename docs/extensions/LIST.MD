@@ -23,6 +23,7 @@
 | Ext A | Background save compression | Compresses the save on a worker thread; identical save files. |
 | Ext A | Batched terrain drawing | Draws each row of visible terrain chunks in one call and skips shadow work for terrain whose shadow cannot reach the screen. Same picture. |
 | Ext A | Parallel resource decoding | While a resource loads, the next compressed parts of its file are decoded on other cores. Same game data, faster loading of large mods. Takes effect at the next start. |
+| Ext A | Parallel graphics loading | While content loads, its GPU buffers and textures are created on other cores. Same resources, all made before the load ends; faster loading of large mods. Takes effect at the next load. |
 | Ext A | Mod loading screen | While mods load at start-up, shows the loading screen and which mod is loading instead of a black window. |
 | Ext A | Background saving | Writes the save on a worker thread while the town holds still for a moment; the screen and camera keep moving. Identical save files. |
 | Ext B | Faster pathfinding | Looks for same length routes to save pathfinding work. |
