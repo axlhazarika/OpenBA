@@ -66,14 +66,23 @@ void DumpCells(const Map* map, const char* stage, int version) {
     const int size = map->size;
     const int count = map->cells.GetSize();
     std::fprintf(out, "# cells stage=%s size=%d count=%d version=%d\n", stage, size, count, version);
-    std::fprintf(out, "# index x y count terrain road roadState growth floor zone blocker occupant\n");
+    std::fprintf(out, "# index x y count terrain road roadState growth floor zone blocker occupant class height slope\n");
+    // class / height / slope: what the classifier 0x14009e2c0 says for the cell today (the type
+    // a re-sort would write), from the same terrain query it makes (0x14009f3e0).
+    Map* query = const_cast<Map*>(map);
+    const float half = static_cast<float>(size >> 1) - 0.5f;
     const MapCell* cells = map->cells.GetData();
     for (int i = 0; i < count; ++i) {
         const MapCell& cell = cells[i];
-        std::fprintf(out, "%d %d %d %u %u %u %u %u %d %u %s %s\n",
+        float inXY[2] = {static_cast<float>(i % size) - half, static_cast<float>(i / size) - half};
+        float pos[3] = {0, 0, 0};
+        float tri[3] = {0, 0, 0};
+        query->GetTerrainPos(pos, inXY, '\x01', tri);
+        std::fprintf(out, "%d %d %d %u %u %u %u %u %d %u %s %s %d %.4f %.4f\n",
                      i, i % size, i / size, cell.footprintCount, cell.terrainType, cell.field_0x2A,
                      cell.field_0x2B, cell.field_0x2C, cell.floorCount, cell.zone,
-                     EntityName(cell.blocker.Get()).c_str(), EntityName(cell.occupant.Get()).c_str());
+                     EntityName(cell.blocker.Get()).c_str(), EntityName(cell.occupant.Get()).c_str(),
+                     query->ClassifyTerrain(i), pos[2], tri[2]);
     }
     std::fclose(out);
     ErrLine("[CellDump] wrote %s (%d cells)\n", path.c_str(), count);

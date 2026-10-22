@@ -36,7 +36,12 @@ building within 2 cells.
 Columns: `count` = `footprintCount` (+0x28), `terrain` = `terrainType` (+0x29; 0 / 1 roads,
 2 buildable), `road` = +0x2A (255 = none), `roadState` = +0x2B (0x80 = queued),
 `growth` = +0x2C, `floor` = `floorCount` (+0x2D), `zone` = +0x26, `blocker` / `occupant` =
-the entity's description name or `-`. Heights are not in the dump.
+the entity's description name or `-`, `class` = what the classifier (`0x14009e2c0`) says of the
+cell from today's heights, `height` / `slope` = its height and surface-normal z. A cell whose
+`terrain` is 10 while `class` is 2 is flat ground still marked too steep (`fix.terrain_resort`).
+
+`CELL_DUMP_PROFILE=settings` runs with the settings.cfg keys instead of `/profile:faithful` (fixes on
+by default), so `cells_fixed.txt` shows the cells after `fix.terrain_resort`'s load pass.
 
 ## Trace a live game
 

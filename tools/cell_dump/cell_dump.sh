@@ -10,7 +10,8 @@
 # usage: tools/cell_dump/cell_dump.sh <save-name | path/to/file.sav> <outdir> [seconds]
 #   A path is copied into the save directory as CellDump_<basename>.sav for the run and
 #   removed afterwards; a bare name loads <save dir>/<name>.sav as it is.
-# The run is FAITHFUL (/profile:faithful: every fix and extension off).
+# The run is FAITHFUL (/profile:faithful: every fix and extension off) unless CELL_DUMP_PROFILE
+# names another profile (CELL_DUMP_PROFILE=settings: the settings.cfg keys, fixes on by default).
 set -u
 G="${BANISHED_DIR:-C:/GOG Games/Banished}"
 command -v cygpath >/dev/null 2>&1 && G="$(cygpath -u "$G")"
@@ -44,7 +45,7 @@ rm -f "$OUT_ABS/cells_raw.txt" "$OUT_ABS/cells_fixed.txt"
 cd "$G"
 env BANISHED_AUTOLOAD="$NAME" BANISHED_CELL_DUMP="$OUT_WIN" BANISHED_CELL_TRACE=1 \
     BANISHED_PAUSEMENU="${CELL_DUMP_QUIT_FRAME:-300}" BANISHED_PAUSEMENU_QUIT=120 \
-    MSYS2_ARG_CONV_EXCL="/profile:" ./OpenBA.exe /profile:faithful &
+    MSYS2_ARG_CONV_EXCL="/profile:" ./OpenBA.exe "/profile:${CELL_DUMP_PROFILE:-faithful}" &
 PID=$!
 for i in $(seq 1 "$SECS"); do kill -0 $PID 2>/dev/null || break; sleep 1; done
 if kill -0 $PID 2>/dev/null; then echo "[cell_dump] alive after ${SECS}s, killing"; kill -9 $PID; fi
@@ -56,6 +57,6 @@ echo "[cell_dump] exit status: $RC"
 for f in standalone_error.log standalone_crash.log; do
   [ -f "$G/$f" ] && cp -f "$G/$f" "$OUT_ABS/$f"
 done
-grep -h "\[CellDump\]\|\[CellTrace\]" "$OUT_ABS/standalone_error.log" 2>/dev/null | head -40
+grep -h "\[CellDump\]\|\[CellTrace\]\|\[TerrainResort\]" "$OUT_ABS/standalone_error.log" 2>/dev/null | head -40
 [ -f "$OUT_ABS/cells_raw.txt" ] || { echo "[cell_dump] FAIL: no dump (the load never reached Map::Serialize)"; exit 1; }
 echo "[cell_dump] done: $OUT_ABS/cells_raw.txt, $OUT_ABS/cells_fixed.txt"
