@@ -64,3 +64,20 @@ UNIT_TEST(ext_terrain_resort_leaves_claimed_cells) {
     road.road = 3;
     CHECK(!ShouldHeal(road, kTypeBuildable));
 }
+
+UNIT_TEST(ext_terrain_resort_cleared_cell_on_steep_ground_stays_buildable) {
+    CHECK_EQ(ClearedCellType(kTypeResource, kTypeSteep, false), kTypeBuildable);
+}
+
+UNIT_TEST(ext_terrain_resort_cleared_cell_keeps_other_classes) {
+    for (int classified : {2, 6, 7, 8}) {
+        CHECK_EQ(ClearedCellType(kTypeResource, classified, false), classified);
+    }
+}
+
+UNIT_TEST(ext_terrain_resort_cleared_cell_only_for_a_lone_occupant) {
+    // A cell another entity's zone claims (a pasture's fence, a cemetery's stone), or one that
+    // was not type 4 (a building's own cells).
+    CHECK_EQ(ClearedCellType(kTypeResource, kTypeSteep, true), kTypeSteep);
+    CHECK_EQ(ClearedCellType(5, kTypeSteep, false), kTypeSteep);
+}

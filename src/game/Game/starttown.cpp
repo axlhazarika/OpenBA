@@ -27,8 +27,10 @@
 #include "graphics/Camera.h"
 #include "Game/exe_bodies.h"
 #include "Game/GameUpdateLoop.h"   // B3R STORAGE: GameUpdateLoop::_singleton
-#include "ext/registry.h"            // Ext::Fix().start_barn_height, Ext::Fix().rock_seat
+#include "ext/registry.h"            // Ext::Fix().start_barn_height, Ext::Fix().rock_seat, Ext::Fix().terrain_resort
 #include "ext/rock_seat/rock_seat.h"   // fix.rock_seat (docs/extensions/handins/ROCKSEAT.md)
+#include "ext/terrain_resort/terrain_resort_rule.h"   // fix.terrain_resort (docs/extensions/handins/TERRAINRESORT.md)
+#include "cell_trace.h"   // red square: BANISHED_CELL_TRACE (src/diag/cell_trace.h)
 #include "system/MemoryAllocator.h"   // System::MemoryAllocator::MemAlloc / MemFree
 #include "Game/worldgen_cells.h"     // [PERLINPRE] WgCells_PerlinTable (row-parallel scatter noise)
 #include "math/Math.h"
@@ -4451,6 +4453,14 @@ extern "C" void StartTown_UnmarkResourceCellGrid(Map* game, ComponentEntity* own
                 ComponentEntity* cellOwner = cell->blocker.Get();   // cell+0x00
                 if ((1u << (t & 0x1f) & 0x1e0u) && cellOwner && cellOwner != ownerEntity)
                     t = 2;
+                // FIX terrain_resort (NOT RETAIL, docs/extensions/handins/TERRAINRESORT.md): a lone
+                // occupant (a tree or ore on steep ground, a goods pile) leaves the cell buildable,
+                // as it was placeable while the occupant stood.
+                if (Ext::Fix().terrain_resort) {
+                    const bool zoned = cellOwner != nullptr && cellOwner != ownerEntity;
+                    t = static_cast<uint8_t>(Ext::TerrainResort::ClearedCellType(cell->terrainType, t, zoned));
+                }
+                CellTrace::NoteResort(game, cellIdx, cell->terrainType, t);
                 game->SetTerrainType(cellIdx, t);   // 0x14009f2f0
             }
             cell->occupant = nullptr;        // dee0: null the cell entity-link, ALWAYS

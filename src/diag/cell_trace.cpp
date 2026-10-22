@@ -47,7 +47,7 @@ void NoteCount(const Map* map, const MapCell* cell, uint8_t before, int delta, c
 
 void NoteResort(const Map* map, int cellIndex, uint8_t before, uint8_t after) {
     if (!Opt().cellTrace) return;
-    if (before != 2 || after == 2) return;
+    if ((before != 2 && before != 4) || after == 2 || after == 4) return;   // buildable or a resource lost
     const MapCell* cell = &map->cells.GetData()[cellIndex];
     ErrLine("[CellTrace] resort cell=%d (%d,%d) terrain %u -> %u count=%u road=%02x\n",
             cellIndex, cellIndex % map->size, cellIndex / map->size, before, after,

@@ -5,6 +5,10 @@
 > `Map::ResetTerrainHeights`, over its rectangle grown by one cell, and once over the whole map on
 > a load, so an existing save heals. Sim-visible (the healed cells take buildings and trees) and
 > written to the save like any terrain type.
+>
+> **Second lever (ruled 2026-10-22):** a lone occupant (a tree, ore, a goods pile) leaving a cell
+> no other entity's zone claims leaves it buildable when the re-sort would say "too steep". A road
+> was placeable over the tree; it stays placeable after the tree is cut.
 
 Retail entry: `docs/retail_bugs.md` §8 ("Reproduced (2026-10-22)"). Inventory row F10.
 
@@ -37,8 +41,34 @@ pairs (two maps; the quarry overlay over a strip between a stream and a mountain
 `[TerrainResort] load healed <n> cells` (stderr).
 
 Most of the shrinking green band in the player's screenshots is NOT this desync: a tree cell is
-type 4, which the quarry's mask accepts, and clearing the tree re-sorts it from heights that were
-already steep (474 of 533 such cells on map 1). That is retail as written and the fix leaves it.
+type 4, which the quarry's mask and the road mask (`0xa17`) accept, and clearing the tree re-sorts
+it from heights that were already steep (474 of 533 such cells on map 1). That is the second lever.
+
+## Trees on steep ground (the second lever)
+
+World generation (`0x1400a12b0`, `StartTown` scatter in `Game/starttown.cpp`) places each
+resource in its template's window; the classifier's buildable window is narrower:
+
+| | height | normal z |
+|---|---|---|
+| buildable (classifier `0x14009e2c0`) | -0.25 .. 0.75 | >= 0.90 |
+| `NaturalResourceTree.rsc`, `NaturalResourceOre.rsc` | 0.00 .. 1.00 | >= 0.75 |
+| `NaturalResourceRock.rsc` | 0.00 .. 0.25 | >= 0.99 |
+
+A fresh map (seed 12345): 950 of 20,297 trees and 89 of 2,274 ore stand on ground the classifier
+calls steep (951 too high, 88 too sloped), 0 of 3,015 rocks. Of those 1,039 cells, 672 sit in a
+fully placeable 2x2 square today, 417 in a 4x4 one; every one is road-placeable while the
+resource stands.
+
+The rule (`ClearedCellType`): the cell was type 4, no other entity's zone claims it (a pasture's
+fence and a cemetery's stone are type 4 inside their owner's zone, so they are left), and the
+classifier says 10: write 2. It is not limited to natural resources: a fix-on run of a player's
+save showed the only cells still turning red were under a hunter's dropped goods
+(`RawMaterialLeather.rsc`, `RawMaterialVenison.rsc`), on cells stored 2 that the classifier calls
+steep. A first version that tested for a `NaturalResourceComponent` missed them. Water (7, 8) and high mountain (6) stay. The lever
+is in `StartTown_UnmarkResourceCellGrid` (the live body of the removal re-sort; the faithful
+`CreateNaturalResource_impl_dee0` port has no caller). It cannot reach cells cut before the fix:
+nothing records that a stored 10 held a tree.
 
 ## The rule (`src/ext/terrain_resort/terrain_resort_rule.h`)
 
@@ -53,12 +83,15 @@ region graph and the pathfinder are built.
 
 - `Map::ResetTerrainHeights` (`src/game/Action/action_pf_roots_road.cpp`): `HealAround` over the
   reset rectangle grown by one, before the road-mesh rebuild.
+- `StartTown_UnmarkResourceCellGrid` (`src/game/Game/starttown.cpp`): `ClearedCellType` on
+  the re-sorted type of each footprint cell.
 - `Map::Serialize`'s load arm (`src/game/Game/gamegrid_serialize.cpp`): `HealAllOnLoad` after the
   footprint fix-up pass, before `FillZones`.
 
 ## Tests
 
-- `tests/unit/ext_terrain_resort_test.cpp`: the rule (heal, keep, never demote, claimed cells).
+- `tests/unit/ext_terrain_resort_test.cpp`: both rules (heal, keep, never demote, claimed cells;
+  a cleared lone occupant on steep ground, other classes kept, zoned and building cells left).
 - `tools/cell_dump/cell_dump.sh` with `CELL_DUMP_PROFILE=settings` on the four saves: table above.
 - The Windows gate (`tools/build.sh run`, faithful) ran clean.
 - Not exercised unattended: the runtime arm (a road finished during play). No harness finishes a

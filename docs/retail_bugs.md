@@ -260,10 +260,14 @@ while a game runs.
 pairs on two maps, each with the quarry overlay over a narrow strip between a stream and a
 mountain: the green band of the early save has shrunk in the late one. The cell dumps show two
 causes, one retail by design and one a desync:
-1. *Trees hid steep ground.* A cell holding a tree is type 4, which the quarry's mask accepts.
-   When the tree goes, `0x14009dee0` re-sorts the cell from its heights. On one map 474 of the
-   533 cleared-tree cells that turned red were already steep in the early save at unchanged
-   heights. That is retail working as written, not a bug.
+1. *Trees hid steep ground.* A cell holding a tree is type 4, which the quarry's mask and the
+   road mask (`0xa17`) accept. When the tree goes, `0x14009dee0` re-sorts the cell from its
+   heights. On one map 474 of the 533 cleared-tree cells that turned red were already steep in
+   the early save at unchanged heights. World generation (`0x1400a12b0`) scatters trees and ore
+   in their templates' windows, height 0.00..1.00 and normal z >= 0.75, while the classifier
+   calls buildable only height <= 0.75 and normal z >= 0.9 (rocks: 0.00..0.25 and >= 0.99, always
+   buildable). A fresh map (seed 12345) has 950 of 20,297 trees and 89 of 2,274 ore on ground the
+   classifier calls steep. So a road placeable over such a tree is not placeable once it is cut.
 2. *The type grid drifts from the heights.* `ResetTerrainHeights` (`0x14009e0e0`: every finished
    road cell, a building's clear area) zeroes height words and re-sorts no cell. The cells
    around it keep the type they were sorted with: a cell sorted 10 while steep stays red after
@@ -275,9 +279,16 @@ A fresh map holds no such cell (classifier and stored type agree everywhere). Th
 saves hold 227 / 294 / 222 / 445 cells stored 10 that the classifier calls 2, free of any
 entity, count or road.
 
-Fix: `fix.terrain_resort` (tier 1), default on. After every `ResetTerrainHeights`, over its
-rectangle grown by one cell, and once over the whole map on a load, a free cell stored 10 that
-the classifier now calls 2 is set to 2. A stored 2 is never demoted. `src/ext/terrain_resort/`,
+Fix: `fix.terrain_resort` (tier 1), default on, two levers. (a) After every
+`ResetTerrainHeights`, over its rectangle grown by one cell, and once over the whole map on a
+load, a free cell stored 10 that the classifier now calls 2 is set to 2; a stored 2 is never
+demoted. (b) When a lone occupant (a tree, ore, a goods pile: type 4, no other entity's zone
+on the cell) leaves and the re-sort says 10, the cell becomes 2 instead (ruled 2026-10-22: what
+was placeable over the tree stays placeable; lever in `StartTown_UnmarkResourceCellGrid`, the live
+body of the removal re-sort). Goods piles are in because a hunter's dropped leather or venison,
+picked up from a cell stored 2 that the classifier calls steep, turns that cell red the same way
+(seen in a fix-on run of a player's save). Lever (b) cannot reach cells already cleared in an
+existing save: nothing records that a stored 10 held a tree. `src/ext/terrain_resort/`,
 docs/extensions/handins/TERRAINRESORT.md. With the fix on, the four saves load with 0 such
 cells left.
 

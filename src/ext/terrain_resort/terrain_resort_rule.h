@@ -31,6 +31,22 @@ struct CellView {
     bool    occupied;         // +0x08 occupant set
 };
 
+constexpr uint8_t kTypeResource = 4;    // a lone occupant stands here: a tree, ore, a goods pile
+
+// The removal re-sort (0x14009dee0 / StartTown_UnmarkResourceCellGrid): an entity leaving a
+// type-4 cell no other entity's zone claims. World generation scatters trees and ore on ground up
+// to height 1.0 and normal z 0.75 (their templates' windows), the classifier calls buildable only
+// height <= 0.75 and normal z >= 0.9, so retail turns such a cell red when the tree goes: a road
+// placeable over the tree is not placeable once it is cut. A goods pile dropped on a stored-2
+// cell the classifier calls steep does the same when it is picked up. The fix keeps the cell
+// buildable. Only 10 is replaced; water (7, 8) and high mountain (6) stay what the classifier
+// says.
+inline int ClearedCellType(uint8_t typeBefore, int classified, bool zoned) {
+    if (typeBefore != kTypeResource || zoned) return classified;
+    if (classified != kTypeSteep) return classified;
+    return kTypeBuildable;
+}
+
 inline bool ShouldHeal(const CellView& cell, int classified) {
     if (cell.terrainType != kTypeSteep) return false;
     if (classified != kTypeBuildable) return false;
