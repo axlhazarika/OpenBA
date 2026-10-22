@@ -195,6 +195,70 @@
 // encoder runs only on a save).
 // ============================================================================
 
+namespace RtSystem {
+namespace {
+
+// The decoder's copies, as fixed-width loads and stores (issue #13). Each writes
+// EXACTLY [d, d + n): an overlapping tail store rewrites bytes it already wrote,
+// with the same values, and never touches a byte past the run.
+inline void Copy8(uint8_t* d, const uint8_t* s) {
+    uint64_t v;
+    std::memcpy(&v, s, 8);
+    std::memcpy(d, &v, 8);
+}
+inline void Copy4(uint8_t* d, const uint8_t* s) {
+    uint32_t v;
+    std::memcpy(&v, s, 4);
+    std::memcpy(d, &v, 4);
+}
+
+// n bytes, s and d in different buffers (a literal run, 1..32).
+inline void CopyDisjoint(uint8_t* d, const uint8_t* s, uint32_t n) {
+    if (n >= 8u) {
+        uint32_t k = 0;
+        for (; k + 8u <= n; k += 8u)
+            Copy8(d + k, s + k);
+        if (k < n)
+            Copy8(d + n - 8u, s + n - 8u);
+    } else if (n >= 4u) {
+        Copy4(d, s);
+        Copy4(d + n - 4u, s + n - 4u);
+    } else {
+        d[0] = s[0];
+        if (n > 1u) {
+            d[1] = s[1];
+            if (n > 2u)
+                d[2] = s[2];
+        }
+    }
+}
+
+// A match at distance >= 8: op[i] = op[i - dist] for i in [0, total). The
+// 8-byte step at k reads [k - dist, k - dist + 8), which ends at or before k,
+// so every byte it reads is already final; the tail step at total - 8 reads
+// below total - 8, which is already written. 3..7-byte matches read only below
+// op. Byte for byte retail's chain.
+inline void CopyMatchFar(uint8_t* op, size_t dist, uint32_t total) {
+    const uint8_t* const mp = op - dist;
+    if (total >= 8u) {
+        uint32_t k = 0;
+        for (; k + 8u <= total; k += 8u)
+            Copy8(op + k, mp + k);
+        if (k < total)
+            Copy8(op + total - 8u, mp + total - 8u);
+    } else if (total >= 4u) {
+        Copy4(op, mp);
+        Copy4(op + total - 4u, mp + total - 4u);
+    } else {
+        op[0] = mp[0];
+        op[1] = mp[1];
+        op[2] = mp[2];
+    }
+}
+
+}  // namespace
+}  // namespace RtSystem
+
 // ============================================================================
 // ?Decompress@Compression@System@@SAHPEBXIPEAXI@Z            retail 0x1800c4660
 // ============================================================================
@@ -209,18 +273,18 @@
 // two bounds checks with the same `return 0`, the same do-while with its
 // unsigned `sp < srcEnd` exit, the same return value -- and only the COPIES
 // are wider:
-//   * A literal run is memcpy(op, sp, n). Retail's loop reads sp[0..n) and
-//     writes op[0..n) in order; the two ranges are in different buffers, so
-//     the order cannot be observed. It reads up to 31 bytes past srcEnd when a
-//     run straddles the end exactly as retail does (the overshoot exit).
-//   * A match of `total = len + 2` bytes at distance `dist` copies op[i] =
+//   * A literal run copies sp[0..n) to op[0..n) in 8- / 4-byte steps
+//     (CopyDisjoint). Retail's loop reads and writes them in order; the two
+//     ranges are in different buffers, so the order cannot be observed, and no
+//     byte outside either range is read or written. It reads up to 31 bytes
+//     past srcEnd when a run straddles the end exactly as retail does (the
+//     overshoot exit).
+//   * A match of `total = len + 2` bytes at distance `dist` is op[i] =
 //     op[i - dist] for i = 0..total in order, so each byte may be one the same
-//     match just wrote. dist == 1 is a run of one byte: memset. Otherwise it is
-//     copied in pieces of at most `dist` bytes: piece k reads op[k-dist ..
-//     k-dist+piece), which ends at or before op[k], so every byte it reads was
-//     final before the piece starts and each piece is a non-overlapping
-//     memcpy. dist >= total is the one-piece case. Byte for byte the same
-//     result as retail's chain.
+//     match just wrote. dist >= 8 copies 8 bytes a step (CopyMatchFar: each
+//     step reads only bytes already final); dist == 1 is a run of one byte,
+//     memset; dist 2..7 keeps retail's byte loop. Byte for byte the same
+//     result as retail's chain, and nothing is written past op + total.
 //   * `mp < dst` (retail's unsigned JC) is tested as `dist > op - dst`. With
 //     op inside the destination buffer and dist <= 8192, op - dist cannot wrap
 //     the address space, so the two tests agree; this form never forms the
@@ -245,7 +309,7 @@ int System::Compression::Decompress(const void* src, uint32_t srcLen,
             const uint32_t n = c + 1u;                  // 1800c468c
             if (op + n > dstEnd)                        // 1800c4696  JA
                 return 0;
-            std::memcpy(op, sp, n);                     // 1800c46a0 loop
+            RtSystem::CopyDisjoint(op, sp, n);          // 1800c46a0 loop
             op += n;
             sp += n;
         } else {
@@ -262,16 +326,13 @@ int System::Compression::Decompress(const void* src, uint32_t srcLen,
                 return 0;
             if (dist > static_cast<size_t>(op - dstBase))   // 1800c46f8  JC: mp < dst
                 return 0;
-            if (dist == 1u) {
+            if (dist >= 8u) {
+                RtSystem::CopyMatchFar(op, dist, total);
+            } else if (dist == 1u) {
                 std::memset(op, op[-1], total);
             } else {
-                uint32_t k = 0;
-                while (k < total) {
-                    const uint32_t left  = total - k;
-                    const uint32_t piece = (dist < left) ? static_cast<uint32_t>(dist) : left;
-                    std::memcpy(op + k, op + k - dist, piece);
-                    k += piece;
-                }
+                for (uint32_t k = 0; k < total; ++k)    // 1800c46fa..1800c4711
+                    op[k] = op[k - dist];
             }
             op += total;
         }
