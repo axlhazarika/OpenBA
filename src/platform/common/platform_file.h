@@ -29,6 +29,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace Platform {
 
@@ -150,5 +151,33 @@ int32_t    FindClose(FindHandle h);                               // FindClose
 // strftime("%x" / "%H:%M").
 constexpr uint32_t kDateTimeChars = 0x100;
 void FormatLocalDateTime(const uint32_t* fileTime, bool timePart, PathChar* out);
+
+// ---- read-only file mapping (NOT RETAIL; issue #13 MAPREAD) ---------------------
+// The whole file behind an open read handle, mapped read-only: FileSystem::ReadFile's
+// packed arm serves a mounted package's reads by memcpy from the view instead of
+// SetFilePointer + ReadFile on the package's one handle (filesystem_openfile.cpp).
+// Windows: CreateFileMappingW(PAGE_READONLY) + MapViewOfFile(FILE_MAP_READ), the
+// section handle in `os`. POSIX (Linux and macOS, file_map_posix.cpp): mmap(PROT_READ,
+// MAP_PRIVATE), `os` unused. FileMapOpen returns false, the mapping zeroed, for an
+// empty file or when the OS refuses; the caller then keeps the handle path.
+struct FileMapping {
+    const uint8_t* data = nullptr;
+    uint64_t       size = 0;
+    void*          os   = nullptr;
+};
+bool FileMapOpen(FileHandle h, FileMapping* out);
+void FileMapClose(FileMapping* m);
+
+// ReadFile's result over a mapped file, without the call: a read of `bytes` (a DWORD)
+// at absolute offset `pos` copies what lies before end of file and reports that count,
+// exactly what SetFilePointer(pos) + ReadFile(bytes) does on a file of `size` bytes
+// (a position at or past the end reads 0). Pure; tests/unit/file_map_read_test.cpp.
+inline uint32_t FileMapRead(const FileMapping& m, uint64_t pos, uint32_t bytes, void* dst) {
+    if (pos >= m.size) return 0;
+    const uint64_t left = m.size - pos;
+    const uint32_t got  = left < bytes ? static_cast<uint32_t>(left) : bytes;
+    std::memcpy(dst, m.data + pos, got);
+    return got;
+}
 
 }  // namespace Platform

@@ -726,6 +726,19 @@ public:
     using ExtAsyncCompressFn = bool (*)(CompressedStream& cs, int32_t point, int32_t index, uint8_t* dst);
     static ExtAsyncCompressFn _extAsyncCompress;   // defined in compressed_stream_write.cpp
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/DECODEAHEAD.md): ext.decode_ahead's hook (DESIGN.md
+    // §3 hook rule 5). Null by default; src/ext/decode_ahead sets it once at boot while the class A
+    // row is on. Two points, the same single-pointer shape as _extAsyncCompress:
+    //   kExtDecodeBlock    DecompressFromSource(index), after the window's start / end are set,
+    //                      `dst` = the window buffer: true = the window holds the block, decoded by a
+    //                      worker from the same bytes, and the source is where retail's read leaves it;
+    //   kExtDecodeRelease  Release: the stream's queued blocks are dropped, running ones waited for.
+    // Null: DecompressFromSource and Release are retail's bodies plus one null test.
+    static constexpr int32_t kExtDecodeBlock   = 0;
+    static constexpr int32_t kExtDecodeRelease = 1;
+    using ExtDecodeAheadFn = bool (*)(CompressedStream& cs, int32_t point, int32_t index, uint8_t* dst);
+    static ExtDecodeAheadFn _extDecodeAhead;       // defined in compressed_stream_read.cpp
+
     // ---- the 0x68 bytes, at retail's offsets -------------------------------
     // `_unknown18` and `_unknown24` are the two gaps `??0CompressedStream`
     // (0x1800aa3d0) leaves unwritten. They are recorded as unknown rather than

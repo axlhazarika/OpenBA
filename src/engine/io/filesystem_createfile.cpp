@@ -412,6 +412,7 @@ void FileSystem::PlatformCloseFile(RtIO::FileInfo& infoRef) {
 
     if (info->winHandle == Platform::kInvalidFileHandle) return;               // 1800ae03d/41
 
+    PackedMapRelease(info->winHandle);   // MAPREAD (NOT RETAIL): unmap first (FileSystem.h)
     Platform::FileClose(info->winHandle);                    // 1800ae047 CloseHandle
     info->winHandle = Platform::kInvalidFileHandle;                            // 1800ae04d
 
