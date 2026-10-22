@@ -206,7 +206,6 @@
 
 #include "io/Serializer.h"
 #include "io/Stream.h"   // B3X W0: the stream is called by name
-#include "io/blobhash_temp.h"   // TEMP INSTRUMENTS -- never merge
 
 // ---- stream dispatch ------------------------------------------------------
 // Shapes (1) and (2) tail-jump through the STREAM's vtable: Write (+0x10,
@@ -249,12 +248,10 @@ namespace IO {
     void BinaryReader::Serialize##METHOD(T& v, const char* name) {             \
         (void)name;                 /* CLOBBERED by retail before use */       \
         stream->Read((int32_t)sizeof(T), &v);   /* +0x18 */ \
-        BlobHash::Scalar(&v, sizeof(T));        /* TEMP */             \
     }                                                                          \
     void BinaryReader::Serialize##METHOD##Array(int count, T* arr,             \
                                                 const char* name) {            \
         (void)name;                 /* dropped, not forwarded */               \
-        BlobHash::ArrayScope bh_(arr, count, sizeof(T));   /* TEMP */   \
         if (count <= 0) return;                                                \
         for (int32_t i = 0; i < count; ++i)                                    \
             this->Serialize##METHOD(arr[i], nullptr);                          \
@@ -314,7 +311,6 @@ void BinaryReader::Skip() {
 void BinaryReader::SerializeBytes(int count, void* buf, const char* name) {
     (void)name;
     stream->Read(count, buf);    // +0x18
-    BlobHash::Scalar(buf, count > 0 ? static_cast<uint64_t>(count) : 0);   // TEMP
 }
 void BinaryWriter::SerializeBytes(int count, void* buf, const char* name) {
     (void)name;
