@@ -419,12 +419,12 @@ void RunScenario(std::mt19937& rng, size_t plainSize, int windowCount, bool corr
             const int32_t p = static_cast<int32_t>(rng() % span);
             a.cs->SetWindow(p);
             b.cs->SetWindow(p);
-        } else if (seek == 2) {
-            // a raw position store the active window does not cover
-            const int32_t p = static_cast<int32_t>(rng() % static_cast<uint32_t>(total));
-            a.cs->_position = p;
-            b.cs->_position = p;
         }
+        // (No raw `_position` stores: with the active window loaded and another
+        // window free, retail's SetWindow scan tests the ACTIVE window's start
+        // and then accepts the free window (start -1) for any pos < 0x7fff, and
+        // Read then memcpys a negative chunk. Only a store that bypasses
+        // SetWindow reaches that, and both bodies fault on it alike.)
         if (a.cs->_position >= total && !lastBlockFull)
             continue;
         static const int kSizes[] = {1, 1, 1, 2, 3, 4, 8};
