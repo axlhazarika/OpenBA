@@ -284,6 +284,33 @@ bool FileSystem::PlatformOpenFile(RtIO::FileInfo& fiRef,
 }
 
 // ============================================================================
+// fix.large_packages (NOT RETAIL, docs/extensions/handins/LARGEPKM.md)
+// ============================================================================
+// The seams FileSystem.h declares; src/ext/large_packages/ sets them.
+void (*FileSystem::_extPackagesMounted)(FileSystem& fs) = nullptr;
+const FileSystem::ExtWidePackage* FileSystem::_extWidePackages = nullptr;
+int32_t FileSystem::_extWideCount = 0;
+
+int64_t FileSystem::PackedReadOffset(const RtIO::FileInfo& fi, bool* wide) const {
+    const uint32_t tag = static_cast<uint32_t>(fi.handle);
+    const uint32_t packIndex = tag >> 24;
+    const uint32_t fileIndex = tag & 0x00FFFFFFu;
+    if (_extWidePackages != nullptr && packIndex < static_cast<uint32_t>(_extWideCount)) {
+        const ExtWidePackage& w = _extWidePackages[packIndex];
+        // The low dword must be the FileInfo's own offset: a FileInfo opened
+        // before a remount (a different package at this index) keeps retail's read.
+        if (fileIndex < static_cast<uint32_t>(w.count) &&
+            static_cast<uint32_t>(w.offsets[fileIndex]) == static_cast<uint32_t>(fi.baseOffset)) {
+            *wide = true;
+            return w.offsets[fileIndex] + fi.cursor;
+        }
+    }
+    *wide = false;
+    // Retail's int32 sum (1800ace43/46), wrapping as the 32-bit ADD does.
+    return static_cast<int32_t>(static_cast<uint32_t>(fi.baseOffset) + static_cast<uint32_t>(fi.cursor));
+}
+
+// ============================================================================
 // ?ReadFile@FileSystem@IO@@QEAA_NAEAUFileInfo@12@HPEAX@Z      retail 0x1800ace00
 // ============================================================================
 bool FileSystem::ReadFile(RtIO::FileInfo& fiRef, int32_t n, void* dst) {
@@ -308,10 +335,16 @@ bool FileSystem::ReadFile(RtIO::FileInfo& fiRef, int32_t n, void* dst) {
     RtIO::FileInfo pack = pkg->IO::PackageFile::GetFileInfo();  // 1800ace3d
 
     const int32_t abs = fi->baseOffset + fi->cursor;         // 1800ace43/46
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LARGEPKM.md): fix.large_packages gives a
+    // package past 2 GiB 64-bit entry offsets; every other package takes retail's int32 seek.
+    bool wide = false;
+    const int64_t abs64 = (_extWidePackages != nullptr) ? PackedReadOffset(*fi, &wide) : 0;
     bool ok;
     if (static_cast<uint32_t>(pack.handle) <= 0xFFFFFFFDu) {  // 1800ace4d  JBE
         // The containing .pkg is itself packed — no seek, just recurse.
         ok = true;
+    } else if (wide) {
+        ok = Platform::FileSeek64(pack.winHandle, abs64) != 0;
     } else {
         ok = (static_cast<int32_t>(Platform::FileSeek32(
                   pack.winHandle, abs)) == abs);             // 1800ace61/67 SetFilePointer

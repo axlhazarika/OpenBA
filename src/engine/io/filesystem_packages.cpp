@@ -614,6 +614,10 @@ void FileSystem::ClosePackages() {
     _packfileIndex.count = 0;
     _packfileIndex.root  = nullptr;
     ::IO::BumpPackfileIndexGeneration();   // NOT RETAIL (block SAVELOAD): the tree changed
+    // NOT RETAIL (fix.large_packages, docs/extensions/handins/LARGEPKM.md): the packages are gone,
+    // so are their 64-bit offsets. The next LoadPackages rebuilds them.
+    _extWidePackages = nullptr;
+    _extWideCount    = 0;
 
 }
 
@@ -811,7 +815,9 @@ void FileSystem::LoadPackages() {
     found.data  = nullptr;
     found.size = 0;
 
-
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LARGEPKM.md): fix.large_packages builds the
+    // 64-bit entry offsets of any mounted package past 2 GiB, now that the pack indices are final.
+    if (_extPackagesMounted != nullptr) _extPackagesMounted(*this);
 }
 
 // ============================================================================

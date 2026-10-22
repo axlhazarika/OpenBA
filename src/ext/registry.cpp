@@ -55,6 +55,15 @@ const Entry kEntries[] = {
       "meet them.",
       0, [](State& s) -> bool& { return s.fix.rock_seat; } },
 
+    // LARGEPKM (docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 8): a mod package
+    // larger than 2 GiB is read with 64-bit offsets. Only which bytes a packed read fetches changes;
+    // packages up to 2 GiB, the mod list and the save are retail's. Applies at the next mount.
+    { "large_packages", Tier::Fix, Class::None, true,
+      "Mods larger than 2 GB",
+      "A mod package larger than 2 GB loads instead of crashing the game. Takes effect at the next "
+      "start.",
+      0, [](State& s) -> bool& { return s.fix.large_packages; } },
+
     // Extensions. Each one adds a field to Ext::Extensions and a row here:
     // Tier::Extension, its Class, default true for class A / false for B or C, and for class B or C its
     // formatVersion (>= 1). The id is [a-z0-9_]+ (the unit tests check every row).
