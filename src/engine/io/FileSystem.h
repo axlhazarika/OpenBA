@@ -602,6 +602,16 @@ static_assert(!std::is_polymorphic<FileSystem>::value,
 static_assert(std::is_standard_layout<FileSystem>::value,
               "the doors reach these fields through a reinterpret_cast");
 
+// ---- PERF (NOT RETAIL, issue #13 MAPREAD): mapped package reads ------------------
+// FileSystem::ReadFile's packed arm reads a package through a read-only mapping of the
+// file behind the package's handle (Platform::FileMapOpen), made on the first packed
+// read from that handle and kept in a side table in filesystem_openfile.cpp (the
+// pinned FileSystem / PackageFile layouts gain no field). PlatformCloseFile drops a
+// handle's mapping just before it closes the handle, so ClosePackages (every remount)
+// unmaps every package. Not retail: an exact perf body, the same bytes and the same
+// results as SetFilePointer + ReadFile (the banner above ReadFile).
+void PackedMapRelease(Platform::FileHandle h);
+
 }  // namespace IO
 
 // ==== B3R W0-P0c: Runtime bodies reached by retail address ====

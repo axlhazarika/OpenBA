@@ -147,6 +147,8 @@
 #include "system/string_internal.h"
 
 #include <new>        // placement new into a raw FileInfo Filename slot
+#include <atomic>     // MAPREAD: the emulated file pointer
+#include <mutex>      // MAPREAD: the side table's lock
 
 // ENDGAME B.3.1 step 2: this file no longer forward-declares lane String's
 // `RtSystem_Filename_AdjustDelimiters` (0x1800c6970). Every call it made was
@@ -284,6 +286,96 @@ bool FileSystem::PlatformOpenFile(RtIO::FileInfo& fiRef,
 }
 
 // ============================================================================
+// PERF (NOT RETAIL, issue #13 MAPREAD): the packed arm's mapped read
+// ============================================================================
+// Retail serves a packed read with SetFilePointer + ReadFile on the package's one
+// handle: two syscalls per read, 1.4 M of them on a MegaMod boot (6.3 GB). Here the
+// file behind that handle is mapped once (Platform::FileMapOpen, on the first packed
+// read from it) and the read is a memcpy from the view, with the result ReadFile
+// would give: the bytes before end of file, `got == n`.
+//
+// EXACT, INCLUDING THE FAILURES. SetFilePointer(h, abs, NULL, FILE_BEGIN) with a
+// 32-bit `abs`:
+//   * abs >= 0 always succeeds (also past end of file, where ReadFile then reads 0);
+//   * abs < 0 fails, returns INVALID_SET_FILE_POINTER (0xFFFFFFFF) and leaves the file
+//     pointer where it was. Retail compares that return to `abs`, so every abs < -1
+//     fails the read, and abs == -1 PASSES: ReadFile then reads at the stale pointer,
+//     wherever the previous read left it. The table keeps that pointer (`pointer`,
+//     what SetFilePointer + ReadFile would have left), so abs == -1 reads there too.
+//     Until the first mapped read the OS pointer is still the true one, and an
+//     abs == -1 read takes the handle path.
+// A read of n < 0 (a DWORD past 2 GiB) also takes the handle path: ReadFile's
+// behaviour on a buffer that short is the OS's, not a memcpy's.
+// The handle path is retail's body, unchanged, and is all that runs for a package
+// whose file did not map (empty, or the OS refused).
+//
+// LIFETIME: the mapping lives as long as the handle; PlatformCloseFile releases it
+// before CloseHandle (ClosePackages, so every remount and mod toggle). The table is
+// read by the loader and the audio stream thread (a streamed .wav inside a package
+// reaches this arm through its own FileStream), so it is locked; the emulated pointer
+// is an atomic, where retail's OS pointer was shared by both threads unlocked.
+namespace {
+
+constexpr int64_t kPointerUnknown = INT64_MIN;
+
+struct PackedMap {
+    Platform::FileHandle  handle = nullptr;   // null: free slot
+    Platform::FileMapping map;                // data null: did not map, the handle path
+    std::atomic<int64_t>  pointer{kPointerUnknown};
+};
+
+std::mutex g_packedMapLock;
+PackedMap  g_packedMaps[256];                 // the pack index is one byte: <= 256 handles
+
+// The mapping of `h`, made on first use. Null only when the table is full.
+PackedMap* PackedMapFor(Platform::FileHandle h) {
+    std::lock_guard<std::mutex> lock(g_packedMapLock);
+    PackedMap* free = nullptr;
+    for (PackedMap& m : g_packedMaps) {
+        if (m.handle == h) return &m;
+        if (m.handle == nullptr && free == nullptr) free = &m;
+    }
+    if (free == nullptr) return nullptr;
+    free->handle = h;
+    Platform::FileMapOpen(h, &free->map);
+    free->pointer.store(kPointerUnknown, std::memory_order_relaxed);
+    return free;
+}
+
+// True when the read was served from the view (`*ok` is its result); false sends it
+// down retail's handle path.
+bool PackedMapRead(PackedMap& m, int64_t abs, int32_t n, void* dst, bool* ok) {
+    if (m.map.data == nullptr || n < 0) return false;
+    int64_t pos = abs;
+    if (abs < 0) {
+        if (abs != -1) {
+            *ok = false;                       // SetFilePointer failed: no read
+            return true;
+        }
+        pos = m.pointer.load(std::memory_order_relaxed);
+        if (pos == kPointerUnknown) return false;
+    }
+    const uint32_t got = Platform::FileMapRead(m.map, static_cast<uint64_t>(pos),
+                                               static_cast<uint32_t>(n), dst);
+    m.pointer.store(pos + got, std::memory_order_relaxed);
+    *ok = static_cast<int32_t>(got) == n;
+    return true;
+}
+
+}  // namespace
+
+void PackedMapRelease(Platform::FileHandle h) {
+    std::lock_guard<std::mutex> lock(g_packedMapLock);
+    for (PackedMap& m : g_packedMaps) {
+        if (m.handle != h) continue;
+        Platform::FileMapClose(&m.map);
+        m.handle = nullptr;
+        m.pointer.store(kPointerUnknown, std::memory_order_relaxed);
+        return;
+    }
+}
+
+// ============================================================================
 // ?ReadFile@FileSystem@IO@@QEAA_NAEAUFileInfo@12@HPEAX@Z      retail 0x1800ace00
 // ============================================================================
 bool FileSystem::ReadFile(RtIO::FileInfo& fiRef, int32_t n, void* dst) {
@@ -309,16 +401,28 @@ bool FileSystem::ReadFile(RtIO::FileInfo& fiRef, int32_t n, void* dst) {
 
     const int32_t abs = fi->baseOffset + fi->cursor;         // 1800ace43/46
     bool ok;
+    PackedMap* map = nullptr;                                // MAPREAD (banner above)
     if (static_cast<uint32_t>(pack.handle) <= 0xFFFFFFFDu) {  // 1800ace4d  JBE
         // The containing .pkg is itself packed — no seek, just recurse.
         ok = true;
     } else {
+        map = PackedMapFor(pack.winHandle);
+        if (map != nullptr && PackedMapRead(*map, abs, n, dst, &ok)) {
+            if (ok) fi->cursor += n;                         // 1800ace87
+            return ok;
+        }
         ok = (static_cast<int32_t>(Platform::FileSeek32(
                   pack.winHandle, abs)) == abs);             // 1800ace61/67 SetFilePointer
     }
     if (ok) {
+        const int32_t before = pack.cursor;
         ok = ReadFile(pack, n, dst);                         // 1800ace7e — ITSELF
         if (ok) fi->cursor += n;                             // 1800ace87
+        // MAPREAD: a handle-path read moved the OS pointer to abs + got; once mapped
+        // reads have run, the emulated pointer must follow it (an abs == -1 read with
+        // the pointer still unknown leaves it unknown: the OS pointer stays true).
+        if (map != nullptr && abs >= 0)
+            map->pointer.store(static_cast<int64_t>(abs) + (pack.cursor - before), std::memory_order_relaxed);
     }
 
     // ~pack (FileInfo's dtor: 1800acea1 +0x28, then 1800aceda +0x20) runs at
