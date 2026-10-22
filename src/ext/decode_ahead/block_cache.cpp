@@ -37,6 +37,7 @@ bool BlockCache::Submit(const void* owner, int32_t index, uint32_t offset, const
                         uint16_t csize, uint16_t usize) {
     {
         std::lock_guard<std::mutex> lk(mu_);
+        if (csize > kBlock) return false;   // no window holds it: the loader decodes it itself (retail's path)
         if (Find(owner, index) != nullptr) return false;
         Job* slot = nullptr;
         for (Job& j : jobs_) {
