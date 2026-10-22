@@ -21,6 +21,7 @@
 #include "ext/seamless_loops/seamless_loops.h"   // ext.seamless_loops: the SoundBuffer decode seam
 #include "ext/large_packages/large_packages.h"   // fix.large_packages: the FileSystem mount seam
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
+#include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/resources/text_provider.h"        // the Extensions dialog / Enhanced tab resources from the exe's text (KITFREE)
 #include "rsc_text_check.h"                      // src/diag: the kit cross-check, /rsccheck:1 on the command line
 #include "ext/resources/font_provider.h"         // KITFREE RSCFONT: ext.sharp_ui's font variants, provided at run time
@@ -167,6 +168,9 @@ void InitFromSettings() {
     // here (boot, before the loader's first resource). Null under the faithful profile or with the row
     // off: DecompressFromSource and Release pay one null test each.
     DecodeAhead::Sync();
+    // ext.async_gpu_create (class A, next load): the backend's request, read when the loader opens a
+    // load (src/render/common/async_gpu_create/). Before the boot's first load, which follows this.
+    Ext::AsyncGpuCreate::Sync();
     // The extension resources built in the exe (docs/extensions/KITFREE.md): the
     // providers register here, never under a COMMAND-LINE faithful profile
     // (`/profile:faithful`: the gate run, no Extensions button, no Enhanced tab,
@@ -215,6 +219,7 @@ bool SetAndRecord(const Entry& e, bool on) {
     Ext::AmbientOcclusion::Sync();   // on / off: the depth rebuild is requested, the arm follows at once
     BetterTrees::Sync();        // on: the seams are set now; off: cleared at the next pixel / vertex bind
     Ext::BackgroundSave::Sync();     // on: the save seam is set now; off: cleared now, or after a running save
+    Ext::AsyncGpuCreate::Sync();     // on / off: from the next load the loader opens
     // ext.max_shadow_res: the sun map is rebuilt through Device::settingsChanged, raised HERE (main thread,
     // between frames) so render_pipe runs the resize sequentially; see SunLight.h (FAA-MENU).
     if (changedNow && std::strcmp(e.id, "max_shadow_res") == 0) ::Graphics::SunLight::ExtRequestMaxShadowResSync();

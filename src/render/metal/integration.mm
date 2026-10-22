@@ -14,6 +14,7 @@
 #include "ao/ao_backend.h"
 #include "better_trees/foliage_aa_backend.h"
 #include "better_trees/billboard_shadow_backend.h"
+#include "async_gpu_create/async_gpu_create_backend.h"
 #include "ext/render_pipe/finish_split.h"
 #include "graphics/renderer_ext_ao.h"
 #include "passes/assao_pass.h"
@@ -66,6 +67,20 @@ void Request(bool on) {
 }
 
 }  // namespace BbsBackend
+
+// ext.async_gpu_create: the Metal backend has no worker path (its resources are created where the
+// loader makes them), so the request is ignored and the answer is "not supported".
+namespace AsyncGpuCreateBackend {
+
+void Request(bool on) {
+    (void)on;
+}
+
+bool Supported() {
+    return false;
+}
+
+}  // namespace AsyncGpuCreateBackend
 
 namespace Ext {
 namespace RenderPipe {

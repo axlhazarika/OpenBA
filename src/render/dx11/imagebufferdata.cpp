@@ -157,6 +157,7 @@
 #include "ao/ao_backend.h"       // NOT RETAIL: ext.ambient_occlusion (AttachDepthBuffer's readable arm)
 #include "ao/ao_depth_views.h"
 #include "system/MemoryAllocator.h"   // B.3R DX: MemAlloc / MemFree, direct
+#include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 
 // The real `Video::ImageBufferData` abstract base. B5 RES: `VideoDX11::
 // ImageBufferData` derives from it in C++, so the compiler chains its destructor
@@ -324,9 +325,9 @@ void ImageBufferData::ReleaseInterfaces() {
 // 0x180002720 — create the sampler state (private; called by slot 3 only,
 // including on the CreateTexture2D failure path).
 // ============================================================
-void ImageBufferData::CreateSamplerState() {
-    ::Video::ImageBuffer* const ib = _owner;
-
+// NOT RETAIL (shape only): the descriptor half of 0x180002720 is a free function so that
+// ext.async_gpu_create can build it on the loader and hand it to a worker; the body is unchanged.
+static D3D11_SAMPLER_DESC SamplerDescFor(const ::Video::ImageBuffer* ib) {
     // Both tables are stack locals in the original and are *patched* before
     // being indexed, which is why they are locals here too.
     int addressTable[2] = { D3D11_TEXTURE_ADDRESS_WRAP,       // 1
@@ -377,6 +378,11 @@ void ImageBufferData::CreateSamplerState() {
     // 0x180018c50 = 1.0f (verified: bytes 00 00 80 3f).
     desc.MaxLOD         = (flags & 1) ? (static_cast<float>(ib->GetLevelCount()) - 1.0f) : 0.0f;
 
+    return desc;
+}
+
+void ImageBufferData::CreateSamplerState() {
+    const D3D11_SAMPLER_DESC desc = SamplerDescFor(_owner);
     const uint64_t tcs0 = TempCreateStats::Now();
     Dx11Device()->CreateSamplerState(&desc, &sampler);
     TempCreateStats::Add(TempCreateStats::kSampler, 0, tcs0);
@@ -395,6 +401,7 @@ void ImageBufferData::CreateSamplerState() {
 // five null stores.
 // ============================================================
 ImageBufferData::~ImageBufferData() {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     ::Video::ImageBuffer* const ib = _owner;
 
     // Untrack. Note bits 4|5|6 = 0x70 here, unlike slot 3 which only tests bit 6.
@@ -413,6 +420,7 @@ ImageBufferData::~ImageBufferData() {
 // the reset registry. No sampler and no SRV are created.
 // ============================================================
 void ImageBufferData::AttachColorBuffer() {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     ::Video::Device* const device = ::Video::Device::_singleton;
     DeviceData* const dd = Dx11DeviceData();
     ::Video::ImageBuffer* const ib = _owner;
@@ -445,6 +453,7 @@ void ImageBufferData::AttachColorBuffer() {
 // Mirror of slot 1 with the depth format, kind 1, flag bit 5, and a DSV.
 // ============================================================
 void ImageBufferData::AttachDepthBuffer() {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     ::Video::Device* const device = ::Video::Device::_singleton;
     DeviceData* const dd = Dx11DeviceData();
     ::Video::ImageBuffer* const ib = _owner;
@@ -490,7 +499,57 @@ void ImageBufferData::AttachDepthBuffer() {
 // and the leading pointer is its `_data`. The former `ImageLevel` /
 // `ImageLevelArray` views of the same bytes are gone.
 // ============================================================
+// NOT RETAIL (ext.async_gpu_create, docs/extensions/handins/ASYNCGPUCREATE.md): slot 3's tail for a
+// plain seeded texture, with the three creates on a worker. Everything engine-visible (the registry,
+// the nulled views, the descriptor, the subresource pitches) was done by slot 3 on this thread; this
+// copies the level bytes the subresources point at (the caller's LevelArray dies when it returns),
+// re-points the pitches into the copy and hands the job over. The worker makes the texture, the SRV
+// only if the texture succeeded and the sampler always: slot 3's order and failure state. The
+// sampler's descriptor is built HERE, from the Configuration / Device values slot 3 would have read.
+static void CreateTextureDeferred(ImageBufferData* self,
+                                  const Collection::Array<Collection::Array<uint8_t> >* levels,
+                                  const D3D11_TEXTURE2D_DESC& desc, SubresArray* subres) {
+    ::Video::ImageBuffer* const ib = self->_owner;
+
+    uint64_t total = 0;
+    for (int i = 0; i < levels->GetSize(); ++i)
+        total += static_cast<uint64_t>(levels->GetData()[i].GetSize());
+
+    uint8_t* const bytes = new uint8_t[total > 0 ? total : 1];
+    D3D11_SUBRESOURCE_DATA* copy = new D3D11_SUBRESOURCE_DATA[subres->count > 0 ? subres->count : 1];
+    uint64_t at = 0;
+    for (int i = 0; i < subres->count; ++i) {
+        const Collection::Array<uint8_t>& level = levels->GetData()[i];
+        const uint64_t n = static_cast<uint64_t>(level.GetSize());
+        if (n != 0) std::memcpy(bytes + at, level.GetData(), n);
+        copy[i]         = subres->data[i];
+        copy[i].pSysMem = bytes + at;
+        at += n;
+    }
+    System::MemoryAllocator::MemFree(subres->data);
+    subres->data = nullptr;
+    if (subres->count == 0) {   // slot 3 hands CreateTexture2D a null array then
+        delete[] copy;
+        copy = nullptr;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+    const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDescPtr = nullptr;
+    if (ib->_dimension == 1) {   // slot 3's cube arm (a usage-2 texture is never a depth buffer)
+        srvDesc.Format                      = static_cast<DXGI_FORMAT>(kFormatToDxgi[ib->_format]);
+        srvDesc.ViewDimension               = D3D11_SRV_DIMENSION_TEXTURECUBE;
+        srvDesc.TextureCube.MipLevels       = static_cast<UINT>(ib->GetLevelCount());
+        srvDesc.TextureCube.MostDetailedMip = 0;
+        srvDescPtr = &srvDesc;
+    }
+
+    AsyncCreate::EnqueueTexture(self, Dx11Device(), desc, copy, bytes, total, srvDescPtr,
+                                SamplerDescFor(ib), &self->texture, &self->shaderResourceView,
+                                &self->sampler);
+}
+
 bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> >* levels) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     ::Video::ImageBuffer* const ib = _owner;
     const int width  = ib->Width();
     const int height = ib->Height();
@@ -561,6 +620,14 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
                 levelIndex = 0;
             }
         }
+    }
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ASYNCGPUCREATE.md): inside an armed loader
+    // bracket a plain texture seeded from a resource file (usage 2: no render target, no depth, not
+    // dynamic, so no RTV / DSV) is created on a worker, from a copy of its level bytes.
+    if (AsyncCreate::Deferring() && levels != nullptr && kind == 2) {
+        CreateTextureDeferred(this, levels, desc, &subres);
+        return true;
     }
 
     ID3D11Device* const dev = Dx11Device();
@@ -673,6 +740,7 @@ static ID3D11SamplerState* AcquirePointSampler(const ::Video::ImageBuffer* ib) {
 }
 
 void ImageBufferData::Bind(void* context, unsigned slot) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     (void)context;   // never read by the original either
 
     ID3D11DeviceContext* const ctx = Dx11Context();
@@ -701,6 +769,7 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
 // path only (dynamic UI/terrain textures), not the compressed one.
 // ============================================================
 bool ImageBufferData::Update(void* data, int width, int height) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     // NOT RETAIL: the Present lock (dx11_backend_access.h). Callers hold the
     // device lock and may be off the presenting thread (the loader's image
     // uploads, the save-info thumbnails).
@@ -731,6 +800,7 @@ bool ImageBufferData::Update(void* data, int width, int height) {
 // silently diverging here would hide a real failure during A/B capture.
 // ============================================================
 bool ImageBufferData::Read(void* dst, int width, int height) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     D3D11_TEXTURE2D_DESC desc;
     desc.Width              = static_cast<UINT>(width);
     desc.Height             = static_cast<UINT>(height);

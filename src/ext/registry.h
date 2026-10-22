@@ -99,6 +99,7 @@ struct Extensions {
     bool terrain_batch = false; // class A: src/ext/terrain_batch/, seam WorldGeometry::_extTerrainBatch (docs/extensions/handins/TERRAINBATCH.md)
     bool decode_ahead = false; // class A, next start: src/ext/decode_ahead/, seam IO::CompressedStream::_extDecodeAhead (docs/extensions/handins/DECODEAHEAD.md)
     bool load_progress = false; // class A, next start: src/ext/load_progress/, seams LoaderLoop::_extFrame + UpdateLoop::_extLoadProgress (docs/extensions/handins/LOADPROGRESS.md)
+    bool async_gpu_create = false; // class A, next load: src/ext/async_gpu_create/, backend seam AsyncGpuCreateBackend (docs/extensions/handins/ASYNCGPUCREATE.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.

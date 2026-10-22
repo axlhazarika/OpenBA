@@ -218,6 +218,7 @@
 #include "device_lost_drive.h"   // BANISHED_FORCE_DEVICE_LOST=bgsave (src/diag)
 #include "options.h"
 #include "dx11_backend_access.h"
+#include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 #include "system/Error.h"   // ENDGAME B.3.4b System callers: System::Error (-Iruntime/types)
 // ENDGAME B.3.5 block VC: `Video::Viewport` and `Video::Context`.
 #include "video/Context.h"
@@ -587,6 +588,8 @@ void ContextData::Finish() {
     std::fflush(stderr);
     if (onLost) onLost();
 
+    // NOT RETAIL (ext.async_gpu_create): creates queued against the lost device finish first.
+    AsyncCreate::Drain();
     owner->ReleaseDynamic();
 
     dd->d3dDevice = nullptr;

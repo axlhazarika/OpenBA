@@ -32,13 +32,24 @@
 // file.
 
 #include "VideoDX11Data.h"
+#include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 
 namespace VideoDX11 {
 
 // 0x180001190 — `ret`. The Runtime's one caller (Engine::Loader::Run
 // 0x1800dbfc0) passes a bool in DL (1 around the load, 0 after); the body
 // ignores it (B3R owed 3).
-void DeviceData::Slot4(bool /*loading*/) {
+//
+// NOT RETAIL (ext.async_gpu_create, docs/extensions/handins/ASYNCGPUCREATE.md): the bracket's two
+// calls are the loader's own thread opening and closing a load, which is exactly the span whose
+// seeded creates the extension may defer: `true` arms it for this thread (row on, driver with
+// concurrent creates), `false` waits for every deferred create and disarms it. Off: two calls that
+// test a bool and return, as the `ret` did nothing.
+void DeviceData::Slot4(bool loading) {
+    if (loading)
+        AsyncCreate::Begin();
+    else
+        AsyncCreate::End();
 }
 
 // 0x180005430 — `xorps xmm0,xmm0; ret`

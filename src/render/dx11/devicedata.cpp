@@ -112,6 +112,7 @@
 #include "stall_debug.h"
 #include "boot_window.h"
 #include "dx11_backend_access.h"
+#include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 #include "VideoDX11Data.h"
 
 #include <windows.h>
@@ -1068,6 +1069,8 @@ DeviceData::~DeviceData() {
 //     src/platform/sdl/cursor_sdl.cpp.)
 // ============================================================
 void DeviceData::Shutdown() {
+    // NOT RETAIL (ext.async_gpu_create): no create is left running against the device going away.
+    AsyncCreate::Drain();
 #if BANISHED_TWEAK_OVERLAY
     // The debug tweak overlay releases its DX11 objects and its device / context references before
     // the device goes (device lost, a settings rebuild, exit); it re-inits on the next open frame.

@@ -255,6 +255,14 @@ const Entry kEntries[] = {
       "While mods load at start-up, shows the loading screen and which mod is loading instead of a "
       "black window. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.load_progress; } },
+    // ASYNCGPUCREATE (docs/extensions/handins/ASYNCGPUCREATE.md, issue #13): while the loader reads a
+    // resource file, the GPU buffers and textures it makes are created on worker threads. The same
+    // resources, all made before the load ends; the backend reads the request at the next load.
+    { "async_gpu_create", Tier::Extension, Class::A, true,
+      "Parallel graphics loading",
+      "Creates the graphics resources of loading content on other cores, so large mods load faster. "
+      "Same game data. Takes effect at the next load.",
+      0, [](State& s) -> bool& { return s.ext.async_gpu_create; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.

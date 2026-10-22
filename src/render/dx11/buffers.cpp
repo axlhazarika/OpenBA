@@ -91,6 +91,7 @@
 
 #include "VideoDX11Data.h"
 #include "dx11_backend_access.h"
+#include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 // ENDGAME B.3.5 block D2, RULE B5-3: the three real Runtime abstract bases (B5 BUF:
 // now the C++ bases of the three classes below).
 #include "video/CompanionData.h"
@@ -347,17 +348,10 @@ void BufferData_Unlock(Data* self) {
 // `dynamic` is deliberately uint8_t, not bool: the original stores the raw
 // incoming byte on the owner and then compares it against 0. Declaring it bool
 // would let the compiler assume 0/1 and test only bit 0.
-template <class Owner>
-bool GpuBuffer_Create(Owner* owner, ID3D11Buffer** outBuffer,
-                      uint32_t sizeBytes, uint8_t dynamicByte, const void* initialData,
-                      UINT bindFlags) {
-    owner->size    = static_cast<int32_t>(sizeBytes);
-    owner->dynamic = dynamicByte;
-
-    if (owner->size == 0) return true;
-
-    const bool dynamic = (dynamicByte != 0);
-
+// The descriptor both Create paths build: retail's synchronous one below, and ext.async_gpu_create's
+// deferred one (GpuBuffer_CreateDeferred), which must hand the worker the very same descriptor.
+inline D3D11_BUFFER_DESC GpuBuffer_Desc(uint32_t sizeBytes, bool dynamic, const void* initialData,
+                                        UINT bindFlags) {
     D3D11_BUFFER_DESC desc = {};
     desc.ByteWidth = sizeBytes;
     if (dynamic) {
@@ -372,6 +366,21 @@ bool GpuBuffer_Create(Owner* owner, ID3D11Buffer** outBuffer,
     desc.BindFlags              = bindFlags;
     desc.MiscFlags              = 0;
     desc.StructureByteStride    = 0;
+    return desc;
+}
+
+template <class Owner>
+bool GpuBuffer_Create(Owner* owner, ID3D11Buffer** outBuffer,
+                      uint32_t sizeBytes, uint8_t dynamicByte, const void* initialData,
+                      UINT bindFlags) {
+    owner->size    = static_cast<int32_t>(sizeBytes);
+    owner->dynamic = dynamicByte;
+
+    if (owner->size == 0) return true;
+
+    const bool dynamic = (dynamicByte != 0);
+
+    const D3D11_BUFFER_DESC desc = GpuBuffer_Desc(sizeBytes, dynamic, initialData, bindFlags);
 
     D3D11_SUBRESOURCE_DATA init = {};
     init.pSysMem          = initialData;
@@ -392,6 +401,25 @@ bool GpuBuffer_Create(Owner* owner, ID3D11Buffer** outBuffer,
     return hr == 0 && *outBuffer != nullptr;
 }
 
+// NOT RETAIL (ext.async_gpu_create, docs/extensions/handins/ASYNCGPUCREATE.md): the load arm's
+// Create for a static, data-seeded buffer, with the CreateBuffer itself on a worker. The owner's two
+// stores and the descriptor are GpuBuffer_Create's; the worker writes `buffer` with what CreateBuffer
+// writes (null on failure, as the synchronous arm leaves it). The job owns `scratch` and frees it.
+// The load arm discards Create's bool, so there is no answer to give back.
+template <class Data> UINT GpuBuffer_BindFlags();
+template <> UINT GpuBuffer_BindFlags<VertexBufferData>() { return D3D11_BIND_VERTEX_BUFFER; }
+template <> UINT GpuBuffer_BindFlags<IndexBufferData>()  { return D3D11_BIND_INDEX_BUFFER; }
+
+template <class Data>
+void GpuBuffer_CreateDeferred(Data* self, uint32_t sizeBytes, void* scratch) {
+    auto* owner = self->_owner;
+    AsyncCreate::Await(self);   // a re-create of a buffer whose first create is still queued
+    owner->size    = static_cast<int32_t>(sizeBytes);
+    owner->dynamic = 0;
+    const D3D11_BUFFER_DESC desc = GpuBuffer_Desc(sizeBytes, false, scratch, GpuBuffer_BindFlags<Data>());
+    AsyncCreate::EnqueueBuffer(self, Dx11Device(), desc, scratch, &self->buffer);
+}
+
 // ============================================================
 // Shared: the Serialize body behind VertexBufferData slot 6 (0x180003d90) and
 // IndexBufferData slot 6 (0x1800033b0). Identical apart from which Create they
@@ -409,6 +437,9 @@ void GpuBuffer_Serialize(Data* self, ::IO::Serializer* serializer) {
     // as an "is this encoding one I can serialize raw bytes through" gate.
     if (!serializer->GetEncoding().IsBinary()) return;
 
+    // NOT RETAIL (ext.async_gpu_create): the save arm reads `buffer`; a deferred create finishes first.
+    AsyncCreate::Await(self);
+
     auto* owner = self->_owner;
 
     // Order matters: the dynamic flag first, then the size.
@@ -422,6 +453,12 @@ void GpuBuffer_Serialize(Data* self, ::IO::Serializer* serializer) {
         // Load: read the payload into scratch memory and rebuild the buffer.
         void* scratch = System::MemoryAllocator::MemAlloc(static_cast<unsigned long long>(sizeBytes), 4);
         serializer->SerializeBytes(owner->size, scratch, nullptr);
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ASYNCGPUCREATE.md): inside an armed loader
+        // bracket a static buffer's CreateBuffer goes to a worker, which owns and frees `scratch`.
+        if (AsyncCreate::Deferring() && owner->dynamic == 0) {
+            GpuBuffer_CreateDeferred(self, static_cast<uint32_t>(owner->size), scratch);
+            return;
+        }
         self->Create(static_cast<uint32_t>(owner->size), owner->dynamic, scratch);
         System::MemoryAllocator::MemFree(scratch);
         return;
@@ -525,6 +562,7 @@ bool GpuBuffer_SetData(const Owner* owner, ID3D11Buffer* buffer,
 // What is left is the body's own work, in retail order: Release the buffer if
 // there is one, then clear the three fields.
 VertexBufferData::~VertexBufferData() {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): never free under a running create
     if (buffer) buffer->Release();
     buffer      = nullptr;
     writeCursor = 0;
@@ -534,6 +572,7 @@ VertexBufferData::~VertexBufferData() {
 // 0x180003b90 — slot 1: Create(sizeBytes, dynamic, initialData) -> bool.
 // BindFlags = D3D11_BIND_VERTEX_BUFFER (1).
 bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const void* data) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     return GpuBuffer_Create(_owner, &buffer,
                             sizeBytes, dynamicByte, data, D3D11_BIND_VERTEX_BUFFER);
 }
@@ -541,12 +580,14 @@ bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const voi
 // 0x180003c60 — slot 2: SetData(sizeBytes, offsetBytes, src) -> bool.
 // DstSubresource is a hard 0 here (contrast IndexBufferData slot 2).
 bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
     return GpuBuffer_SetData(_owner, buffer,
                              sizeBytes, offsetBytes, src, /*dstSubresource=*/0);
 }
 
 // 0x180003290 — slot 3, SHARED with IndexBufferData slot 3 (one retail body).
 void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
     return BufferData_Lock(this, sizeBytes, outByteOffset);
 }
 
@@ -562,6 +603,7 @@ void VertexBufferData::Unlock() {
 // Video::Context* every other Bind in the DLL is handed and ignores.
 void VertexBufferData::Bind(void* /*context, unused*/, uint32_t startSlot,
                             uint32_t offsetBytes, uint32_t strideBytes) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): one relaxed load when idle
     // The original passes the addresses of its own R9 home slot (offset) and of
     // stack argument 5 (stride); taking the address of our parameters is the
     // same observable call.
@@ -583,6 +625,7 @@ void VertexBufferData::Serialize(::IO::Serializer* serializer) {
 // VertexBufferData's (B5 BUF: the re-seat, base chain and MemFree are the
 // compiler's).
 IndexBufferData::~IndexBufferData() {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): never free under a running create
     if (buffer) buffer->Release();
     buffer      = nullptr;
     writeCursor = 0;
@@ -593,6 +636,7 @@ IndexBufferData::~IndexBufferData() {
 // BindFlags = D3D11_BIND_INDEX_BUFFER (2) — the ONLY difference from the
 // VertexBufferData version.
 bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const void* data) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     return GpuBuffer_Create(_owner, &buffer,
                             sizeBytes, dynamicByte, data, D3D11_BIND_INDEX_BUFFER);
 }
@@ -602,6 +646,7 @@ bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const void
 // DstSubresource = offsetBytes. See the warning on GpuBuffer_SetData: this is
 // the shipped DLL's behaviour, bug and all.
 bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
     return GpuBuffer_SetData(_owner, buffer,
                              sizeBytes, offsetBytes, src,
                              /*dstSubresource=*/static_cast<UINT>(offsetBytes));
@@ -609,6 +654,7 @@ bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void
 
 // 0x180003290 — slot 3, SHARED with VertexBufferData slot 3 (one retail body).
 void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
     return BufferData_Lock(this, sizeBytes, outByteOffset);
 }
 
@@ -638,6 +684,7 @@ void IndexBufferData::Unlock() {
 // corrected this pass from a no-argument declaration. Ignoring it is retail's
 // behaviour; not declaring it was this file's.
 void IndexBufferData::Bind(void* /*context, never read*/) {
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): one relaxed load when idle
     Dx11Context()->IASetIndexBuffer(buffer, DXGI_FORMAT_R16_UINT, 0);
 }
 
