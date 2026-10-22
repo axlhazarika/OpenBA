@@ -4,10 +4,11 @@
 // A page is offered only while its extension's row is active for the game, the host adds its button only
 // when some page is offered, and the gate's command-line faithful profile never offers it. Each page owns a
 // span of element ids and answers only those. The page's controller is UI code (exe only): this file builds
-// the Contribution from the same constants (restricted_foods.h) and stubs the three callbacks.
+// the Contribution from the same constants (<id>.h) and stubs the three callbacks.
 // ============================================================================
 #include "unit.h"
 #include "ext/registry.h"
+#include "ext/item_priority/item_priority.h"
 #include "ext/restricted_foods/restricted_foods.h"
 #include "ext/toolbar/toolbar.h"
 #include "io/settings_file.h"
@@ -41,10 +42,16 @@ void StubClose() {}
 
 }  // namespace
 
-// The page the exe defines in src/ext/restricted_foods/toolbar_page.cpp, from the same constants.
+// The pages the exe defines in src/ext/<id>/toolbar_page.cpp, from the same constants.
 const Ext::Toolbar::Contribution& Ext::Toolbar::RestrictedFoodsPage() {
     static const Contribution c = { Ext::RestrictedFoods::kId, Ext::RestrictedFoods::kPageCaption,
                                     Ext::RestrictedFoods::kPageRsc, StubOpen, StubChanged, StubClose };
+    return c;
+}
+
+const Ext::Toolbar::Contribution& Ext::Toolbar::ItemPriorityPage() {
+    static const Contribution c = { Ext::ItemPriority::kId, Ext::ItemPriority::kPageCaption,
+                                    Ext::ItemPriority::kPageRsc, StubOpen, StubChanged, StubClose };
     return c;
 }
 
@@ -69,7 +76,7 @@ UNIT_TEST(ext_toolbar_a_page_is_offered_while_its_row_is_active) {
     CHECK_EQ(Ext::Toolbar::ActivePages(none, 0), 1);
     CHECK(none[0] == nullptr);
     int n = 0;
-    CHECK(Ext::Toolbar::All(&n) != nullptr && n == 1);
+    CHECK(Ext::Toolbar::All(&n) != nullptr && n == 2);
     Ext::Install(ResolveText(""), Ext::Profile::PerEntry, false);
 }
 
@@ -122,4 +129,16 @@ UNIT_TEST(ext_toolbar_each_page_owns_its_own_span_of_element_ids) {
     }
     CHECK(!OwnsId(first, 0));
     CHECK(!OwnsId(first, 1));
+}
+
+UNIT_TEST(ext_toolbar_each_active_row_adds_its_page_in_list_order) {
+    Ext::Install(ResolveText("ext.restricted_foods=1\next.item_priority=1\n"), Ext::Profile::PerEntry, false);
+    const Ext::Toolbar::Contribution* pages[4] = {};
+    CHECK_EQ(Ext::Toolbar::ActivePages(pages, 4), 2);
+    CHECK(pages[0] != nullptr && std::strcmp(pages[0]->id, "restricted_foods") == 0);
+    CHECK(pages[1] != nullptr && std::strcmp(pages[1]->id, "item_priority") == 0);
+    Ext::Install(ResolveText("ext.item_priority=1\n"), Ext::Profile::PerEntry, false);
+    CHECK_EQ(Ext::Toolbar::ActivePages(pages, 4), 1);       // one active row: one tab
+    CHECK(pages[0] != nullptr && std::strcmp(pages[0]->id, "item_priority") == 0);
+    Ext::Install(ResolveText(""), Ext::Profile::PerEntry, false);
 }

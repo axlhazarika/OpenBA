@@ -37,12 +37,13 @@ bool ParseEmbedded(const char* path, File& f) {
 }  // namespace
 
 UNIT_TEST(ext_rsc_text_embedded_files) {
-    CHECK(kEmbeddedCount == 5);
+    CHECK(kEmbeddedCount == 6);
     CHECK(Embedded("Dialog/Extensions.rsc") != nullptr);
     CHECK(Embedded("Dialog/EnhancedOptions.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsStringTable.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsWindow.rsc") != nullptr);
     CHECK(Embedded("Dialog/RestrictedFoodsPage.rsc") != nullptr);
+    CHECK(Embedded("Dialog/ItemPriorityPage.rsc") != nullptr);
 }
 
 UNIT_TEST(ext_rsc_text_parse_extensions) {
@@ -122,8 +123,8 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 33);
-    if (strings && strings->blocks.size() == 33) {
+    CHECK(strings && strings->blocks.size() == 49);
+    if (strings && strings->blocks.size() == 49) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
         bool found = false;
@@ -182,6 +183,19 @@ UNIT_TEST(ext_rsc_text_parse_restricted_foods_page) {
           f.Find("labelRestrictedFoodsRow") && f.Find("checkRestrictedFoodsRow") &&
           f.Find("checkRestrictedFoodsShowAll") && f.Find("textRestrictedFoodsHint"));
     CheckKnownTypes(f, "RestrictedFoodsPage.rsc");
+}
+
+UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
+    File f;
+    CHECK(ParseEmbedded("Dialog/ItemPriorityPage.rsc", f));
+    CHECK(f.Find("resource") == nullptr);   // a page, not a dialog: the root object is pageItemPriority
+    const Object* page = f.Find("pageItemPriority");
+    CHECK(page && page->type == "RibbonDescription");
+    CHECK(f.Find("tableItemPriority") && f.Find("ribbonItemPriorityCell") && f.Find("labelItemPriorityRow") &&
+          f.Find("checkItemPriorityRow") && f.Find("textItemPriorityRank") &&
+          f.Find("ribbonItemPriorityCategories") && f.Find("ribbonItemPriorityMoves") &&
+          f.Find("checkItemPriorityShowAll") && f.Find("textItemPriorityShowing"));
+    CheckKnownTypes(f, "ItemPriorityPage.rsc");
 }
 
 UNIT_TEST(ext_rsc_text_syntax_errors) {

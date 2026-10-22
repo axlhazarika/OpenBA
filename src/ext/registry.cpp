@@ -211,6 +211,16 @@ const Entry kEntries[] = {
       "Lets you stop citizens eating foods you choose, from the Foods page in a game. Play diverges; the "
       "choice is recorded in the save.",
       1, [](State& s) -> bool& { return s.ext.restricted_foods; } },
+    // ITEMPRIO (docs/extensions/handins/ITEMPRIO.md): the town ranks the tools, fuels, clothing and
+    // health items its citizens fetch from a storage; a citizen takes the best-ranked item. Class C:
+    // the ranked lists are the town's own state, recorded in the save's tail
+    // (src/ext/item_priority/save_state.cpp).
+    { "item_priority", Tier::Extension, Class::C, false,
+      "Item priority",
+      "Lets you rank the tools, fuels, clothing and health items citizens take first, from the "
+      "Priority page in a game. Play diverges; the choice is recorded in the save.",
+      1, [](State& s) -> bool& { return s.ext.item_priority; } },
+
     // HITCH_PFBURST (docs/extensions/handins/HITCH_PFBURST.md): a per-frame budget of the cold
     // citizens' warm-house scans (one region path search per residence), so a cold spell at high
     // speed spreads its scans over a few frames instead of one 10-20 ms frame.

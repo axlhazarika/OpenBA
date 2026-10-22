@@ -61,6 +61,8 @@
 // `struct Rectangle` is hidden by <wingdi.h>'s `Rectangle()` once <windows.h> has
 // been seen through resolve.h.  ENDGAME B.3.5 caller batch I2.
 #include "graphics/Scene.h"
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): ext.item_priority (class C), the finder tiers
+#include "ext/item_priority/item_priority.h"
 #include "Component/InteractDescription.h"   // B.3.8 CB1a (TypeId)
 #include "Component/CitizenDescription.h"   // B.3.8 CB1a (TypeId)
 #include "Component/CitizenAIComponent.h"
@@ -170,8 +172,16 @@ uint64_t CitizenAIComponent::State_Education() {
 
     ComponentEntity* outBest = nullptr;
     CitizenBehavior* listpair = GameUpdateLoop::_singleton->m_citizenList;
-    listpair->FindBestTarget(&outBest, static_cast<uint32_t>(mapSize * cy + cx), bGoal,
-                  &local_res8, dest, 4);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+    // with item priority active for Clothing (category 4) the finder runs once per rank, best first, so a
+    // better-ranked garment in a farther storage wins over a worse one in the nearest.
+    Ext::ItemPriority::FindTiered(Ext::ItemPriority::kClothing, [&]() -> bool {
+        outBest = nullptr;
+        local_res8 = nullptr;
+        listpair->FindBestTarget(&outBest, static_cast<uint32_t>(mapSize * cy + cx), bGoal,
+                      &local_res8, dest, 4);
+        return outBest != nullptr;
+    });
 
     if (outBest == nullptr) {
         citizen->field_0x1E0 = 0;
@@ -234,8 +244,16 @@ uint64_t CitizenAIComponent::State_SeekHappiness() {
 
     ComponentEntity* outBest = nullptr;
     CitizenBehavior* listpair = GameUpdateLoop::_singleton->m_citizenList;
-    listpair->FindBestTarget(&outBest, static_cast<uint32_t>(mapSize * cy + cx), bGoal,
-                  &local_res8, dest, 2);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+    // with item priority active for Tool (category 2) the finder runs once per rank, best first, so a
+    // better-ranked tool in a farther storage wins over a worse one in the nearest.
+    Ext::ItemPriority::FindTiered(Ext::ItemPriority::kTool, [&]() -> bool {
+        outBest = nullptr;
+        local_res8 = nullptr;
+        listpair->FindBestTarget(&outBest, static_cast<uint32_t>(mapSize * cy + cx), bGoal,
+                      &local_res8, dest, 2);
+        return outBest != nullptr;
+    });
 
     if (outBest == nullptr) {
         // --- no target: clear state + run the StatusIconComponent "show" branch ---

@@ -75,6 +75,9 @@
 #include "math/Math.h"
 #include "object/TypeInfo.h"
 #include "Game/GameUpdateLoop.h"   // B3R STORAGE: GameUpdateLoop::_singleton
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+// ext.item_priority (class C), the item pick and the finder tiers
+#include "ext/item_priority/item_priority.h"
 #include "Component/WorkPlaceComponent.h"   // B.3.8 CB1a (TypeId)
 #include "Component/StorageComponent.h"   // B.3.8 CB1a (TypeId)
 #include "Component/RawMaterialDescription.h"   // B.3.8 CB1a (TypeId)
@@ -492,7 +495,15 @@ uint64_t CitizenAIComponent::State_GrowUp() {
 
     ComponentEntity* found = nullptr;          // local_b0
     ComponentDescription* outComp = nullptr;   // local_res18
-    listPair->FindBestTarget(&found, homeCell, bGoal, &outComp, destA, 3);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+    // with item priority active for Health (category 3) the finder runs once per rank, best first, so a
+    // better-ranked item in a farther storage wins over a worse one in the nearest (otherwise one search).
+    Ext::ItemPriority::FindTiered(Ext::ItemPriority::kHealth, [&]() -> bool {
+        found = nullptr;
+        outComp = nullptr;
+        listPair->FindBestTarget(&found, homeCell, bGoal, &outComp, destA, 3);
+        return found != nullptr;
+    });
     if (found == nullptr) {
         return 0;   // no source → low byte 0
     }
@@ -512,6 +523,28 @@ uint64_t CitizenAIComponent::State_GrowUp() {
     int eligible = 0;          // (uint)local_res18
     int preferred = -1;        // uVar21 (the +0x58-flagged candidate index, or random)
     const StorageComponent::Item* rowArrBase = tStorNode->storageSlots._data;   // local_b8+0x28
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+    // this fetch picks the item itself (the finder only named the storage), so item priority narrows it here:
+    // only the rows of the best rank among the Health items the storage holds stay eligible. Tested once,
+    // above the loops.
+    const bool prio = Ext::ItemPriority::Active(Ext::ItemPriority::kHealth);
+    int bestRank = 0x7fffffff;
+    if (prio) {
+        for (int row = 0; row < rowCount; ++row) {
+            const Description* d = ScanForType(rowArrBase[row]._resource, s_tid_RawMaterialDescription);
+            if (!d) {
+                continue;
+            }
+            const RawMaterialDescription* rm = static_cast<const RawMaterialDescription*>(d);
+            if (((rm->_flags >> 0xd) & 1) == 0 || rowArrBase[row]._count - rowArrBase[row]._reserve <= 0) {
+                continue;
+            }
+            const int r = Ext::ItemPriority::RankOfMat(Ext::ItemPriority::kHealth, rm);
+            if (r < bestRank) {
+                bestRank = r;
+            }
+        }
+    }
     for (int row = 0; row < rowCount; ++row) {
         const ComponentDescription* rowEnt = rowArrBase[row]._resource;
         // storage ROW node: the item's ComponentDescription, sub-descriptions +0x28 / count
@@ -523,6 +556,10 @@ uint64_t CitizenAIComponent::State_GrowUp() {
         if ((flag & 1) == 0) continue;
         int stock = rowArrBase[row]._count - rowArrBase[row]._reserve;
         if (stock <= 0) continue;
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): only the best rank
+        if (prio && Ext::ItemPriority::RankOfMat(Ext::ItemPriority::kHealth, rm) != bestRank) {
+            continue;
+        }
         if (rm->_unknown58 != '\0') {
             preferred = eligible;   // remember the flagged candidate's ordinal
         }
@@ -551,6 +588,10 @@ uint64_t CitizenAIComponent::State_GrowUp() {
         if ((flag & 1) == 0) continue;
         int stock = rowArrBase[row]._count - rowArrBase[row]._reserve;
         if (stock <= 0) continue;
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): the same test as pass 1
+        if (prio && Ext::ItemPriority::RankOfMat(Ext::ItemPriority::kHealth, rm) != bestRank) {
+            continue;
+        }
         if (ordinal == chosen) {
             ComponentDescription* resCountObj = rowArrBase[row]._resource;
             if (resCountObj != nullptr) {
