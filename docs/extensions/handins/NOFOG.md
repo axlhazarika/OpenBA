@@ -13,12 +13,10 @@ With the row on the blended record's fog maximum is 0, so nothing is mixed in wh
 One, at the end of `WeatherSimulation::BlendLighting` (`src/game/Game/weather_sun.cpp`):
 
 ```
-if (::Ext::Ext().no_fog) {
-    out->fogMax = Ext::NoFog::kFogMax;
-}
+out->fogMax = Ext::NoFog::FogMax(out->fogMax, ::Ext::Ext().no_fog);
 ```
 
-Both readers of the blended record go through that function: the shipped draw path (`WeatherSimulation::DrawUpdate`) and `ext.render_pipe`'s recorded path (`render_pipe.cpp`). The row is read on each call, which is once per drawn frame, so a toggle takes effect at the next frame. With the row off the function is retail's own: the branch is one load and a not-taken test.
+Both readers of the blended record go through that function: the shipped draw path (`WeatherSimulation::DrawUpdate`) and `ext.render_pipe`'s recorded path (`render_pipe.cpp`). The row is read on each call, which is once per drawn frame, so a toggle takes effect at the next frame. With the row off `FogMax` returns the bits it was given, so the record is retail's own: the seam is one load and one store of the same value. The call goes through the tested helper, so the unit test covers what the seam does.
 
 ## 3. Class
 
@@ -41,7 +39,7 @@ No game content ships (DESIGN.md hook rule 7): the icon is drawn by `tools/ext_i
 
 ## 5. Verified and not verified
 
-* **Built and tested** on Windows (MinGW), release flavour, on `main` 30d98f2: unit 1282 / 0 failures / 5 skipped (the kit skips); `tools/acceptance/acceptance.sh` 0 lines off target; `OpenBA.exe` builds with no warnings from the touched files. Tests: the row (class A, off by default, key, profile), the toggle live under the game lock (`EntryLocked` is false, `SetRequested` takes effect at once), the fog maximum (retail's bits with the row off, 0 with it on).
-* **Performance (hook rule 6):** not measured with the stress town. The only change on the faithful profile is one load and a not-taken branch per drawn frame, and the row adds no per-frame work beyond one store.
+* **Built and tested** on Windows (MinGW), release flavour, on `main` dd8a060: unit 1282 / 0 failures / 6 skipped (the kit and font skips), `OpenBA.exe` builds. `tools/acceptance/acceptance.sh` (0 lines off target) was run on the earlier base 30d98f2 and not repeated after the rebase. Tests: the row (class A, off by default, key, profile), the toggle live under the game lock (`EntryLocked` is false, `SetRequested` takes effect at once), the fog maximum (retail's bits with the row off, 0 with it on).
+* **Performance (hook rule 6):** not measured with the stress town. The only change on the faithful profile is one load and one store of the same value per drawn frame, and the row adds no per-frame work beyond that.
 * **Looked at in a Windows run by the author, on this build:** the same scene zoomed out in clear weather, rain and snow, once with vanilla, once with the community no-fog mod and once with the row on. In clear weather the mod and the row look the same, with the haze gone. In rain and snow both remove most of the haze, but the mod keeps a light veil (its rain block carries `_fogMax = 0.4`), where the row removes all of it while the particles and the weather's darker light remain. Zero was chosen on purpose.
 * **Not run:** Linux, macOS, the resave gate (nothing is saved).

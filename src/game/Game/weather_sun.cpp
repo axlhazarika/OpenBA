@@ -84,10 +84,9 @@ EnvironmentSetting* WeatherSimulation::BlendLighting(EnvironmentSetting* out) co
     }
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/NOFOG.md):
     // ext.no_fog (class A): the fog maximum of the blended record is zero, so no fog is mixed into the
-    // picture. Every reader of the frame's lighting goes through this function.
-    if (::Ext::Ext().no_fog) {
-        out->fogMax = Ext::NoFog::kFogMax;
-    }
+    // picture. Every reader of the frame's lighting goes through this function. With the row off
+    // FogMax returns the same bits it was given, so the faithful record is unchanged.
+    out->fogMax = Ext::NoFog::FogMax(out->fogMax, ::Ext::Ext().no_fog);
     return out;
 }
 
