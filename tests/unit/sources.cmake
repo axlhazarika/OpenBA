@@ -52,6 +52,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/ext/load_notice.cpp
   ${CMAKE_SOURCE_DIR}/src/ext/resources/text_parser.cpp   # ext_rsc_text_test.cpp (block RSCTEXT)
   ${CMAKE_SOURCE_DIR}/src/ext/eye_camera/eye_math.cpp
+  ${CMAKE_SOURCE_DIR}/src/ext/rock_seat/rock_seat_math.cpp   # ext_rock_seat_test.cpp (ROCKSEAT)
   ${CMAKE_SOURCE_DIR}/src/ext/sharp_ui/sharp_math.cpp
   ${CMAKE_SOURCE_DIR}/src/ext/resources/font_tables.cpp         # ext_font_raster_test.cpp (block RSCFONT)
   ${CMAKE_SOURCE_DIR}/src/platform/win/font_raster_win.cpp      #   the GDI rasteriser (the posix twin is FreeType over the next file)
@@ -59,6 +60,12 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/ext/ambient_occlusion/ao_math.cpp   # ext_ambient_occlusion_test.cpp (block AOCORE)
   ${CMAKE_SOURCE_DIR}/src/ext/seamless_loops/seamless_loops.cpp   # ext_seamless_loops_test.cpp (block SEAMLESS)
   ${CMAKE_SOURCE_DIR}/src/ext/high_limits/high_limits.cpp             # ext_high_limits_test.cpp (HIGHLIMITS)
+  ${CMAKE_SOURCE_DIR}/src/ext/restricted_foods/restricted_foods.cpp            # ext_restricted_foods_test.cpp (RESTRICTEDFOODS)
+  ${CMAKE_SOURCE_DIR}/src/ext/restricted_foods/save_state.cpp             #   its class C codec
+  ${CMAKE_SOURCE_DIR}/src/ext/toolbar/toolbar.cpp                    # ext_toolbar_test.cpp (the page list; the page is stubbed there)
+  ${CMAKE_SOURCE_DIR}/src/ext/state_codecs.cpp                       # savetail.cpp's FindCodec (the class C codec table)
+  ${CMAKE_SOURCE_DIR}/src/ext/host_codecs.cpp                        # savetail.cpp's FindHostCodec (the host codec table, EXTHOSTS)
+  ${CMAKE_SOURCE_DIR}/src/ext/toolbar/window_state.cpp               #   the toolbar window's host record
   ${CMAKE_SOURCE_DIR}/src/ext/spread_warmth/spread_warmth.cpp     # ext_spread_warmth_test.cpp (HITCH_PFBURST)
   ${CMAKE_SOURCE_DIR}/src/ext/drain_split/drain_split.cpp         # ext_drain_split_test.cpp (HITCH_DRAINSPLIT)
   ${CMAKE_SOURCE_DIR}/src/render/common/better_trees/dxbc.cpp            # ext_better_trees_test.cpp (block FAA-CORE)
@@ -71,6 +78,8 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/ext/path_workers/pool.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/common/cpu/roster.cpp
   ${CMAKE_SOURCE_DIR}/src/ext/draw_gather/gather_side.cpp
+  ${CMAKE_SOURCE_DIR}/src/ext/draw_batch/batch_fill.cpp   # ext_draw_batch_test.cpp (DRAWBATCH)
+  ${CMAKE_SOURCE_DIR}/src/render/common/draw_batch/smoke_vs_rewrite.cpp   # ext_draw_batch_test.cpp (DRAWBATCH, Idea B)
   ${CMAKE_SOURCE_DIR}/src/ext/gather_threads/gather_threads.cpp
   ${CMAKE_SOURCE_DIR}/src/diag/diag_threads.cpp   # gather_threads.cpp registers its helpers (block LOADSTAMP)
   ${CMAKE_SOURCE_DIR}/src/platform/win/settings_win.cpp

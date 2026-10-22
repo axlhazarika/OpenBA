@@ -27,7 +27,8 @@
 #include "graphics/Camera.h"
 #include "Game/exe_bodies.h"
 #include "Game/GameUpdateLoop.h"   // B3R STORAGE: GameUpdateLoop::_singleton
-#include "ext/registry.h"            // Ext::Fix().start_barn_height
+#include "ext/registry.h"            // Ext::Fix().start_barn_height, Ext::Fix().rock_seat
+#include "ext/rock_seat/rock_seat.h"   // fix.rock_seat (docs/extensions/handins/ROCKSEAT.md)
 #include "system/MemoryAllocator.h"   // System::MemoryAllocator::MemAlloc / MemFree
 #include "Game/worldgen_cells.h"     // [PERLINPRE] WgCells_PerlinTable (row-parallel scatter noise)
 #include "math/Math.h"
@@ -4529,8 +4530,14 @@ static void StartTown_PlaceResourceCell(ComponentEntity* entity, int cellIdx, Ma
     const Math::Vector3 off(worldX, worldY, worldZ);
     m->transform = Math::Transform::FromYawPitchOffset(yaw, pitch, off);
     m->yaw = yaw;
-    Graphics::Geometry* geometry = &m->meshInstance;
-    geometry->SetTransform(m->transform);
+    // FIX rock_seat (NOT RETAIL, docs/extensions/handins/ROCKSEAT.md): a rock's mesh is drawn seated on
+    // the slope; m->transform (serialized) stays retail's.
+    if (Ext::Fix().rock_seat) {
+        Ext::RockSeat::SetMeshTransform(m);
+    } else {
+        Graphics::Geometry* geometry = &m->meshInstance;
+        geometry->SetTransform(m->transform);
+    }
 }
 
 // FUN_140120db0 — growth/age + mesh-scale init on the GrowthComponent. Delegates to

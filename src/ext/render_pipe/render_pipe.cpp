@@ -37,6 +37,11 @@
 // A failed Present is only REPORTED by the render thread; the recovery
 // (finish_split.h) runs on the main thread at the next join.
 //
+// THE RELEASE (RENDERPIPE_FENCE.md): after the post-draw callbacks the emit
+// releases the fence (EngineOps::Released -> Handoff::Release), so the steps
+// overlap EndCommands, the frame index and Present. The command stream is the
+// same: only the main thread's wait moves.
+//
 // THE SIX FIXES (THREADRESEARCH section 1.5):
 //   1 two Renderer instances, ping-pong: slot 0 = GameUpdateLoop::m_renderer,
 //     slot 1 = g_second (allocated at install, freed at uninstall);
@@ -301,10 +306,12 @@ void MainHalf(::Engine::MainLoop& loop, GameUpdateLoop& g, Graphics::Renderer& r
 struct EngineOps {
     ::Engine::MainLoop& loop;
     Video::Context*     ctx;
-    bool                threaded;          // on the render thread: Finish is split (finish_split.h)
+    Handoff*            handoff;           // non-null: the render thread (Finish split, the fence released)
     int64_t             frameStartTicks;   // MainLoop::_frameStartTicks for FrameUpdateTime
+    bool                check  = false;    // COMPPROF=4: hash the frame at the release
     bool                failed = false;
     int32_t             hr     = 0;        // threaded: FinishPresent's result (0 = presented)
+    uint64_t            post   = 0;        // the RenderPipe shadow's hash at the release
 
     void FrameTailTime(const Packet& p) {
         ctx->_time.x = p.frameTime;
@@ -414,6 +421,13 @@ struct EngineOps {
             e._func(*loop._context, e._context);
         }
     }
+    // RENDERPIPE_FENCE: the last read of the packet's Renderer and sun (the
+    // RenderPipe shadow's post hash), then the fence lets the steps run. Nothing
+    // below reads sim, scene, UI or Renderer state.
+    void Released(const Packet& p) {
+        if (check) post = HashFrame(*p.renderer, p.game->m_sunLight);
+        if (handoff != nullptr) handoff->Release();
+    }
     void EndCommands() { loop._context->_contextData->EndCommands(); }
     void FrameUpdateTime() {
         // Retail: Now - MainLoop::_frameStartTicks. The start is handed in by
@@ -424,7 +438,7 @@ struct EngineOps {
     }
     void IncFrameIndex() { ++ctx->_frameIndex; }
     void Finish() {
-        if (threaded)
+        if (handoff != nullptr)
             hr = FinishPresent(*ctx);          // Present + Unlock; a loss is only reported
         else
             ctx->_contextData->Finish();       // the faithful slot: Present + the inline recovery
@@ -459,8 +473,9 @@ struct EngineHost {
         }
     }
 
-    // The EMITTING thread: the render thread (threaded) or the main thread.
-    EmitResult Emit(const Packet& p, bool threaded) {
+    // The EMITTING thread: the render thread (handoff non-null) or the main thread.
+    EmitResult Emit(const Packet& p, Handoff* handoff) {
+        const bool threaded = handoff != nullptr;
         EmitResult res;
         Video::Context* const ctx = loop->_context;   // only the main thread's recovery replaces it, at a join
         const bool check = g_verifyOn != 0 && p.hashed;
@@ -471,7 +486,8 @@ struct EngineHost {
         const int64_t start = threaded ? p.frameStartTicks : loop->_frameStartTicks;
 
         StressHarness_PipeEmitBegin();
-        EngineOps ops{ *loop, ctx, threaded, start };
+        EngineOps ops{ *loop, ctx, handoff, start };
+        ops.check = check;
         Ext::RenderPipe::Emit(ops, p);
         StressHarness_PipeEmitEnd();
 
@@ -485,7 +501,7 @@ struct EngineHost {
         }
         if (check) {
             const bool kept = !res.failed && !res.lost;
-            const uint64_t post = kept ? HashFrame(*p.renderer, p.game->m_sunLight) : p.hash;
+            const uint64_t post = kept ? ops.post : p.hash;   // hashed at the release (EngineOps::Released)
             const bool same = pre == p.hash && post == p.hash;
             StressHarness_Verify("RenderPipe", same, (pre != p.hash ? 1 : 0) | (post != p.hash ? 2 : 0));
         }

@@ -98,6 +98,7 @@
 #include "ext/registry.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTSAVE.md): the B / C lock from the save
 #include "ext/savetail.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTSAVE.md): the block-1 tail manifest
 #include "ext/async_save_compress/async_save_compress.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_SAVE.md): ext.async_save_compress, the save arm
+#include "ext/rock_seat/rock_seat.h"   // FIX rock_seat (NOT RETAIL, docs/extensions/handins/ROCKSEAT.md): the post-load seat
 #include <string>
 #include <vector>
 #include "load_time.h"   // [LoadTime] stamps (NOT RETAIL, print-only; block LOADSTAMP)
@@ -732,6 +733,11 @@ void GameUpdateLoop::SerializeAllBody(IO::Stream& stream, SerializeScope& scope)
     LoadTime::Stamp("ser.postload", serDir);   // NOT RETAIL: print-only
     EntityList_PostLoad_c4730(m_entityList, &stream);
     m_citizenList->PostLoad();   // 0x14008f580 (0x140095d44: [RDI+0xf0], no test)
+    // FIX rock_seat (NOT RETAIL, docs/extensions/handins/ROCKSEAT.md): the entities were read before
+    // the terrain, so the rocks' meshes are seated now. Render only: nothing serialized changes.
+    if (!IsSaving(&stream) && Ext::Fix().rock_seat) {
+        Ext::RockSeat::SeatAll(m_entityList);
+    }
 
     intFactory->ClearPersistState();   // 0x140095d50-0x140095d5a: no test (row 1247)
     if (refIdMemo) {   // NOT RETAIL (HITCH_SAVE): close the memo window
@@ -770,6 +776,10 @@ void GameUpdateLoop::SerializeAllBody(IO::Stream& stream, SerializeScope& scope)
 // B / C set to exactly the saved one (Ext::LockForGameWithSet), replacing the
 // requested set GameUpdateLoop::Load locked at entry. No tail: that lock
 // stands. Bytes that are not a manifest (no magic): logged and ignored.
+// The reload of an in-game B / C change (Ext::LockKeepsRequest, set by
+// ExtensionsDialog::ReloadGame) keeps the request lock too: its manifest is the
+// set the player just changed. The records of extensions turned off are dropped
+// (the missing-mod paradigm); one turned on starts with empty state.
 // A manifest this build cannot honour -- an unknown id, a formatVersion newer
 // than ours, a damaged chunk -- is FATAL through retail's own error box
 // (System::Error::SetText(.., true) + Display: the box, then exit), because the
@@ -811,6 +821,17 @@ static void ExtSave_ReadTail(GameUpdateLoop* owner, IO::CompressedMemoryStream* 
         return;
     }
     std::string offending;
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTHOSTS.md): extension records are the lock set; host
+    // records (a shared surface's per-town state, presentation only) never reach Validate or the lock.
+    std::vector<Ext::SaveTail::Record> hosts;
+    std::vector<std::string> droppedKinds;
+    if (st == Ext::SaveTail::Status::Ok) {
+        const std::vector<Ext::SaveTail::Record> all = records;
+        st = Ext::SaveTail::SplitKinds(all, records, hosts, &droppedKinds, &offending);
+    }
+    for (const std::string& id : droppedKinds) {
+        fprintf(stderr, "[ExtSave] record %s of a kind this build does not have -- dropped\n", id.c_str());
+    }
     if (st == Ext::SaveTail::Status::Ok)
         st = Ext::SaveTail::Validate(records, &offending);
     if (st != Ext::SaveTail::Status::Ok) {
@@ -821,17 +842,52 @@ static void ExtSave_ReadTail(GameUpdateLoop* owner, IO::CompressedMemoryStream* 
         ExtSave_Fatal(text);
         return;
     }
-    std::vector<std::string> ids;
-    for (const Ext::SaveTail::Record& r : records) ids.push_back(r.id);
-    if (!Ext::LockForGameWithSet(owner, ids)) {   // Validate checked every id: unreachable
-        ExtSave_Fatal("This save was made with game extensions this version cannot load.");
-        return;
+    if (Ext::LockKeepsRequest()) {
+        // An in-game B / C change: the request lock from Load stands. Only the records of
+        // extensions still active for this game are kept.
+        const size_t saved = records.size();
+        size_t kept = 0;
+        for (size_t i = 0; i < saved; ++i) {
+            const Ext::Entry* e = Ext::FindEntry(records[i].id.c_str());
+            if (e != nullptr && Ext::Active(*e)) {
+                records[kept] = records[i];
+                ++kept;
+            }
+        }
+        records.resize(kept);
+        fprintf(stderr, "[ExtSave] manifest: an in-game B / C change, the request stands; %u of %u saved "
+                "record(s) kept:", static_cast<unsigned>(kept), static_cast<unsigned>(saved));
+    } else {
+        std::vector<std::string> ids;
+        for (const Ext::SaveTail::Record& r : records) ids.push_back(r.id);
+        if (!Ext::LockForGameWithSet(owner, ids)) {   // Validate checked every id: unreachable
+            ExtSave_Fatal("This save was made with game extensions this version cannot load.");
+            return;
+        }
+        fprintf(stderr, "[ExtSave] manifest: %u B / C extension(s) locked for this game from the save:",
+                static_cast<unsigned>(records.size()));
     }
-    fprintf(stderr, "[ExtSave] manifest: %u B / C extension(s) locked for this game from the save:",
-            static_cast<unsigned>(records.size()));
     for (const Ext::SaveTail::Record& r : records)
         fprintf(stderr, " %s(v%d)", r.id.c_str(), r.formatVersion);
     fprintf(stderr, "\n");
+    fflush(stderr);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): class C, each record's payload
+    // is that extension's per-town state (savetail.h, StateCodec). After the whole block above, so it
+    // runs on both routes.
+    if (!Ext::SaveTail::ApplyState(records, &offending)) {
+        ExtSave_Fatal("This save's ext:" + offending + " state is damaged.");
+        return;
+    }
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTHOSTS.md): the host records; never fatal (a refused
+    // one leaves that host at its defaults). PlayerToolManager::Startup reopens the window from it.
+    std::vector<std::string> notes;
+    Ext::SaveTail::ApplyHostState(hosts, &notes);
+    for (const std::string& n : notes) {
+        fprintf(stderr, "[ExtSave] %s\n", n.c_str());
+    }
+    if (!hosts.empty()) {
+        fprintf(stderr, "[ExtSave] %u host record(s) read\n", static_cast<unsigned>(hosts.size()));
+    }
     fflush(stderr);
 }
 

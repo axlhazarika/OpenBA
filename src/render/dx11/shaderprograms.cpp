@@ -61,6 +61,7 @@
 #include "video/CompanionData.h"
 #include "better_trees/foliage_aa_stage.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/BETTER-TREES.md, FAA-CORE.md): ext.better_trees' foliage_aa stage, VideoDX11::g_extFoliageAA
 #include "better_trees/billboard_shadow_stage.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/BETTER-TREES.md, TS-CORE.md): ext.better_trees' billboard_shadow stage, VideoDX11::g_extBillboardShadow
+#include "draw_batch/smoke_vs_stage.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/DRAWBATCH.md): ext.draw_batch's particle VS stage, VideoDX11::g_extDrawBatchVs
 
 namespace VideoDX11 {
 
@@ -89,6 +90,8 @@ namespace VideoDX11 {
 VertexProgramData::~VertexProgramData() {
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/BETTER-TREES.md, TS-CORE.md): ext.better_trees' billboard_shadow stage, null unless the row is on; the stage drops its copies.
     if (BbsStage::Stage* bbs = g_extBillboardShadow.load(std::memory_order_acquire)) bbs->VertexDestroyed(this);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/DRAWBATCH.md): ext.draw_batch's particle VS stage, null unless the row is on; the stage drops its copies.
+    if (DbStage::Stage* db = g_extDrawBatchVs.load(std::memory_order_acquire)) db->VertexDestroyed(this);
     for (int i = 0; i < kShaderVariantCount; ++i)
         if (variants[i]) variants[i]->Release();
 }
@@ -153,6 +156,8 @@ bool VertexProgramData::PlatformCreate() {
     }
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/BETTER-TREES.md, TS-CORE.md): ext.better_trees' billboard_shadow stage, null unless the row is on; the stage makes the copies.
     if (BbsStage::Stage* bbs = g_extBillboardShadow.load(std::memory_order_acquire)) bbs->VertexCreated(this);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/DRAWBATCH.md): ext.draw_batch's particle VS stage, null unless the row is on; the stage makes the copies.
+    if (DbStage::Stage* db = g_extDrawBatchVs.load(std::memory_order_acquire)) db->VertexCreated(this);
     return true;
 }
 
@@ -179,6 +184,11 @@ void VertexProgramData::Bind(void* /*Video::Context& — ignored, see header*/,
                              int permutation) {
     ID3D11DeviceContext* ctx = Dx11Context();
     const int i = variants[permutation] ? permutation : 0;
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/DRAWBATCH.md): ext.draw_batch's particle VS stage, null unless the row is on.
+    // Set, the stage binds this variant's rewritten copy when it has one (a particle program) and returns true.
+    if (DbStage::Stage* db = g_extDrawBatchVs.load(std::memory_order_acquire)) {
+        if (db->BindVertex(ctx, this, i)) return;
+    }
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/BETTER-TREES.md, TS-CORE.md): ext.better_trees' billboard_shadow stage, null unless the row is on -- the faithful path's one
     // test per bind. Set, the stage binds this variant or its rewritten copy (TREE_SHADOW.md §4.2).
     if (BbsStage::Stage* bbs = g_extBillboardShadow.load(std::memory_order_acquire)) {

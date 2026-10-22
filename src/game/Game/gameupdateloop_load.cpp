@@ -85,6 +85,9 @@
 #include "utility/PerlinNoise.h"        // RtUtility_PerlinNoise_Ctor
 #include "Entity/ComponentEntity.h"   // B4 S4 RT2: InternalPtr<ComponentEntity>::Get() needs the class complete
 #include "ext/registry.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTSCAFFOLD.md): Ext::LockForGame
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): Ext::SaveTail::ResetAllState, a
+// class C extension's state
+#include "ext/savetail.h"
 #include "ext/fast_paths/fast_paths.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/FASTPATHS.md): Ext::FastPaths::SelectForGame
 #include "ext/path_workers/path_workers.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/PATHWORKERS.md): Ext::PathWorkers::SelectForGame
 #include "load_time.h"   // [LoadTime] stamps (NOT RETAIL, print-only; block LOADSTAMP)
@@ -733,6 +736,9 @@ void GameUpdateLoop::Load() {
     // load takes the class B / C lock for this loop's lifetime. A no-op on the
     // game while no B / C extension is registered.
     Ext::LockForGame(this);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): a class C extension's per-town state
+    // starts empty; a load's tail record decodes it
+    Ext::SaveTail::ResetAllState();
     // ext.fast_paths (class B) reads the lock here; final for a new game, a
     // load's manifest replaces it in SaveRestore and the second call below
     // re-reads it (src/ext/fast_paths/fast_paths.h).

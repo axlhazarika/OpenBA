@@ -64,6 +64,9 @@
 #include "ext/render_culling/render_culling.h" // EXT SEAM (NOT RETAIL, docs/extensions/handins/PERFXEXT.md): ext.render_culling / ext.anim_batch (PerfX)
 #include "ext/walk_batch/walk_batch.h" // EXT SEAM (NOT RETAIL, docs/extensions/handins/WALKBATCH.md, WALKGRID.md): ext.walk_batch (A) / ext.walk_batch_grid (B)
 #include "ext/spread_warmth/spread_warmth.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_PFBURST.md): ext.spread_warmth (class B), Ext::SpreadWarmth::BeginFrame
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md):
+// ext.restricted_foods (class C), Ext::RestrictedFoods::BeginFrame
+#include "ext/restricted_foods/restricted_foods.h"
 #include "ext/drain_split/drain_split.h"       // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_DRAINSPLIT.md): ext.drain_split (class B), Ext::DrainSplit::BeginFrame
 #include "Game/terrain_sidecar.h" // the terrain-type mirror's teardown (faithful perf work)
 #include <cstdio>
@@ -578,6 +581,8 @@ bool GameUpdateLoop::Update(const System::Time& timeRef) {
     Ext::RenderCulling::BeginFrame(m_renderer);      // EXT SEAM (NOT RETAIL, docs/extensions/handins/PERFXEXT.md): ext.render_culling / ext.anim_batch read once per frame (frustum, pause flush)
     Ext::WalkBatch::BeginFrame();            // EXT SEAM (NOT RETAIL, docs/extensions/handins/WALKBATCH.md, WALKGRID.md): ext.walk_batch (A) / ext.walk_batch_grid (B) read once per frame
     Ext::SpreadWarmth::BeginFrame();         // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_PFBURST.md): ext.spread_warmth (B) read once per frame, its budget reset
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): ext.restricted_foods (C) read once per frame
+    Ext::RestrictedFoods::BeginFrame();
     Ext::DrainSplit::BeginFrame();           // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_DRAINSPLIT.md): ext.drain_split (B) read once per frame, the owed half's frame count
 
     // [EVENTS] RETIRED: the BANISHED_LIVE_EVENTS resource-shortage scanner used to
@@ -2270,7 +2275,7 @@ GameUpdateLoop::~GameUpdateLoop() {
     _singleton = nullptr;
 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTSCAFFOLD.md): release this loop's class B / C lock (ignored
-    // when a reload's new loop already holds it).
+    // when a reload's new loop already holds it). Releasing it also empties the class C state.
     Ext::UnlockForGame(this);
 }
 

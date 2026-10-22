@@ -144,7 +144,7 @@ const FieldDesc kLayoutItem[] = {
 };
 const FieldDesc kLayout[] = { FR("_elements", kLayoutItem) };
 const FieldDesc kTableItem[] = { F("_x", Int), F("_y", Int), F("_element", Ext) };
-const FieldDesc kTable[] = { F("_width", Int), F("_height", Int), F("", Int), FR("_items", kTableItem) };
+const FieldDesc kTable[] = { F("_width", Int), F("_height", Int), F("_spacing", Int), FR("_items", kTableItem) };
 const FieldDesc kImage[] = { F("_spriteSheet", Ext), F("_spriteName", String), F("", Int), F("", Int) };
 const FieldDesc kSlider[] = {
     F("_number", Ext), F("", Ext), F("", String), F("", String), F("", String), F("", String), F("", String),

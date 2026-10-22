@@ -29,6 +29,8 @@
 #include "Component/ModelDescription.h"   // ENDGAME B.3.9 CB: 0x1401c7a88 cell class
 #include "Entity/ComponentEntity.h"
 #include "ext/render_culling/render_culling.h"
+#include "ext/registry.h"              // Ext::Fix().rock_seat
+#include "ext/rock_seat/rock_seat.h"   // fix.rock_seat (docs/extensions/handins/ROCKSEAT.md)
 #include "ext/anim_batch/anim_batch.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/PERFXEXT.md): ext.anim_batch (On / Decide)
 #include "io/Serializer.h"   // ENDGAME B.3.4 caller batch A
 #include <cstdio>
@@ -238,7 +240,13 @@ void ModelComponent::OnAdded() {
         (void)::Object::IsDerivedFromNullSafe(desc, ModelDescription::TypeId());
 
         Graphics::MeshInstance* mesh = &meshInstance;
-        mesh->SetTransform(transform);
+        // FIX rock_seat (NOT RETAIL, docs/extensions/handins/ROCKSEAT.md): a rock's mesh is drawn
+        // seated on the slope; `transform` (serialized) stays retail's.
+        if (Ext::Fix().rock_seat) {
+            Ext::RockSeat::SetMeshTransform(this);
+        } else {
+            mesh->SetTransform(transform);
+        }
 
         // MeshInstance::Update with Time(0) (Geometry slot 1)
         {

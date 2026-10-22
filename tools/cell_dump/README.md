@@ -1,6 +1,6 @@
 # cell_dump — map-cell dumps for the "red square" reports
 
-`docs/retail_bugs.md` §7 has the findings. These tools show which of `Map::TestPlacement`'s
+`docs/retail_bugs.md` §8 has the findings. These tools show which of `Map::TestPlacement`'s
 tests fails on a red cell and which code path got it there.
 
 ## Dump a save

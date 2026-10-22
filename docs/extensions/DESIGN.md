@@ -30,7 +30,7 @@ never here.
 |---|---|---|---|---|
 | 0 Faithful | retail's behaviour | retail's | -- | here, and only here |
 | 1 Fix | a retail bug corrected at its faithful lever | retail's, unchanged | **ON** | boot/stress/quit only |
-| 2 Extension | a feature retail never had | by class (below) | **class A ON, B / C OFF** (ruled 2026-10-18; `eye_camera` is class A but OFF: it changes how the game is played) | boot/stress/quit only |
+| 2 Extension | a feature retail never had | by class (below) | **class A ON, B / C OFF** (ruled 2026-10-18; `eye_camera` is class A but OFF: it changes how the game is played; so is `no_fog`: it changes how the map looks) | boot/stress/quit only |
 
 A **fix** is one branch at the one site `retail_bugs.md` names as the lever, retail's path kept
 in the other arm. It never changes what is serialized. It may change sim outcomes (that is the
@@ -75,7 +75,10 @@ such a save through the standard modsMissing path -- a Yes/No modal per entry, Y
 0x1400b61e0, SAVETAIL §3) -- the same warning a missing `.pkm` gives, which is the paradigm the player
 already knows; the tail chunk is never read. Our own loader splits the `ext:` entries out before
 CheckMod and shows its own notice for a missing or disabled extension. No header field changes.
-Toggling a B/C extension mid-game reuses `Dialog/Reload.rsc:game`, as the Mods dialog does.
+Toggling a B/C extension mid-game reuses `Dialog/Reload.rsc:game`, as the Mods dialog does; the
+reloaded game keeps the new request although its save-restore wrote the old set into the manifest
+(`Ext::KeepRequestOnNextLock`, ruled 2026-10-21): a record of an extension turned off is dropped, one
+turned on starts with empty state.
 Both write seams (pseudo-mods in `Save::SaveLoad::SaveMetaData`, the tail chunk) write ZERO bytes
 when no B/C extension is enabled: the resave gate byte-compares the whole decompressed block 1.
 
@@ -127,9 +130,29 @@ Rules: the record exists whenever the extension is active, even with empty state
 not depend on content; the faithful profile still writes zero bytes); state refers to game objects by
 name (template path, string id), never by index, because mods change load order between sessions;
 the extension's `formatVersion` is bumped when the payload's layout changes; a shipped class C
-extension gets its own resave golden under its profile (Gates, below). With the extension disabled
-our loader shows the notice, plays the town without the feature and drops the payload at the next
-save, the missing-mod paradigm.
+extension gets its own resave golden under its profile (Gates, below). A save that carries an
+extension the player has turned off shows our `TurnedOff` notice (`src/ext/load_notice.h`); on Yes
+the manifest locks the extension ON for that town and its state is restored (ruled 2026-10-21: the
+save keeps the extensions it was made with). Turning it off for a town is the in-game toggle above,
+which drops the payload at the reload. Per-entity state (a value per citizen or per building) is a
+payload too, keyed by a stable name or id; `decode` runs after the whole world is deserialized, so the
+objects exist. A codec's `encode` runs on the save worker (ext.background_save): it reads only plain
+state its extension owns, never a UI object, and that state is not written during a frozen update.
+
+**Host records (ruled 2026-10-21, handins/EXTHOSTS.md).** The tail (version 2) carries two kinds of
+record, told apart by a kind byte, with a must-understand flag beside it. *Extension records* are the
+above: one per active B / C extension, always must-understand, and they ARE the lock set (an unknown id
+or a newer `formatVersion` is fatal). *Host records* are the per-town state of a shared surface (the
+toolbar window: open, where, which page), PRESENTATION ONLY: anything a reload must restore for the
+town to play on as saved is an extension record. A host record is never in the lock set; an unknown
+host, a newer host version or a payload its codec refuses is dropped with a log line and the host keeps
+its defaults. Host records are written only beside at least one extension record, so a town with only
+class A (or no) extensions still writes zero bytes and its window does not reopen. Retail's equivalent
+is PlayerToolManager's pinned-window set, which cannot hold a non-retail window: its key is a retail
+template path in retail's part of the save. A later record kind needs no new chunk version: an
+unknown kind without the must-understand flag is dropped, one with it is fatal. Not built (no
+extension needs it yet): state that survives an extension being turned off and on again, which would
+be a third kind carried through untouched.
 
 **Surfaces: the UI axis is not the class axis (ruled 2026-10-20).** The class letter answers one
 question only, what a toggle costs the player's save. Where an extension shows up in the UI is a
@@ -221,7 +244,7 @@ void Reset() { g_names.clear(); }
 const SaveTail::StateCodec& Codec() { static const SaveTail::StateCodec c = { "my_list", Encode, Decode, Reset }; return c; }
 }}  // namespace Ext::MyList
 
-// src/ext/state_codecs.cpp (exe only), kCodecs: one line per class C extension
+// src/ext/state_codecs.cpp (linked into the unit build too; a codec is standard C++), kCodecs: one line per class C extension
 const SaveTail::StateCodec* const kCodecs[] = { &MyList::Codec(), };
 ```
 The two serializer arms (`gameupdateloop_serialize.cpp`, `ExtSave_WriteTail` / `ExtSave_ReadTail`)
@@ -247,33 +270,47 @@ own text `.rsc`:
 // src/ext/toolbar/toolbar.h (new, shared)
 namespace Ext { namespace Toolbar {
 struct Contribution {
-    const char* id;                              // the Entry id; the page is offered only while Active(entry)
-    const char* page;                            // "Dialog/MyListPage.rsc:pageMyList", our text .rsc
-    void (*open)(UI::Element* page);             // find the elements by name, fill them from the state
-    void (*changed)(UI::Element* page);          // a control changed: write the state (live, no Apply)
-    void (*close)();                             // forget the element pointers
+    const char* id;        // the Entry id; the page is offered only while Active(entry)
+    const char* caption;   // the tab's text: a key in Dialog/ExtensionsStringTable.rsc
+    const char* page;      // "Dialog/MyListPage.rsc:pageMyList", our text .rsc
+    void (*open)(UI::Element* page, int32_t idBase);     // find the elements by name, give the controls
+                                                         // ids from idBase, fill them from the state
+    bool (*changed)(UI::Element* page, int32_t id);      // a control (local id) was used: write the state
+                                                         // (live, no Apply); false = not mine
+    void (*close)();                                     // forget the element pointers
 };
+constexpr int32_t kPageIdSpan = 10000;           // the element ids one page owns: [idBase, idBase + span)
 bool Offered();                                  // any active contributor, and not the forced faithful profile
-bool AddButton(UI::Element* toolbar);            // the host's one button; false = nothing added (retail toolbar)
+// the button, built by ToolbarDialog while the Reports group is made (one EXT SEAM per site)
+int  InsertAt(const ::Toolbar* group, const ::Toolbar* const* items, int n);   // slot, or -1: no button
+void Style(UI::Element* button, int32_t index);  // name, id, tooltip, icon of the cloned button
+void Toggle(UI::UserInterface* ui);              // the click: open the window, or close it
 }}
 
 // src/ext/my_list/toolbar_page.cpp
 namespace Ext { namespace MyList {
 namespace {
 UI::TableElement* g_table = nullptr;
-void Open(UI::Element* page) { g_table = FindElement<UI::TableElement>(page, "tableMyList"); /* fill rows */ }
-void Changed(UI::Element* page) { /* read the checks into g_names; mark the object flags (section 4) */ }
+void Open(UI::Element* page, int32_t idBase) { g_table = FindElement<UI::TableElement>(page, "tableMyList"); /* ids from idBase, fill rows */ }
+bool Changed(UI::Element* page, int32_t id) { /* id is local: 0 .. kPageIdSpan - 1; read the check, mark the object flags (section 4); false if not mine */ return false; }
 void Close() { g_table = nullptr; }
 }  // namespace
 }}
 const Ext::Toolbar::Contribution& Ext::Toolbar::MyListPage() {
-    static const Contribution c = { "my_list", "Dialog/MyListPage.rsc:pageMyList", MyList::Open, MyList::Changed, MyList::Close };
+    static const Contribution c = { "my_list", "MyListTab", "Dialog/MyListPage.rsc:pageMyList", MyList::Open, MyList::Changed, MyList::Close };
     return c;
 }
 ```
-The host's `// EXT SEAM` is the one line in the toolbar's build (`src/game/...`) that calls
-`Ext::Toolbar::AddButton`; the page table in `toolbar.cpp` lists `MyListPage()` the way
-`enhanced_tab.cpp` lists its entries.
+The host's `// EXT SEAM` comments are the few sites in `ToolbarDialog` (`src/game/Dialog/toolbardialog.cpp`)
+that call `InsertAt` / `Style` / `Toggle`; the toolbar keeps a **null** entry in its item array for the
+button, so every retail reader of that array skips null. The page table in `toolbar.cpp` lists
+`MyListPage()` the way `enhanced_tab.cpp` lists its entries. **Element ids belong to the host:** each open
+page owns the span `[idBase, idBase + kPageIdSpan)` (`IdBaseFor(pageIndex)`), `open` receives `idBase`, a
+control gets `idBase + local` as its element id, and `changed` is called only for ids in the page's own
+span, with the LOCAL id, so two pages can never answer each other's clicks. Shared helpers (`OurString`,
+`SetTableText`, `Lower`) are exported by the host; a page never carries its own copy. The window shows
+`kMaxPages` (8) pages and logs any beyond that. The tab's label is the text `caption` (a key in the string
+table), not a sprite.
 
 *4. The sim seam.* The decision is made once when the list changes and stored on the object; the
 per-entity loop tests a flag and never a container or the toggle (hook rule 4):
@@ -289,7 +326,10 @@ bool Listed(const Game::Thing* t);     // the flag the page's Changed() set on t
 if (Ext::MyList::Listed(thing)) continue;
 ```
 `Listed` is a flag read; with the row inactive every flag is clear, so the faithful path pays one
-predictable branch and the resave gate stays byte-identical.
+predictable branch and the resave gate stays byte-identical. Where the extension has no object to mark (a
+test on a material in a per-row picker, `ext.restricted_foods`), the decision is hoisted above the loops
+(`const bool on = g_on && ...`) and the loop scans a short flat array of object pointers rebuilt only when
+the list or the lock epoch changes: no map and no string work per row.
 
 *5. The tests.* `tests/unit/ext_my_list_test.cpp`: the codec round-trips (encode then decode gives
 the same list), decode refuses a truncated payload, `reset` empties the state, and the sim seam's
@@ -309,14 +349,17 @@ underscores dropped (`MYLIST`).
 | bodies + the seam helpers | `src/ext/<id>/<id>.h` / `<id>.cpp` (the header every faithful seam includes) |
 | Enhanced tab rows | `src/ext/<id>/enhanced_entry.cpp`, accessor `Ext::EnhancedTab::<Id>Entry()` declared in `enhanced_tab.h` |
 | toolbar page | `src/ext/<id>/toolbar_page.cpp`, accessor `Ext::Toolbar::<Id>Page()` declared in `src/ext/toolbar/toolbar.h` |
-| class C codec | `src/ext/<id>/save_state.cpp`, accessor `Ext::<Id>::Codec()` declared in `<id>.h`; the struct `Ext::SaveTail::StateCodec` in `savetail.h`; the table `kCodecs` + `Ext::SaveTail::FindCodec(id)` in `src/ext/state_codecs.cpp` (exe only: `savetail.cpp` stays unit-linkable without the extensions) |
+| class C codec | `src/ext/<id>/save_state.cpp`, accessor `Ext::<Id>::Codec()` declared in `<id>.h`; the struct `Ext::SaveTail::StateCodec` in `savetail.h`; the table `kCodecs` + `Ext::SaveTail::FindCodec(id)` in `src/ext/state_codecs.cpp` (linked into the unit build too, so a codec stays standard C++ with no engine headers) |
+| host codec | a shared host's `Ext::SaveTail::HostCodec` (`id`, its own `formatVersion`, `encode` / `decode` / `reset`) in the host's own directory (`src/ext/toolbar/window_state.cpp`: `Toolbar::WindowCodec()`, host id `toolbar`); the table `Ext::SaveTail::FindHostCodec(id)` in `src/ext/host_codecs.cpp` (linked into the unit build too), only for hosts of the Surfaces table |
 | byte helpers | `Ext::SaveTail::Writer` (`U32`, `I32`, `String`, `Bytes`) and `Ext::SaveTail::Reader` (`U32`, `I32`, `String`, `Bytes`, `AtEnd`), promoted from `savetail.cpp` to `savetail.h` by the first codec; no per-extension copies |
 | codec callbacks | `encode` / `decode` / `reset`; the wire format is documented at the top of `save_state.cpp` ("Wire format v<n>") |
-| toolbar host | `src/ext/toolbar/toolbar.{h,cpp}`: `Contribution { id, page, open, changed, close }`, `Offered()`, `AddButton(UI::Element*)` |
+| load and reset arms | `Ext::SaveTail::ApplyState(records, &offending)` hands each record's payload to its codec, once, after the manifest's lock on both load routes; `Ext::SaveTail::ResetAllState()` runs every codec's `reset` (new game, and inside `Ext::UnlockForGame` for the lock's owner only) |
+| toolbar host | `src/ext/toolbar/toolbar.{h,cpp}`, `toolbar_window.cpp`: `Contribution { id, caption, page, open, changed, close }`, `Offered()`, `InsertAt` / `Style` / `Toggle` for the button, `kPageIdSpan` / `IdBaseFor` / `OwnsId` for element ids, the shared helpers `OurString` / `SetTableText` / `Lower` |
 | element lookup | `Ext::FindElement<T>(page, name)` in `src/ext/ui/find_element.h` (the Enhanced tab's contributions use it) |
 | our `.rsc` text | `src/ext/ui/Dialog/<Id>Page.rsc`, root object `page<Id>`; elements `<kind><Id><What>` (`tableMyList`, `checkMyListRow`, `comboAmbientOcclusion`); strings in `Dialog/ExtensionsStringTable.rsc`, `_name = "<Id><What>"` |
-| sprites | `src/ext/ui/Dialog/Sprite/Extensions/Entry_<id>.png` (the dialog row's icon), `Page_<id>.png` (the toolbar page's tab), `Toolbar_extensions.png` (the one shared button); baked by `tools/ext_sprites_bake.py` |
-| per-object flag | never a new field in a retail class (every `sizeof` is asserted): a side table in the extension keyed by the object's id, or a documented spare bit; engine-side seams are `_ext<What>` static data pointers (`Graphics::SunLight::_extShadowFitView`) |
+| sprites | `src/ext/ui/Dialog/Sprite/Extensions/Entry_<id>.png` (the dialog row's icon), `Toolbar_extensions.png` (the one shared button); baked by `tools/ext_sprites_bake.py` |
+| per-object flag | never a new field in a retail class (every `sizeof` is asserted): a side table in the extension keyed by the object's id, or a documented spare bit; engine-side seams are `_ext<What>` static data pointers (`Graphics::SunLight::_extShadowFitView`, `Graphics::Renderer::_extDrawItemList`); a backend-side seam is a `g_ext<What>` atomic in the backend (`VideoDX11::g_extDrawBatchVs`) |
+| draw-item tag | an extension's own draw items carry a key value the faithful code never emits, named in the extension's rules header (`Ext::TerrainBatch::kRunTag`, WorldGeometry key bits `0xC000`) and tested at the faithful draw's branch by an `Is<What>Key` helper; the unit tests prove no retail key matches |
 | seam comment | `// EXT SEAM (NOT RETAIL, docs/extensions/handins/<ID>.md): <one line of what and when>` at every faithful site, including dialog arms |
 | log prefix | `[<Id>]` on stderr (`[ExtSave]`, `[AmbientOcclusion]`); never stdout |
 | hand-in / block | `docs/extensions/handins/<ID>.md`; a follow-up block `<ID>2`, `<ID>-<PART>` (`FAA-SHADOW2`) |

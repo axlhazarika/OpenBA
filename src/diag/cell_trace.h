@@ -3,7 +3,7 @@
 // A cell turns red in the placement overlay when Map::TestPlacement (0x14009f5d0) fails one
 // of four tests: terrain type, blocker, the shared footprintCount refcount (MapCell +0x28:
 // roads and '.' footprint cells), or height. These hooks make the first three visible.
-// docs/retail_bugs.md §7 has the findings they are meant to confirm.
+// docs/retail_bugs.md §8 has the findings they are meant to confirm.
 //
 //   BANISHED_CELL_DUMP=<dir>  Map::Serialize's load arm writes <dir>/cells_raw.txt (the cells
 //                             as the save holds them, BEFORE the load fix-up pass that turns a

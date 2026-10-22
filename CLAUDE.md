@@ -43,6 +43,9 @@ tools/resave_gate/resave_gate.sh Gate   # serializer regression check (README al
 `--jobs N` / `BUILD_JOBS` (default 8; agents use 2). On Linux the same CMakeLists builds `OpenBA`
 and `unit` (`tools/linux_gamedir.sh`, `tools/linux_run.sh`). There is no Makefile (deleted 2026-10-11).
 `tools/build.sh run` is the default way to verify any gameplay / rendering / world-build change.
+**Work lands by PR.** `main` is protected: the four CI checks (Windows, Linux, macOS, Acceptance) must
+pass; admin bypass is for emergencies only. The gate and the resave check still run locally before
+the merge. Renaming a CI job means updating the required checks in branch protection in the same change.
 
 ## Reimplementation workflow (per function)
 1. **Decompile** in Ghidra: rename, annotate, document the struct layout (`ghidra` skill)

@@ -662,6 +662,14 @@ public:
     // layout below is unchanged.
     static const ExtAoFrame* _extAo;
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/DRAWBATCH.md): ext.draw_batch's replacement of
+    // DrawItemList (src/ext/draw_batch/). Null by default: DrawItemList tests it once per call (one
+    // test per pass list, never per item) and otherwise runs retail's body unchanged. Set and
+    // cleared only by Ext::DrawBatch::Sync, at boot and on the Extensions-dialog toggle.
+    using ExtDrawItemListFn = void (*)(const Renderer& renderer, Video::Context& context, int group,
+                                       int list, int shader);
+    static ExtDrawItemListFn _extDrawItemList;
+
 public:
     Collection::Array<RendererSceneEntry> _sceneGroups;  // +0x00  GetSceneGroup
     Collection::Array<RendererDrawGroup>  _drawGroups;   // +0x10
