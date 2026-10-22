@@ -103,6 +103,7 @@
 #include "io/FileSystem.h"
 #include "../collection/array_internal.h"  // ENDGAME B.3.2 step 2: kSpec_ExtArrayElem bridge
 #include "audio/load_decode_batch.h"       // block SNDPAR: the load's sound decodes, in parallel
+#include "io/blobhash_temp.h"   // TEMP INSTRUMENTS -- never merge
 
 namespace RtObject {
 
@@ -220,6 +221,7 @@ extern "C" ::Object::External* RtObject_External_Load(const System::Filename* pa
     // OUTERMOST Load on this thread decodes them in parallel and publishes them, in queue
     // order, when it returns (this object's destructor runs last, after the stream's).
     ::Audio::LoadDecode::Scope soundDecodeBatch;
+    BlobHash::LoadScope blobHashScope(path != nullptr ? path->AsString()._data : nullptr);   // TEMP
     ++g_lc.calls;
 
     ::Object::External* obj = existing;      // RDI, and it is REASSIGNED at 1800bc745
