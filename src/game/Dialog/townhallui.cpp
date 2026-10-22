@@ -68,8 +68,7 @@
 #include "Component/CitizenDescription.h"   // X::TypeId() (B.3.9 CG2)
 #include "Component/SelectDescription.h"   // X::TypeId() (B.3.9 CG2)
 #include "Component/ComponentDescription.h"   // X::TypeId() (B.3.9 CG2)
-#include "Component/StateMachineComponent.h"   // X::TypeId() (B.3.9 CG2)
-#include "Component/ResidenceComponent.h"
+#include "Component/ResidenceComponent.h"   // X::TypeId() (B.3.9 CG2)
 #include "Component/TradeComponent.h"   // X::TypeId() (B.3.9 CG2)
 #include "Component/StorageComponent.h"   // X::TypeId() (B.3.9 CG2)
 #include "Component/WorkPlaceComponent.h"   // X::TypeId() (B.3.9 CG2)
@@ -1523,7 +1522,7 @@ void TownHallUI::UpdateAll() {
         // Find StorageComponent (DAT_1401c7e78)
         StorageComponent* storage = entity->FindComponent<StorageComponent>();
 
-        // Find ResidenceComponent (DAT_1401c7cf0; 0x1401cfcf0 in the Steam exe's UpdateAll)
+        // Find ResidenceComponent (DAT_1401c7cf0)
         ResidenceComponent* home = entity->FindComponent<ResidenceComponent>();
 
         int counterIndex; // which of the 3 counters to increment
