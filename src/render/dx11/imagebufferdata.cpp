@@ -681,6 +681,10 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
 // path only (dynamic UI/terrain textures), not the compressed one.
 // ============================================================
 bool ImageBufferData::Update(void* data, int width, int height) {
+    // NOT RETAIL: the Present lock (dx11_backend_access.h). Callers hold the
+    // device lock and may be off the presenting thread (the loader's image
+    // uploads, the save-info thumbnails).
+    std::lock_guard<std::recursive_mutex> presentLock(Dx11PresentMutex());
     ID3D11DeviceContext* const ctx = Dx11Context();
 
     if (_owner->IsDynamic()) {
@@ -720,6 +724,9 @@ bool ImageBufferData::Read(void* dst, int width, int height) {
     desc.CPUAccessFlags     = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;  // 0x30000
     desc.MiscFlags          = 0;
 
+    // NOT RETAIL: the Present lock (dx11_backend_access.h), for the staging
+    // round trip through the immediate context below.
+    std::lock_guard<std::recursive_mutex> presentLock(Dx11PresentMutex());
     ID3D11DeviceContext* const ctx = Dx11Context();
 
     ID3D11Texture2D* staging = nullptr;

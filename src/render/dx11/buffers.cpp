@@ -431,6 +431,9 @@ void GpuBuffer_Serialize(Data* self, ::IO::Serializer* serializer) {
     ID3D11Buffer* staging = nullptr;
 
     VideoDeviceObject()->Lock();
+    // NOT RETAIL: the Present lock (dx11_backend_access.h), for the staging
+    // round trip through the immediate context below.
+    std::unique_lock<std::recursive_mutex> presentLock(Dx11PresentMutex());
 
     ID3D11Device*        dev = Dx11Device();
     ID3D11DeviceContext* ctx = Dx11Context();
@@ -451,6 +454,7 @@ void GpuBuffer_Serialize(Data* self, ::IO::Serializer* serializer) {
     ctx->Unmap(staging, 0);
     staging->Release();
 
+    presentLock.unlock();
     VideoDeviceObject()->Unlock();
 }
 
@@ -487,8 +491,13 @@ bool GpuBuffer_SetData(const Owner* owner, ID3D11Buffer* buffer,
     box.bottom = 1;
     box.back   = 1;
 
-    ctx->UpdateSubresource(buffer, dstSubresource, &box,
-                           src, static_cast<UINT>(sizeBytes), 0);
+    {
+        // NOT RETAIL: the Present lock (dx11_backend_access.h). The caller may
+        // be the loader thread while the main thread presents.
+        std::lock_guard<std::recursive_mutex> presentLock(Dx11PresentMutex());
+        ctx->UpdateSubresource(buffer, dstSubresource, &box,
+                               src, static_cast<UINT>(sizeBytes), 0);
+    }
 
     VideoDeviceObject()->Unlock();
     return true;
