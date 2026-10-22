@@ -56,6 +56,7 @@
 #include "load_time.h"   // [LoadTime] stamps (NOT RETAIL, print-only; block LOADSTAMP)
 #include "ext/registry.h"                     // EXT SEAM (NOT RETAIL, docs/extensions/handins/SPLASH.md): Ext::Ext().quick_screens
 #include "ext/quick_screens/quick_screens.h"  // EXT SEAM (NOT RETAIL, docs/extensions/handins/SPLASH.md): Ext::QuickScreens::SplashWorkDone
+#include "ext/load_progress/load_progress.h"  // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): BootEnd
 
 // Defined in src/game/Game/gameupdateloop_load.cpp. Returns true once the
 // new-game world build for `loop` (a GameUpdateLoop) has fully completed.
@@ -184,6 +185,9 @@ GameLoadDialogLoopT::~GameLoadDialogLoopT() {
 
 void GameLoadDialogLoopT::Startup() {
     StallDebug::Phase startupPhase("SplashDLT::Stub_Startup");
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): ext.load_progress's boot
+    // screen ends here, before this screen's load kick (a no-op unless it was shown).
+    Ext::LoadProgress::BootEnd();
     g_fadeOutInitiatedFor = nullptr;
     g_quickScreen = Ext::Ext().quick_screens;   // EXT SEAM (NOT RETAIL, docs/extensions/handins/SPLASH.md): ext.quick_screens, read once per screen
     Engine::UpdateLoop* next = _nextLoop;

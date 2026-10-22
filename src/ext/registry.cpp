@@ -230,6 +230,14 @@ const Entry kEntries[] = {
       "Blends the end of each looping ambient sound into its start, removing the dropout at the loop "
       "point. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.seamless_loops; } },
+    // LOADPROGRESS (docs/extensions/handins/LOADPROGRESS.md, issue #13): while the boot loads the
+    // game data and the enabled mods' lists, the black loader frames show the game's own loading
+    // screen and which mod is loading. Only with a mod enabled; read at the next start.
+    { "load_progress", Tier::Extension, Class::A, true,
+      "Mod loading screen",
+      "While mods load at start-up, shows the loading screen and which mod is loading instead of a "
+      "black window. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.load_progress; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.

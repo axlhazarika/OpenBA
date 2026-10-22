@@ -96,6 +96,7 @@ struct Extensions {
     bool drain_split = false; // class B: src/ext/drain_split/ (docs/extensions/handins/HITCH_DRAINSPLIT.md)
     bool background_save = false; // class A: src/ext/background_save/ (docs/extensions/handins/HITCH_SAVESNAP.md)
     bool terrain_batch = false; // class A: src/ext/terrain_batch/, seam WorldGeometry::_extTerrainBatch (docs/extensions/handins/TERRAINBATCH.md)
+    bool load_progress = false; // class A, next start: src/ext/load_progress/, seams LoaderLoop::_extFrame + UpdateLoop::_extLoadProgress (docs/extensions/handins/LOADPROGRESS.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.
