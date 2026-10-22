@@ -364,6 +364,39 @@ bool PackedMapRead(PackedMap& m, int64_t abs, int32_t n, void* dst, bool* ok) {
 
 }  // namespace
 
+namespace {
+
+// The mapping behind a packed `fi`'s package, with the read's absolute offset (retail's int32
+// sum, 1800ace43/46); null for a loose or nested FileInfo or an unmapped package.
+PackedMap* PackedMapOfEntry(Collection::Array<PackageFile*>& packfiles, const RtIO::FileInfo& fi,
+                            int32_t cursor, int32_t* abs) {
+    if (static_cast<uint32_t>(fi.handle) > 0xFFFFFFFDu) return nullptr;    // loose
+    const uint32_t packIndex = static_cast<uint32_t>(fi.handle) >> 24;
+    if (packIndex >= static_cast<uint32_t>(packfiles._size)) return nullptr;
+    const PackageFile* const pkg = packfiles[packIndex];
+    if (static_cast<uint32_t>(pkg->_file.handle) <= 0xFFFFFFFDu) return nullptr;   // nested
+    PackedMap* const m = PackedMapFor(pkg->_file.winHandle);
+    if (m == nullptr || m->map.data == nullptr) return nullptr;
+    *abs = static_cast<int32_t>(static_cast<uint32_t>(fi.baseOffset) + static_cast<uint32_t>(cursor));
+    return m;
+}
+
+}  // namespace
+
+const uint8_t* FileSystem::PackedMapSpan(const RtIO::FileInfo& fi, int32_t cursor, int32_t n) {
+    int32_t abs = 0;
+    const PackedMap* const m = PackedMapOfEntry(_packfiles, fi, cursor, &abs);
+    if (m == nullptr || n < 0 || abs < 0) return nullptr;
+    if (static_cast<uint64_t>(abs) + static_cast<uint64_t>(n) > m->map.size) return nullptr;
+    return m->map.data + abs;
+}
+
+void FileSystem::PackedMapNoteRead(const RtIO::FileInfo& fi, int32_t cursor, int32_t n) {
+    int32_t abs = 0;
+    PackedMap* const m = PackedMapOfEntry(_packfiles, fi, cursor, &abs);
+    if (m != nullptr) m->pointer.store(static_cast<int64_t>(abs) + n, std::memory_order_relaxed);
+}
+
 void PackedMapRelease(Platform::FileHandle h) {
     std::lock_guard<std::mutex> lock(g_packedMapLock);
     for (PackedMap& m : g_packedMaps) {

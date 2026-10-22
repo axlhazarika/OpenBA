@@ -261,6 +261,11 @@ bool IO::CompressedStream::DecompressFromSource(int blk) {
     w->start = blk << 15;                               // 1800a96d9 / 1800a9700
     w->end   = w->start + h->uncompressedSize;          // 1800a9703 / 1800a9709
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/DECODEAHEAD.md): ext.decode_ahead -- a block a
+    // worker already decoded from the mapped package bytes is copied into the window.
+    if (_extDecodeAhead != nullptr && _extDecodeAhead(*this, kExtDecodeBlock, blk, w->buffer))
+        return true;
+
     // The source's Stream virtuals, through the object's own vtable as retail
     // does (`[RAX+0x20]` SetCurrentPos, `[RAX+0x18]` Read).
     Stream* const src = _source;                        // 1800a970c
@@ -407,6 +412,9 @@ bool IO::CompressedStream::SetWindow(int pos) {
 // If this conversion made the symptom STOP reproducing, that is a red flag to
 // report, not a win.
 namespace IO {
+
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/DECODEAHEAD.md): ext.decode_ahead (Stream.h).
+CompressedStream::ExtDecodeAheadFn CompressedStream::_extDecodeAhead = nullptr;
 
 // ?Read@CompressedStream@IO@@UEAA_NHPEAX@Z                   retail 0x1800aa780
 //   while (n > 0) {

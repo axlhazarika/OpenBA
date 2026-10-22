@@ -230,6 +230,14 @@ const Entry kEntries[] = {
       "Blends the end of each looping ambient sound into its start, removing the dropout at the loop "
       "point. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.seamless_loops; } },
+    // DECODEAHEAD (docs/extensions/handins/DECODEAHEAD.md, issue #13): while a resource loads, the
+    // next compressed blocks of its file are decoded on worker threads. The same bytes, the same load
+    // order; the seam IO::CompressedStream::_extDecodeAhead is installed at boot (next start).
+    { "decode_ahead", Tier::Extension, Class::A, true,
+      "Parallel resource decoding",
+      "Decodes the next parts of a resource on other cores while it loads, so large mods load "
+      "faster. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.decode_ahead; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.

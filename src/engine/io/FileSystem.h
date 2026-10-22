@@ -508,6 +508,14 @@ public:
     // macro, so the member name does not collide; the Win32 call inside the
     // body is spelled `::ReadFile` and always was.
     bool ReadFile(RtIO::FileInfo& fi, int32_t n, void* dst);
+    // NOT RETAIL (MAPREAD, the banner above ReadFile in filesystem_openfile.cpp): for a packed
+    // `fi`, the mapped bytes a ReadFile of `n` bytes at cursor `cursor` would copy, when that
+    // read would be served from the view IN FULL (got == n); null otherwise (loose, nested,
+    // not mapped, a failing seek, short at end of file). ext.decode_ahead reads a block's
+    // compressed bytes through it; PackedMapNoteRead then leaves the emulated file pointer
+    // where that ReadFile would have left it.
+    const uint8_t* PackedMapSpan(const RtIO::FileInfo& fi, int32_t cursor, int32_t n);
+    void PackedMapNoteRead(const RtIO::FileInfo& fi, int32_t cursor, int32_t n);
     // ?PlatformOpenFile@FileSystem@IO@@AEAA_NAEAUFileInfo@12@AEBVFilename@System@@@Z
     //                                                             0x1800adce0
     // `AEAA`, private in retail, public here for the door reason above.
