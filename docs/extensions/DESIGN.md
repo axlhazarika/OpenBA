@@ -30,7 +30,7 @@ never here.
 |---|---|---|---|---|
 | 0 Faithful | retail's behaviour | retail's | -- | here, and only here |
 | 1 Fix | a retail bug corrected at its faithful lever | retail's, unchanged | **ON** | boot/stress/quit only |
-| 2 Extension | a feature retail never had | by class (below) | **class A ON, B / C OFF** (ruled 2026-10-18; `eye_camera` is class A but OFF: it changes how the game is played) | boot/stress/quit only |
+| 2 Extension | a feature retail never had | by class (below) | **class A ON, B / C OFF** (ruled 2026-10-18; `eye_camera` is class A but OFF: it changes how the game is played; so is `no_fog`: it changes how the map looks) | boot/stress/quit only |
 
 A **fix** is one branch at the one site `retail_bugs.md` names as the lever, retail's path kept
 in the other arm. It never changes what is serialized. It may change sim outcomes (that is the

@@ -23,6 +23,7 @@
 | Ext A | Background save compression | Compresses the save on a worker thread; identical save files. |
 | Ext A | Batched terrain drawing | Draws each row of visible terrain chunks in one call and skips shadow work for terrain whose shadow cannot reach the screen. Same picture. |
 | Ext A | Background saving | Writes the save on a worker thread while the town holds still for a moment; the screen and camera keep moving. Identical save files. |
+| Ext A | No fog | Removes the fog that hazes the far map when the camera is zoomed far out. Off by default; live. |
 | Ext B | Faster pathfinding | Looks for same length routes to save pathfinding work. |
 | Ext B | Parallel pathfinding | Spread pathfinding to multiple cores. |
 | Ext B | Batched animation | Batch animations together above 1x speed. |

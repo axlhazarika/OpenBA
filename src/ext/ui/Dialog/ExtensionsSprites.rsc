@@ -48,6 +48,7 @@ SpriteSheet resource
 		{ String _name = "ExtensionsEntry_drain_split";	String _source = "Sprite/Extensions/Entry_drain_split.png"; }
 		{ String _name = "ExtensionsEntry_background_save";	String _source = "Sprite/Extensions/Entry_background_save.png"; }
 		{ String _name = "ExtensionsEntry_better_camera";	String _source = "Sprite/Extensions/Entry_better_camera.png"; }
+		{ String _name = "ExtensionsEntry_no_fog";	String _source = "Sprite/Extensions/Entry_no_fog.png"; }
 		{ String _name = "ExtensionsEntry_high_limits";	String _source = "Sprite/Extensions/Entry_high_limits.png"; }
 		{ String _name = "ExtensionsEntry_restricted_foods";	String _source = "Sprite/Extensions/Entry_restricted_foods.png"; }
 		{ String _name = "ToolbarExtensions";	String _source = "Sprite/Extensions/Toolbar_extensions.png"; }	// the toolbar's one extension button (ExtensionsWindow.rsc, src/ext/toolbar)
