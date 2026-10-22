@@ -833,6 +833,10 @@ void Dx11UntrackConstantBuffer(ConstantBufferData* p) {
     }
 }
 
+namespace { unsigned g_clearStateGeneration = 0; }
+void     Dx11NoteClearState()        { ++g_clearStateGeneration; }
+unsigned Dx11ClearStateGeneration()  { return g_clearStateGeneration; }
+
 void Dx11InvalidateConstantBufferBindings() {
     std::lock_guard<std::mutex> lock(CbRegistryLock());
     for (ConstantBufferData* p : CbRegistry())
