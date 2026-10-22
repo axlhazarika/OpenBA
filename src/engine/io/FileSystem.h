@@ -552,6 +552,35 @@ public:
     // PUBLIC while foreign readers still reach it (retail: private `0`).
     static FileSystem* _singleton;
 
+    // ---- fix.large_packages (NOT RETAIL, docs/extensions/handins/LARGEPKM.md) ------
+    // Engine-side seams (DESIGN.md hook rule 5), null by default and under the
+    // faithful profile. Retail reads a packed entry at the int32
+    // `baseOffset + cursor` (ReadFile 0x1800ace43), so a package past 2 GiB
+    // fails or aliases; the fix gives such a package 64-bit entry offsets.
+    //
+    // _extPackagesMounted: run at the end of LoadPackages (every mount and
+    // remount), when _packfiles has its final pack-index order. It sets
+    // _extWidePackages / _extWideCount. ClosePackages clears those two.
+    static void (*_extPackagesMounted)(FileSystem& fs);
+    // One per pack index below _extWideCount: that package's absolute entry
+    // offsets (`count` of them), or { nullptr, 0 } for a package that keeps
+    // retail's int32 read. Owned by the fix (src/ext/large_packages/).
+    struct ExtWidePackage {
+        const int64_t* offsets;
+        int32_t        count;
+    };
+    static const ExtWidePackage* _extWidePackages;
+    static int32_t               _extWideCount;
+
+    // The absolute offset the packed arm of ReadFile seeks to for `fi` (a
+    // PACKED FileInfo: handle = packIndex << 24 | fileIndex). With a wide
+    // table for its package, the entry's 64-bit offset + cursor, `*wide` =
+    // true. Otherwise retail's int32 `baseOffset + cursor`, sign-extended
+    // (negative = the seek retail's SetFilePointer refuses; past 4 GiB it has
+    // already wrapped, as in retail), `*wide` = false. Shared with the
+    // mapped read (block readpath, issue #13).
+    int64_t PackedReadOffset(const RtIO::FileInfo& fi, bool* wide) const;
+
     // ---- the pinned fields, at retail's offsets ---------------------------
     // PUBLIC for the same reason `IO::Serializer`'s two are: bodies outside
     // the class and the exe-side probes read these fields, and `offsetof` on

@@ -59,6 +59,12 @@ int32_t  FileRead(FileHandle h, void* dst, uint32_t bytes, uint32_t* got);      
 int32_t  FileWrite(FileHandle h, const void* src, uint32_t bytes, uint32_t* written); // WriteFile
 uint32_t FileSeek32(FileHandle h, int32_t pos);    // SetFilePointer(h, pos, NULL, FILE_BEGIN)
 uint32_t FileSize(FileHandle h);                   // GetFileSize(h, NULL)
+// NOT RETAIL (fix.large_packages, docs/extensions/handins/LARGEPKM.md): the 64-bit twins of the
+// two above. Retail's file layer is 32-bit; these run only for a package the fix gave 64-bit
+// entry offsets (larger than 2 GiB). FileSeek64: 1 on success, 0 on failure (`pos` < 0 fails).
+// FileSize64: the whole size, -1 on failure.
+int32_t  FileSeek64(FileHandle h, int64_t pos);    // SetFilePointerEx(h, pos, NULL, FILE_BEGIN)
+int64_t  FileSize64(FileHandle h);                 // GetFileSizeEx(h, &size)
 int32_t  FileClose(FileHandle h);                  // CloseHandle
 // GetFileTime(h, NULL, NULL, &lastWrite): FILETIME units (100 ns since 1601 UTC),
 // low dword in the low half. `*fileTime` is written only on success.
