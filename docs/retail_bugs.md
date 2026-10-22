@@ -250,10 +250,36 @@ the placement overlay for no visible reason. Three shapes:
 - a mountain road built in one drag succeeds, the same road built tile by tile hits red cells;
 - a bridge deleted and then rebuilt over the same span is refused.
 
-**Status: findings from reading the code, not yet reproduced.** The bridge case is read in
-Ghidra; the other two are candidates waiting on the player's before / after saves.
-`tools/cell_dump/` (README alongside) dumps a save's cells and diffs two dumps;
-`BANISHED_CELL_TRACE=1` logs the count wraps and re-sorts named below while a game runs.
+**Status: the flat-ground case is reproduced from player saves and fixed (`fix.terrain_resort`,
+below); the bridge case is read in Ghidra; the house's count candidates are unconfirmed.**
+`tools/cell_dump/` (README alongside) dumps a save's cells, with what the classifier says of each
+today, and diffs two dumps; `BANISHED_CELL_TRACE=1` logs the count wraps and re-sorts named below
+while a game runs.
+
+**Reproduced (2026-10-22): flat ground stays "too steep".** A player sent two before / after save
+pairs on two maps, each with the quarry overlay over a narrow strip between a stream and a
+mountain: the green band of the early save has shrunk in the late one. The cell dumps show two
+causes, one retail by design and one a desync:
+1. *Trees hid steep ground.* A cell holding a tree is type 4, which the quarry's mask accepts.
+   When the tree goes, `0x14009dee0` re-sorts the cell from its heights. On one map 474 of the
+   533 cleared-tree cells that turned red were already steep in the early save at unchanged
+   heights. That is retail working as written, not a bug.
+2. *The type grid drifts from the heights.* `ResetTerrainHeights` (`0x14009e0e0`: every finished
+   road cell, a building's clear area) zeroes height words and re-sorts no cell. The cells
+   around it keep the type they were sorted with: a cell sorted 10 while steep stays red after
+   the ground under it is flat (cell (163,169) on the first map: height 0.000, normal z 1.000,
+   type 10). The reverse also happens: a removed road is set to type 2 without a classify, and
+   a cell beside a flattened road can be steeper than its stored 2.
+
+A fresh map holds no such cell (classifier and stored type agree everywhere). The four player
+saves hold 227 / 294 / 222 / 445 cells stored 10 that the classifier calls 2, free of any
+entity, count or road.
+
+Fix: `fix.terrain_resort` (tier 1), default on. After every `ResetTerrainHeights`, over its
+rectangle grown by one cell, and once over the whole map on a load, a free cell stored 10 that
+the classifier now calls 2 is set to 2. A stored 2 is never demoted. `src/ext/terrain_resort/`,
+docs/extensions/handins/TERRAINRESORT.md. With the fix on, the four saves load with 0 such
+cells left.
 
 **What red means.** `Map::TestPlacement` (`0x14009f5d0`, `Player/tool_base_path.cpp`) fails a
 cell on any of: (a) its terrain type (MapCell `+0x29`) is outside the tool's mask; (b) a
@@ -300,5 +326,6 @@ preview paints the whole span red without naming the cell. Removing that road ti
 span valid. Looks like an off-by-one, not a rule.
 
 **Levers, if these are ever changed** (each a `fix.*` row, `docs/extensions/DESIGN.md` §3):
-end the bridge ring at the last body cell; clamp the count at 0 in `FinishRoadCell`; re-sort
-the cells around a finished road tile, or exclude road-adjacent cells from the removal re-sort.
+end the bridge ring at the last body cell; clamp the count at 0 in `FinishRoadCell`; exclude
+road-adjacent cells from the removal re-sort. (Re-sorting the cells around a flattened tile is
+`fix.terrain_resort`, above.)

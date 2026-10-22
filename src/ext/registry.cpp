@@ -55,6 +55,15 @@ const Entry kEntries[] = {
       "meet them.",
       0, [](State& s) -> bool& { return s.fix.rock_seat; } },
 
+    // TERRAINRESORT (docs/extensions/handins/TERRAINRESORT.md, docs/retail_bugs.md section 8): a cell
+    // sorted "too steep" is re-sorted once flattening has made the ground under it buildable, after
+    // every flatten and once on a load. Sim-visible: the healed cells take buildings and trees.
+    { "terrain_resort", Tier::Fix, Class::None, true,
+      "No red squares on flat ground",
+      "Ground flattened by a road or building next to it can be built on again, instead of "
+      "staying marked as too steep.",
+      0, [](State& s) -> bool& { return s.fix.terrain_resort; } },
+
     // Extensions. Each one adds a field to Ext::Extensions and a row here:
     // Tier::Extension, its Class, default true for class A / false for B or C, and for class B or C its
     // formatVersion (>= 1). The id is [a-z0-9_]+ (the unit tests check every row).
