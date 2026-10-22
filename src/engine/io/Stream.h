@@ -708,6 +708,13 @@ public:
     // ?DecompressFromSource@CompressedStream@IO@@AEAA_NH@Z       0x1800a96b0
     bool DecompressFromSource(int blk);
 
+    // NOT RETAIL (exact perf body, issue #13): `count` back-to-back
+    // `Read(elemSize, dst + i * elemSize)` calls with their results ignored --
+    // what IO::BinaryReader's array slots do one element at a time -- with the
+    // elements that lie wholly inside the active window copied in one memcpy.
+    // The proof is at the body (compressed_stream_read.cpp).
+    void ReadArray(int count, int elemSize, void* dst);
+
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_SAVE.md): ext.async_save_compress's hook (DESIGN.md §3 hook rule 5).
     // Null by default; src/ext/async_save_compress sets it while the class A extension
     // ext.async_save_compress has a save attached (Begin, right after Create) and clears it
