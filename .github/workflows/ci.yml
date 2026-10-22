@@ -1,0 +1,105 @@
+name: CI
+# Build + unit tests on the three platforms, and the no-doors acceptance check. Nothing here needs
+# the game: retail data is never on a runner (AGENTS.md section 1), so the gameplay gate
+# (tools/build.sh run) and the serializer check (tools/resave_gate/) stay maintainer steps.
+# Unit tests that read the user's install (xwma_decode_test) skip when it is absent.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  BUILD_JOBS: 4
+jobs:
+  windows:
+    name: Windows (MSYS2 UCRT64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+      # A fresh MSYS2 on the runner: the stale-package rule (CLAUDE.md) is about the local install.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: git
+          pacboy: gcc:p cmake:p ninja:p python:p
+      - name: Toolchain
+        run: |
+          g++ --version | head -1
+          cmake --version | head -1
+      - name: Build OpenBA (debug)
+        run: tools/build.sh build debug
+      - name: Unit tests (debug)
+        run: tools/build.sh unit debug
+      # The perf flavour is the -O2 exe the gate deploys (-fno-lifetime-dse bugs show only here).
+      - name: Build OpenBA (perf)
+        run: tools/build.sh build perf
+
+  linux:
+    name: Linux (Ubuntu 24.04, dxvk-native)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ninja-build libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxss-dev libxtst-dev libxfixes-dev libwayland-dev libxkbcommon-dev libegl-dev \
+            libdecor-0-dev libasound2-dev libpulse-dev
+      - name: Fetch dxvk-native
+        run: tools/fetch_dxvk_native.sh
+      - name: Build OpenBA (debug)
+        run: tools/build.sh build debug
+      - name: Unit tests (debug)
+        run: tools/build.sh unit debug
+
+  macos:
+    name: macOS (arm64, Metal)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Packages
+        run: brew install ninja
+      # The engine only; libairconv.dylib (tools/macos/setup_deps.sh, an LLVM build) is dlopened at
+      # run time and not needed to compile or link it.
+      - name: Build OpenBA (debug)
+        env:
+          CMAKE_EXTRA: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+        run: tools/build.sh build debug
+      - name: Unit tests (debug)
+        run: tools/build.sh unit debug
+
+  acceptance:
+    name: Acceptance (no doors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: tools/acceptance/acceptance.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -sf "$(command -v python3)" "$RUNNER_TEMP/bin/python"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          tools/acceptance/acceptance.sh
