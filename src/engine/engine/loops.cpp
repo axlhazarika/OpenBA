@@ -118,6 +118,11 @@
 #include "video/CompanionData.h"   // ENDGAME B.3.5: Video::ContextData
 #include "../collection/array_internal.h"  // ENDGAME B.3.2 step 2: kSpec_Fill8Z bridge
 #include "load_time.h"   // [LoadTime] stamps (NOT RETAIL, print-only; block LOADSTAMP)
+#include "graphics/FrameCopyImageBuffer.h"   // TEMP INSTRUMENT (never merge)
+#include "video/ImageBuffer.h"               // TEMP INSTRUMENT (never merge)
+#include "video/Device.h"                    // TEMP INSTRUMENT (never merge)
+#include "system/Filename.h"                 // TEMP INSTRUMENT (never merge)
+#include "system/MemoryAllocator.h"          // TEMP INSTRUMENT (never merge)
 
 // ----------------------------------------------------------------------------
 // B3R: the ResolveAddr / ResolveExport declarations that stood here are gone
@@ -1102,6 +1107,30 @@ void Engine::MainLoop::Draw(float dt) {
 
     // slot 4 Draw as an ordinary virtual call (ENDGAME B.3.7).
     _currentLoop->Draw(dt);
+
+    // TEMP INSTRUMENT (issue #13 loadscreen, never merge): one capture of the frame
+    // ~20 s into the process, to C:/GOG Games/Banished/loadscreen_20s.bmp (the
+    // session is locked, so desktop captures are black).
+    {
+        static bool s_done = false;
+        if (!s_done && System::Timer::TicksToSeconds(System::Timer::CurrentTimeTicks()) >= 20.0f) {
+            s_done = true;
+            ::Video::Device* device = ::Video::Device::_singleton;
+            const int w = device->backBufferWidth;
+            const int h = device->backBufferHeight;
+            void* fcMem = System::MemoryAllocator::MemAlloc(0x88, 8);
+            Graphics::FrameCopyImageBuffer* fc = ::new (fcMem) Graphics::FrameCopyImageBuffer();
+            fc->Create(0, 4, 5, 0x100u, w, h, 1, 1, 1, 1, nullptr);
+            static_cast<const Graphics::FrameCopyImageBuffer*>(fc)->Generate(_context, 1);
+            unsigned int* px = static_cast<unsigned int*>(
+                System::MemoryAllocator::MemAlloc(static_cast<uint64_t>(w) * h * 4, 4));
+            fc->CopyFromTexture(px, w, h);
+            ::Video::ImageBuffer::SaveImageToFile(System::Filename("C:/GOG Games/Banished/loadscreen_20s.bmp"), w, h, px);
+            System::MemoryAllocator::MemFree(px);
+            delete fc;
+            fprintf(stderr, "[TEMP] captured loadscreen_20s.bmp (%dx%d)\n", w, h);
+        }
+    }
 
     // `_postDraw` walked by BYTE offset in retail (rbx += 0x10 per entry); the
     // size is re-read from the array on every iteration (`cmp 0x88(%rdi),%esi`),
