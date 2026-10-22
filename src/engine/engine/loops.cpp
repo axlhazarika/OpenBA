@@ -806,8 +806,15 @@ void Engine::LoaderLoop::Load() {
 bool Engine::LoaderLoop::Update(const System::Time& time) {
     SleepFourteen();
     LoaderLoopAdvance(this, time);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): ext.load_progress
+    // animates its loading screen.
+    if (_extFrame != nullptr)
+        _extFrame(*this, kExtUpdate, &time);
     return true;   // `mov $0x1,%al`
 }
+
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): null by default.
+Engine::LoaderLoop::ExtFrameFn Engine::LoaderLoop::_extFrame = nullptr;
 
 // ---- ?Draw@LoaderLoop@Engine@@UEAAXM@Z  0x1800dc310  ord 2250 ---------------
 // Clears the whole target to BLACK and draws nothing else — this is the frame
@@ -818,6 +825,10 @@ bool Engine::LoaderLoop::Update(const System::Time& time) {
 // 7 is COLOUR|DEPTH|STENCIL; 1.0f is the literal at 0x18016169c, read out of
 // .rdata rather than assumed.
 void Engine::LoaderLoop::Draw(float /*interpolation*/) {
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): ext.load_progress
+    // draws its loading screen in place of the black clear.
+    if (_extFrame != nullptr && _extFrame(*this, kExtDraw, nullptr))
+        return;
     MainLoop* ml = MainLoopSingleton();
     if (!ml) return;
     Video::Context* ctx = ml->_context;

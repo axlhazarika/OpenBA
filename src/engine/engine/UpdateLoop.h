@@ -44,6 +44,7 @@
 // `void*` for exactly this reason.
 // ============================================================================
 
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <type_traits>
@@ -268,6 +269,18 @@ public:
     void*   _internalListB;  // +0x18  / 0x180010ab0
     int32_t _loadBit;        // +0x20  ?GetLoadBit@
     int32_t _loadProgress;   // +0x24  ?GetLoadProgress@
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): ext.load_progress --
+    // null by default. While the game side points it at its counters, LoadResources
+    // (LOADER THREAD) publishes which list it is on with relaxed stores, a handful per
+    // call; the main thread's loading screen reads them. Retail's body is otherwise
+    // unchanged and pays one null test per mod.
+    struct ExtLoadProgress {
+        std::atomic<int32_t> mod{0};     // 0: the loop's own list; k: the k-th ENABLED mod's list
+        std::atomic<int32_t> mods{0};    // enabled mods this call walks
+        std::atomic<int32_t> lists{0};   // LoadResources calls finished
+    };
+    static ExtLoadProgress* _extLoadProgress;   // defined in updateloop_loadresources.cpp
 };
 
 // ============================================================================
@@ -338,6 +351,15 @@ public:
     // stubs and the engine loader gate (standalone/) read it too. LIVE THREAD:
     // no lock (retail takes none); LoaderLoop::Shutdown joins it before ~Engine.
     static Loader _loader;
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): ext.load_progress --
+    // null by default. While set, Update calls it after retail's body (kExtUpdate, with
+    // the frame's time) and Draw calls it first (kExtDraw); a true return from the draw
+    // point means the extension drew the frame, and retail's black clear is skipped.
+    static constexpr int32_t kExtUpdate = 0;
+    static constexpr int32_t kExtDraw   = 1;
+    using ExtFrameFn = bool (*)(LoaderLoop& loop, int32_t point, const System::Time* time);
+    static ExtFrameFn _extFrame;   // defined in loops.cpp
 
 private:
     void InitFields(UpdateLoop* nextLoop, int64_t delayTicks);   // loops.cpp

@@ -50,6 +50,10 @@ StringTable resource
 		// retail's ModMissing): @0 name, @1 the save's `ext:<id>`, @2 the saved format version
 		{ String _name = "ExtensionNotInBuild";		String _text = "The following extension is not part of this version of the game.~n~n@0 [@1]~nSaved with extension version @2~n~nA save keeps the extensions it was made with, so this one cannot be played here: loading it will stop the game with an error. Do you still want to load the save game?"; }
 		{ String _name = "ExtensionNewer";			String _text = "The following extension was saved by a newer version of it than this game has.~n~n@0 [@1]~nSaved with extension version @2~n~nThis version of the game cannot read it: loading this save will stop the game with an error. Do you still want to load the save game?"; }
+		// ext.load_progress's line on the boot loading screen (src/ext/load_progress/): @0 / @1 the mod numbers
+		{ String _name = "LoadProgressGameData";	String _text = "Loading game data"; }
+		{ String _name = "LoadProgressMod";			String _text = "Loading mod @0 of @1"; }
+
 		{ String _name = "ExtensionTurnedOff";		String _text = "The following extension is turned off, but this save was made with it.~n~n@0 [@1]~nSaved with extension version @2~n~nA save keeps the extensions it was made with, so it will be turned on for this game. Do you still want to load the save game?"; }
 	]
 }

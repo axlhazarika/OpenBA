@@ -247,6 +247,14 @@ const Entry kEntries[] = {
       "Decodes the next parts of a resource on other cores while it loads, so large mods load "
       "faster. Same game data. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.decode_ahead; } },
+    // LOADPROGRESS (docs/extensions/handins/LOADPROGRESS.md, issue #13): while the boot loads the
+    // game data and the enabled mods' lists, the black loader frames show the game's own loading
+    // screen and which mod is loading. Only with a mod enabled; read at the next start.
+    { "load_progress", Tier::Extension, Class::A, true,
+      "Mod loading screen",
+      "While mods load at start-up, shows the loading screen and which mod is loading instead of a "
+      "black window. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.load_progress; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
