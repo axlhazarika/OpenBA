@@ -175,7 +175,6 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
-#include "temp_create_stats.h"   // TEMP INSTRUMENTS
 
 namespace VideoDX11 {
 namespace {
@@ -383,9 +382,7 @@ static D3D11_SAMPLER_DESC SamplerDescFor(const ::Video::ImageBuffer* ib) {
 
 void ImageBufferData::CreateSamplerState() {
     const D3D11_SAMPLER_DESC desc = SamplerDescFor(_owner);
-    const uint64_t tcs0 = TempCreateStats::Now();
     Dx11Device()->CreateSamplerState(&desc, &sampler);
-    TempCreateStats::Add(TempCreateStats::kSampler, 0, tcs0);
 }
 
 // ============================================================
@@ -631,23 +628,7 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     }
 
     ID3D11Device* const dev = Dx11Device();
-    uint64_t tcs0 = TempCreateStats::Now();
     HRESULT hr = dev->CreateTexture2D(&desc, subres.data, &texture);
-    {
-        // TEMP INSTRUMENTS: the bytes are the top level's pitch * rows (BC rows = blocks).
-        uint64_t bytes = 0;
-        if (subres.data) {
-            const int rows = ib->IsCompressed() ? (height + 3) / 4 : height;
-            const int lc = ib->GetLevelCount() > 0 ? ib->GetLevelCount() : 1;
-            for (int i = 0; i < subres.count; ++i) {
-                int r = rows >> (i % lc);
-                if (r < 1) r = 1;
-                bytes += static_cast<uint64_t>(subres.data[i].SysMemPitch) * static_cast<uint64_t>(r);
-            }
-        }
-        TempCreateStats::Add(subres.data ? TempCreateStats::kTex : TempCreateStats::kTexDefault, bytes, tcs0);
-        tcs0 = TempCreateStats::Now();
-    }
 
     if (hr == 0) {
         // --- shader resource view -----------------------------------------
@@ -674,7 +655,6 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
         // else: null desc — the default view over the whole 2D texture.
 
         hr = dev->CreateShaderResourceView(texture, srvDescPtr, &shaderResourceView);
-        TempCreateStats::Add(TempCreateStats::kSrv, 0, tcs0);
 
         // --- render-target / depth-stencil view ----------------------------
         // Only for non-cube render buffers.

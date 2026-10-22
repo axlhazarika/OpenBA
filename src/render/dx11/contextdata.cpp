@@ -239,7 +239,6 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include "temp_create_stats.h"   // TEMP INSTRUMENTS
 
 namespace VideoDX11 {
 namespace {
@@ -545,7 +544,6 @@ void ContextData::Finish() {
         std::lock_guard<std::recursive_mutex> presentLock(Dx11PresentMutex());
         hr = dd->swapChain->Present(sync, 0);
     }
-    TempCreateStats::MaybeDump(false);   // TEMP INSTRUMENTS
 
     // The PLAN 5.5 drive. Substitutes the Present result and nothing else; see
     // the block comment above ForceDeviceLostThisFrame.
