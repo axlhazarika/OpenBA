@@ -146,7 +146,6 @@ struct Options {
                                                //   AUTOTUTORIAL/AUTOMENU_BUTTON/PAUSEMENU_BUTTON says nobody is watching
     bool        deferWindowShow      = true;   // src/app/boot_window.cpp — default ON, "0"/"false" shows the window early
     bool        skipEngineLoader     = false;  // src/game/Game/loader_loop_stubs.cpp [no tool reader]
-    bool        syncEngineLoader     = true;   // src/game/Game/loader_loop_stubs.cpp — default ON, "0"/"f" goes async
     bool        noFolLock            = false;  // src/app/res_load_lock.cpp — kill switch for the resource-load lock
 
 

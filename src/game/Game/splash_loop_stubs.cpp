@@ -29,7 +29,6 @@
 #include "engine_loader_gate.h"
 #include "chunked_scene_loader.h"
 #include "stall_debug.h"
-#include "boot_window.h"
 #include "Game/uifade.h"
 #include "Game/game.h"          // g_gameContainer (0x1401c3de8), GameContainer::ApplyKeyMapToUI
 #include "video/Device.h"      // Video::Device::_singleton (the splash UI scale)
@@ -312,10 +311,6 @@ bool GameLoadDialogLoopT::Update(const System::Time& time) {
 
     _ui.Update(time);
 
-    // Safety net for the deferred window reveal — if the Draw path never runs,
-    // this reveals the window anyway rather than leaving the process invisible.
-    BootWindow::PumpWatchdog();
-
     // Run the deferred MenuScene load, once, on the first frame where this
     // splash has actually revealed. RunGameMain only Arm()s it — running
     // LoadSceneA1 (~590ms) during boot meant paying it while the engine window
@@ -519,8 +514,9 @@ void GameLoadDialogLoopT::Draw(float alpha) {
     StallDebug::Tick("SplashDLT::Draw");
     (void)alpha;  // frame-blend interpolation, not the fade alpha
     // STANDALONE DIVERGENCE: retail's slot 4 is the base DialogLoaderLoopT::Draw
-    // (0x1800dae20), called below unchanged; the override only adds the boot
-    // window reveal (and a fade-alpha trace) around it.
+    // (0x1800dae20), called below unchanged; the override only adds a
+    // fade-alpha trace. (The boot window reveal moved to MainLoop::Run's first
+    // presented frame, src/app/boot_window.h.)
     static int draws = 0;
     ++draws;
     bool trace = (draws <= 3);
@@ -541,15 +537,6 @@ void GameLoadDialogLoopT::Draw(float alpha) {
     // clear to black, publish the load timer to the shader constants, draw the
     // UI. QUALIFIED, or it would dispatch back into this override.
     Engine::DialogLoaderLoopT::Draw(alpha);
-
-    // Reveal the engine window once a real frame is actually in the swap chain.
-    // MainLoop presents AFTER Draw returns, so draw #1 has not been presented
-    // yet when we get here — waiting for draw #2 guarantees the window's first
-    // visible content is the splash rather than an unpresented backbuffer.
-    // No-op unless boot_window armed the deferral. See boot_window.h.
-    if (draws >= 2 && BootWindow::IsPending()) {
-        BootWindow::ShowNow("first splash frame presented");
-    }
 }
 
 extern "C" Object::InternalPtr<UI::DialogInstance>* LoaderDialog_FromSplashDLT(
