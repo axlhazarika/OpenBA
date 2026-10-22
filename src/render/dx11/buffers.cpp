@@ -108,6 +108,7 @@
 #include <windows.h>
 #include <d3d11.h>
 
+#include <atomic>
 #include <cstdio>
 #include <mutex>
 #include <vector>
@@ -833,9 +834,12 @@ void Dx11UntrackConstantBuffer(ConstantBufferData* p) {
     }
 }
 
-namespace { unsigned g_clearStateGeneration = 0; }
-void     Dx11NoteClearState()        { ++g_clearStateGeneration; }
-unsigned Dx11ClearStateGeneration()  { return g_clearStateGeneration; }
+// DeviceData_Resize runs on the render thread (ContextData::BeginCommands) and on the
+// window-message thread (DeviceData_OnActivate), and BeginCommands reads the counter on the
+// render thread, so it is atomic. Relaxed is enough: it only has to be seen to change.
+namespace { std::atomic<unsigned> g_clearStateGeneration{0}; }
+void     Dx11NoteClearState()        { g_clearStateGeneration.fetch_add(1, std::memory_order_relaxed); }
+unsigned Dx11ClearStateGeneration()  { return g_clearStateGeneration.load(std::memory_order_relaxed); }
 
 void Dx11InvalidateConstantBufferBindings() {
     std::lock_guard<std::mutex> lock(CbRegistryLock());
