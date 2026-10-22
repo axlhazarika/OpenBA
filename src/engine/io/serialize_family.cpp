@@ -241,6 +241,8 @@
 //     `this->Serialize<T>(arr[i], nullptr)`. The minted tables that once made
 //     a raw slot read necessary were retired in B.3.9, and both classes are
 //     `final`, so the member the call reaches is the one the slot held.
+//     (Issue #13: on a compressed stream the READER's arrays take an exact
+//     batched body instead; ReadArrayFromWindows below says why it is exact.)
 //
 // `Visitor`'s 24 bodies are `= {}` inline in the header: the shipped bodies are
 // three bytes of `RET` each, and giving each its own out-of-line function would
