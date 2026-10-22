@@ -1259,6 +1259,14 @@ bool DeviceData::CreateDevice() {
     StallDebug::Mark("  DX11 D3D11CreateDevice");
 
     ID3D11Device* d3d = d3dDevice;
+    {
+        // TEMP INSTRUMENTS: the driver's threading caps.
+        D3D11_FEATURE_DATA_THREADING th = {};
+        const HRESULT thr = d3d->CheckFeatureSupport(D3D11_FEATURE_THREADING, &th, sizeof(th));
+        std::fprintf(stderr, "[CreateStats] FEATURE_THREADING hr=0x%08lx DriverConcurrentCreates=%d "
+                             "DriverCommandLists=%d\n",
+                     static_cast<unsigned long>(thr), th.DriverConcurrentCreates, th.DriverCommandLists);
+    }
 
     // 11
     UINT support = 0;

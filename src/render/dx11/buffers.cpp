@@ -111,6 +111,7 @@
 #include <cstdio>
 #include <mutex>
 #include <vector>
+#include "temp_create_stats.h"   // TEMP INSTRUMENTS
 
 namespace VideoDX11 {
 namespace {
@@ -377,8 +378,16 @@ bool GpuBuffer_Create(Owner* owner, ID3D11Buffer** outBuffer,
     init.SysMemPitch      = 0;
     init.SysMemSlicePitch = 0;
 
+    const uint64_t tcs0 = TempCreateStats::Now();
     HRESULT hr = Dx11Device()->CreateBuffer(
         &desc, initialData ? &init : nullptr, outBuffer);
+    {
+        const bool vb = bindFlags == D3D11_BIND_VERTEX_BUFFER;
+        TempCreateStats::Kind k = dynamic ? (vb ? TempCreateStats::kVbDynamic : TempCreateStats::kIbDynamic)
+                                : initialData ? (vb ? TempCreateStats::kVbStatic : TempCreateStats::kIbStatic)
+                                              : (vb ? TempCreateStats::kVbDefault : TempCreateStats::kIbDefault);
+        TempCreateStats::Add(k, sizeBytes, tcs0);
+    }
 
     return hr == 0 && *outBuffer != nullptr;
 }
@@ -729,7 +738,9 @@ bool ConstantBufferData::Create() {
         desc.MiscFlags           = 0;
         desc.StructureByteStride = 0;
 
+        const uint64_t tcs0 = TempCreateStats::Now();
         hr = dev->CreateBuffer(&desc, nullptr, buffers);
+        TempCreateStats::Add(TempCreateStats::kCb, desc.ByteWidth, tcs0);
     } else {
         ArraySetLength(buffers, bufferCount, bufferCapacity, totalBytes / owner->_bankStride);
 
@@ -745,7 +756,9 @@ bool ConstantBufferData::Create() {
             desc.MiscFlags           = 0;
             desc.StructureByteStride = 0;
 
+            const uint64_t tcs0 = TempCreateStats::Now();
             hr = dev->CreateBuffer(&desc, nullptr, buffers + i);
+            TempCreateStats::Add(TempCreateStats::kCb, desc.ByteWidth, tcs0);
             if (hr != 0) break;
         }
     }
