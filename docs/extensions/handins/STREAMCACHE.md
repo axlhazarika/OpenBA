@@ -127,10 +127,12 @@ registry row (`registry.{h,cpp}`, `registry_boot.cpp`), `tests/unit/ext_stream_c
   empty recording or more than kRecordMax bytes drop the record; a chunk round-trips through a Bundle,
   is found by its full identity only (offset AND size AND block count AND directory hash), a second
   chunk adds to it; a bad magic / count / truncation / segments out of order refuse the whole chunk.
-- **Gate** (`tools/build.sh run`, debug exe, `/profile:faithful`, mods parked): the world built
-  (`[GUL::Load] EXIT`), 99 s in the town, crash log 0 bytes, the seams null (no `[StreamCache]` line). **Resave gate**
-  `Gate`: NEW-GOLDEN with md5 `971aaec2cf95f5f730bb1cd1a4fa8428` -- the golden the brief names -- then
-  **PASS**: the save and its reference table are byte-identical.
+- **Gate** (`tools/build.sh run`, debug exe, `/profile:faithful`, mods parked), on 7aa41b610: the
+  world built (`[GUL::Load] EXIT`), 99 s in the town, crash log 0 bytes, the seams null (no
+  `[StreamCache]` line). Not repeated on bcdaad91b (the game-dir lock was held for the 5-minute window;
+  the maintainer runs it at the merge). **Resave gate** `Gate`: NEW-GOLDEN with md5
+  `971aaec2cf95f5f730bb1cd1a4fa8428` -- the golden the brief names -- then **PASS** on 7aa41b610, and
+  **PASS** again on bcdaad91b: the save and its reference table are byte-identical.
 - **Fallback proof** (the follow-up, commit `bcdaad91b`; TEMP probe + shadow, not committed): every
   served record truncated by 16 bytes so that EVERY load read outside it and took the fallback, and
   retail's stream (a second CompressedFileStream over the same path) read in step and compared on
