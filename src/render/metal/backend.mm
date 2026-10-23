@@ -1557,6 +1557,9 @@ id<MTLTexture> MakeTexture(MTLTextureDescriptor* d, const UploadPlan& plan, bool
     }
     return ShareGpuData::CreateTexture(gpu, d, keyLevels.data(), int(keyLevels.size()), plan.complete, make, shared);
 }
+void ForgetBufferUses(id<MTLBuffer> buffer) {
+    InvalidateExpanded(buffer);
+}
 id<MTLBuffer> MakeBuffer(bool index, bool dynamic, const void* data, uint32_t size, bool* shared) {
     const char* kind = index ? "index" : "vertex";
     id<MTLBuffer> (^make)(void) = ^id<MTLBuffer>(void) {
@@ -1655,7 +1658,8 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
 }
 void ImageBufferData::Bind(void* context, unsigned slot) {
     // NOT RETAIL (ext.create_on_demand): the first bind of a deferred texture makes it; a made one pays the
-    // nil test.
+    // nil test. The scope stamps the use and keeps an eviction away until the bind is done.
+    CreateOnDemand::UseScope use(this);
     if (!texture) CreateOnDemand::Ensure(this);
     if (slot >= 31) return;
     bound.images[slot] = texture;
@@ -1669,6 +1673,7 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
     }
 }
 bool ImageBufferData::Update(void* data, int width, int height) {
+    CreateOnDemand::UseScope use(this);           // NOT RETAIL (ext.create_on_demand): stamp, no eviction meanwhile
     if (!texture) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (!texture || !data || width <= 0 || height <= 0 || width > int(texture.width) ||
         height > int(texture.height))
@@ -1697,6 +1702,7 @@ struct DeviceLockScope {
     }
 };
 bool ImageBufferData::Read(void* dst, int width, int height) {
+    CreateOnDemand::UseScope use(this);           // NOT RETAIL (ext.create_on_demand): stamp, no eviction meanwhile
     if (!texture) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand), before the device lock
     // Main thread with the render thread on: the lock keeps this whole body (it ends and commits the frame's
     // current segment and starts the next one) out of the render thread's encoding.
@@ -1781,7 +1787,9 @@ template <class Data>
 static void SerializeBuffer(Data* self, IO::Serializer* serializer, bool index) {
     auto* owner = self->_owner;
     const bool loading = static_cast<int>(serializer->GetDirection()) == 0;
-    // NOT RETAIL (ext.create_on_demand): the save arm reads the contents; a deferred buffer is made first.
+    // NOT RETAIL (ext.create_on_demand): no eviction while this reads `buffer`, and the save arm's deferred
+    // buffer is made first.
+    CreateOnDemand::UseScope use(self);
     if (!loading && !self->buffer) CreateOnDemand::Ensure(self);
     serializer->Serialize(owner->dynamic, nullptr);
     serializer->Serialize(owner->size, nullptr);
@@ -1829,6 +1837,7 @@ bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* da
     return buffer != nil;
 }
 bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    CreateOnDemand::UseScope use(this);          // NOT RETAIL (ext.create_on_demand): no eviction meanwhile
     if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (sizeBytes < 0 || offsetBytes < 0 || !buffer || size_t(offsetBytes) + sizeBytes > buffer.length ||
         (!src && sizeBytes))
@@ -1847,6 +1856,7 @@ bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void
     return true;
 }
 void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
+    CreateOnDemand::UseScope use(this);          // NOT RETAIL (ext.create_on_demand): no eviction meanwhile
     if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (!buffer || sizeBytes < 0 || size_t(sizeBytes) > buffer.length) return nullptr;
     // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's Map fails on its
@@ -1872,6 +1882,7 @@ void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
 }
 void IndexBufferData::Unlock() {}
 void IndexBufferData::Bind(void* context) {
+    CreateOnDemand::UseScope use(this);          // NOT RETAIL (ext.create_on_demand): stamp, no eviction meanwhile
     if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand): before the state lock
     StateGuard guard(stateMutex);
     bound.index = buffer;
@@ -1907,6 +1918,7 @@ bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* d
     return buffer != nil;
 }
 bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    CreateOnDemand::UseScope use(this);          // NOT RETAIL (ext.create_on_demand): no eviction meanwhile
     if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (sizeBytes < 0 || offsetBytes < 0 || !buffer || size_t(offsetBytes) + sizeBytes > buffer.length ||
         (!src && sizeBytes))
@@ -1925,6 +1937,7 @@ bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const voi
     return true;
 }
 void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
+    CreateOnDemand::UseScope use(this);          // NOT RETAIL (ext.create_on_demand): no eviction meanwhile
     if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (!buffer || sizeBytes < 0 || size_t(sizeBytes) > buffer.length) return nullptr;
     // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's Map fails on its
@@ -1951,7 +1964,8 @@ void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
 void VertexBufferData::Unlock() {}
 void VertexBufferData::Bind(void* context, uint32_t startSlot, uint32_t offsetBytes, uint32_t strideBytes) {
     // NOT RETAIL (ext.create_on_demand): the first bind of a deferred buffer makes it (before the state lock);
-    // a made one pays the nil test.
+    // a made one pays the nil test. The scope stamps the use and keeps an eviction away until the bind is done.
+    CreateOnDemand::UseScope use(this);
     if (!buffer) CreateOnDemand::Ensure(this);
     if (startSlot < 31) {
         StateGuard guard(stateMutex);

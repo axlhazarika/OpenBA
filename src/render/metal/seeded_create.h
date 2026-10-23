@@ -68,4 +68,9 @@ id<MTLTexture> MakeTexture(MTLTextureDescriptor* d, const UploadPlan& plan, bool
 // ext.share_gpu_data's create-or-share. *shared: the buffer is in the share table. Nil on failure.
 id<MTLBuffer> MakeBuffer(bool index, bool dynamic, const void* data, uint32_t size, bool* shared);
 
+// A buffer its companion lets go of outside the destructor (ext.create_on_demand's eviction): the
+// backend's caches keyed by it drop it (the widened-input cache holds a strong reference on its source,
+// which would keep an evicted buffer alive), as ~VertexBufferData does.
+void ForgetBufferUses(id<MTLBuffer> buffer);
+
 }  // namespace VideoMetal

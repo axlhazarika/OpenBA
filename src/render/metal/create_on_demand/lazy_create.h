@@ -13,8 +13,10 @@
 //     _extLevelSource, pending_levels.h) gets its descriptor and its SAMPLER in ImageBufferData::Create
 //     as before; only the texture is recorded.
 // The object is made at its first use: Ensure(this) at the top of every slot that reads its handle
-// (Bind, Lock, SetData, Update, Read, the save arm); the fast path is the handle's own nil test. The
-// materialization re-decodes the payload from the package and runs the load's create through
+// (Bind, Lock, SetData, Update, Read, the save arm); the fast path is the handle's own nil test. A made
+// object unused for ext.create_on_demand_idle_min minutes is given back (the member nilled, the record
+// idle again) and re-made at its next use; each such slot holds a UseScope for its body, so no eviction
+// meets a use. The materialization re-decodes the payload from the package and runs the load's create through
 // seeded_create.h: ext.compress_ao's conversion, then ext.share_gpu_data's create-or-share. Publish
 // writes the companion's strong member and its `shared` flag. Destructors, re-creates and Attach*
 // Forget(this) first.
@@ -81,6 +83,31 @@ void Resume();
 
 // The loader bracket's close (DeviceData::Slot4(false)): one summary line when anything changed.
 void LoadEnd();
+// After a sweep gave objects back (the table's sweep hook): the same summary.
+void AfterSweep(int64_t evicted);
+
+// Every slot that reads a companion's handle holds one for its whole body: no eviction runs while it
+// does (the table's UseGate), and the object's use is stamped. Nothing while the row is off.
+class UseScope {
+public:
+    explicit UseScope(const void* obj) : _table(g_table.load(std::memory_order_relaxed)) {
+        if (_table == nullptr) {
+            return;
+        }
+        _table->Enter();
+        _table->Use(obj);
+    }
+    ~UseScope() {
+        if (_table != nullptr) {
+            _table->Leave();
+        }
+    }
+    UseScope(const UseScope&) = delete;
+    UseScope& operator=(const UseScope&) = delete;
+
+private:
+    ::CreateOnDemand::LazyTable* const _table;
+};
 
 }  // namespace CreateOnDemand
 }  // namespace VideoMetal
