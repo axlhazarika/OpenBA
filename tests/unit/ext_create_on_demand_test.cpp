@@ -728,9 +728,10 @@ UNIT_TEST(ext_create_on_demand_table_evicts_idle_and_remakes) {
     t.Add(&b, Fake(&c, &fb, 2));
     t.Ensure(&a);
     t.Ensure(&b);   // both made at epoch 1
-    CHECK_EQ(t.Sweep(), int64_t(0));   // epoch 2: unused for 1 epoch, kept
+    CHECK_EQ(t.Sweep(), int64_t(0));   // epoch 2: last used 1 epoch ago, kept
     t.Use(&a);                          // a used at epoch 2
-    CHECK_EQ(t.Sweep(), int64_t(1));   // epoch 3: b unused for 2 epochs, given back
+    CHECK_EQ(t.Sweep(), int64_t(0));   // epoch 3: b 2 epochs ago, the limit itself: kept
+    CHECK_EQ(t.Sweep(), int64_t(1));   // epoch 4: b 3 epochs ago, given back; a 2 ago, kept
     CHECK_EQ(fa, 1);
     CHECK_EQ(fb, 0);
     CHECK_EQ(c.evicted.load(), 1);
@@ -747,7 +748,8 @@ UNIT_TEST(ext_create_on_demand_table_evicts_idle_and_remakes) {
     CHECK_EQ(t.GetStats().forgotten, int64_t(0));
     CHECK_EQ(c.destroyed.load(), 1);
     t.Sweep();
-    t.Sweep();   // b, unused again, goes again
+    t.Sweep();
+    t.Sweep();   // b, remade at epoch 4 and unused since, goes again at epoch 7
     CHECK_EQ(c.evicted.load(), 2);
 }
 
@@ -774,6 +776,8 @@ UNIT_TEST(ext_create_on_demand_table_eviction_waits_for_a_use_in_progress) {
     const int a = 0;
     t.Add(&a, Fake(&c, &f, 1));
     t.Ensure(&a);
+    t.Sweep();   // epoch 2: one epoch idle is not over the limit yet
+    CHECK_EQ(f, 1);
     t.Enter();   // a use in progress (another object: the stamp of `a` stays old)
     std::atomic<bool> swept{false};
     std::thread sweeper([&] {

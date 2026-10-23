@@ -95,7 +95,7 @@ public:
     void Leave() { _gate.Leave(); }
     void Use(const void* obj) { _stamps.Touch(obj, _epoch.load(std::memory_order_relaxed)); }
 
-    // Made objects unused for `epochs` epochs are evicted by Sweep; 0 = never. `epochLength`: how
+    // Made objects unused for more than `epochs` whole epochs are evicted by Sweep; 0 = never. `epochLength`: how
     // often worker 0 runs Sweep by itself (0 = only when called).
     void SetIdleLimit(uint32_t epochs, std::chrono::milliseconds epochLength);
     // Advance the epoch and evict what is idle. Returns the number evicted.

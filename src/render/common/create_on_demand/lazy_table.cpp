@@ -201,7 +201,9 @@ int64_t LazyTable::Sweep() {
             Entry& e = kv.second;
             if (e.state != State::Made || !e.tracked) continue;
             uint32_t last = 0;
-            if (!_stamps.LastUse(kv.first, &last) || now - last < idle) continue;
+            // Last used in epoch `last`: kept until `idle` whole epochs have passed without a use (a use
+            // late in the previous epoch is not idle at all yet).
+            if (!_stamps.LastUse(kv.first, &last) || now - last <= idle) continue;
             e.record->Evict();
             Untrack(e, kv.first);
             e.state = State::Idle;
