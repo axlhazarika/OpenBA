@@ -325,6 +325,17 @@ void WorldGeometry::Serialize(IO::Stream& stream) {
         if (materialCount != counterCount) {
             Reimpl_Array_Resize_Stride08(&_batchMaterials, counterCount);
         }
+
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): the loaded terrain's
+        // materials are queued for their first-use creates (WorldGeometry.h has the contract).
+        if (_extMaterialTaken != nullptr) {
+            _extMaterialTaken(_terrainMaterial);
+            _extMaterialTaken(_waterMaterialA);
+            _extMaterialTaken(_waterMaterialB);
+            for (int32_t i = 0; i < _batchMaterials.size; ++i) {
+                _extMaterialTaken(_batchMaterials.data[i]);
+            }
+        }
     }
 
     RZ_CHECK("geom 04d0 after step14 (VB/IB create + image upload)");

@@ -2000,7 +2000,11 @@ void MeshInstance::UpdateHierarchy() {
 // ---------------------------------------------------------------------------
 void MeshInstance::SetMaterialInstance(int index, Object::ExternalPtr<MaterialInstance> value) {
     _materials._data[index] = value;
+    // EXT SEAM (NOT RETAIL): ext.create_on_demand's prefetch (Mesh.h has the contract).
+    if (_extMaterialAssigned != nullptr) _extMaterialAssigned(value.Get());
 }
+
+void (*MeshInstance::_extMaterialAssigned)(const MaterialInstance* material) = nullptr;
 
 // ---------------------------------------------------------------------------
 // ?SetMesh@MeshInstance@Graphics@@QEAAXV?$ExternalPtr@…@Z retail 0x1800ffea0

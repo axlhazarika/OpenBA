@@ -1,7 +1,7 @@
 #pragma once
 // src/ext/create_on_demand/prefetch.h -- ext.create_on_demand's mesh prefetch (NOT RETAIL)
 //
-// Graphics::MeshInstance::_extMeshAssigned, Graphics::ParticleInstance::_extParticleAssigned,
+// Graphics::MeshInstance::_extMeshAssigned / _extMaterialAssigned, Graphics::ParticleInstance::_extParticleAssigned,
 // UI::SpriteSheet::_extLoaded and WorldGeometry::_extMaterialTaken while the row is on (prefetch.cpp
 // has the rules, each seam's header its contract).
 

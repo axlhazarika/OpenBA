@@ -469,6 +469,9 @@ public:
     // of SetMesh with the instance holding its new mesh and materials: the extension queues the
     // first-use creates of their buffers and textures, ahead of the instance's first draw.
     static void (*_extMeshAssigned)(const MeshInstance& instance);
+    // The same for SetMaterialInstance (a skin chosen after SetMesh, a building's charred set): run
+    // with the material just stored.
+    static void (*_extMaterialAssigned)(const MaterialInstance* material);
 
     // `??2MeshInstance@Graphics@@SAPEAX_K@Z` (0x180016940),
     // `??2…@SAPEAX_KPEAX@Z` (0x1800169b0) and `??3…@SAXPEAX@Z` (0x1800169c0) are

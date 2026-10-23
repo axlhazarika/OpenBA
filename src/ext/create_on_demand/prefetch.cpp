@@ -26,9 +26,10 @@
 
 namespace Ext { namespace CreateOnDemand {
 
-// Every texture of one material. Also WorldGeometry::_extMaterialTaken: the terrain's ground and
-// water materials and its decals', taken while the world is built or loaded (the main menu's town
-// drew ~16 of them, ~30 ms, in its first frame).
+// Every texture of one material. Also Graphics::MeshInstance::_extMaterialAssigned (a skin chosen
+// after SetMesh) and WorldGeometry::_extMaterialTaken: the terrain's ground and water materials, its
+// roads' and decals', taken while the world is built or loaded (the main menu's town drew ~16 of
+// them, ~30 ms, in its first frame).
 void PrefetchMaterial(const Graphics::MaterialInstance* material) {
     if (material == nullptr) return;
     const RtGraphics::MaterialTexture* const textures = material->_textures.GetData();
