@@ -54,7 +54,7 @@ user version, entry count}, the package name and its whole entry table (offset +
 so a rebuilt package at the same path is another identity. The build is NOT in the key: the recorded
 bytes are a function of the package alone; only the read pattern depends on the build, and a record
 that is too narrow is widened (below). A package's chunks are read back at its first load of the run
-(ordinals from 0 until the first miss; 86-189 ms for 150-300 MB of chunks, Find + parse, counted in the
+(from the newest generation's first chunk, section 8, until the first miss; 86-189 ms for 150-300 MB of chunks, Find + parse, counted in the
 load-end line as "read back in") into a `Bundle` indexed by entry offset, a later chunk's record for an
 entry replacing an earlier one; identities survive the two remounts (the pack index -> PackageFile
 pointer is re-derived when the FileSystem's table changes).
@@ -64,8 +64,8 @@ is the `MenuDialogLoopT` (the seam passes the loop's type) -- and no later brack
 recorded (`[StreamCache] boot over: N MB of records dropped`). The later brackets are small: a new game
 loads ~220 resources (the boot's 376k), a save load or a device-restart reload the same few; reading
 150 MB of chunks back for them would cost more than the decode it replaces, and recording them would
-add a chunk per run. So the 150 MB (300 MB when a widened generation sits beside the first) is resident
-for the boot's ~16 s and not for the session.
+add a chunk per run. So the 150 MB (300 MB for the one boot that widens a generation, section 8) is
+resident for the boot's ~16 s and not for the session.
 
 **Fallback (a record too narrow).** A read outside the record's segments does not fail the load: the
 `SegmentStream` asks its opener for retail's CompressedStream on the same entry (the load's own
@@ -181,14 +181,64 @@ clean-generation visit pass and the package directory work; bootprof report item
 launch: menu.opened 16.82 s, hits 362,106, read back 189 ms (two chunk generations resident, 300.8 MB,
 the probe run's widened records beside the originals), dropped at the menu's bracket. Cache on disk for
 a fresh MegaMod boot: 11 chunks, 150.4 MB (derived.dat +150 MB); a widened generation adds another
-150 MB until the cap's compaction ages the superseded chunks out.
+150 MB on disk (and the consolidated chunk a third, section 8) until the cap's compaction ages the
+superseded chunks out; from the next start only the live generation is read back.
 
 ## 7. Open
 
-- Superseded chunks (a widened generation) stay in derived.dat and are read back with the rest until
-  the cap compacts; a per-package "latest generation" marker would skip them.
 - kRecordMax = 8 KB leaves 14.3k streams (picking / edge meshes, sounds, a few large descriptions) on the
   compressed path; the per-type table says they are the CPU geometry the game needs whole.
 - Not built: Linux, macOS. The Metal backend's Locate reaches the same `g_altLocate` seam.
 - The record stream takes BinaryReader's per-element array loop (ReadArrayFromWindows is exact-type on
   the compressed streams); a batched copy for it would be the same proof again.
+
+## 8. Generations: the latest-generation marker
+
+A widened record replaces the record it was seeded from (a later chunk's record wins in the `Bundle`),
+so the generation that held the narrow ones becomes dead weight: still read back at every start, still
+resident for the boot, and, because every `Find` puts its key on the keep list, never aged out by the
+cap while the package is installed. The marker makes the dead chunks unreachable instead.
+
+**Consolidation rule** (`ShouldConsolidate`, `stream_record.h`). At the boot's last bracket, before the
+bundles are dropped, a package's bundle is rewritten when it spans at least two chunks and either the
+superseded records take at least a quarter of its bytes (`Bytes() - (16 + LiveBytes())`), or it spans
+more than `kConsolidateChunks` = 16 chunks. A boot whose chunks are all live (the usual 11 chunks for 9
+packages: a package records in more than one bracket) is left alone, and one widened record among
+thousands does not rewrite a package. `Bundle::Consolidate` writes ONE chunk of exactly the live
+records, each copied byte for byte from its chunk (header, segment table, bytes, padding), in
+entry-offset order; the chunk and record format is unchanged (kChunkVersion 2).
+
+**The marker.** A derived-cache entry of its own per package: the stream cache's key with `shape[2]` =
+1 (0 is a chunk) and `shape[3]` = the marker ordinal (0, 1, ...); payload 16 bytes { 'STRG', version 1,
+start ordinal, ~start }. The consolidated chunk goes at the next free chunk ordinal and is queued
+before its marker (the writer stores in queue order). `ReadBack` reads the markers from ordinal 0 until
+a miss, takes the newest one whose start chunk is stored, and reads chunks from there to the first
+missing ordinal; with no usable marker it reads from ordinal 0, as before. A missing or torn marker
+therefore degrades to the old behaviour, and a marker whose chunk was never stored (the cap refused it,
+or a crash or a full disk lost it) falls back to an older marker or to ordinal 0, with one log line;
+the next consolidation lands at that same free ordinal. Chunks below the start are never asked for
+again: they leave the keep list (`derived.used`) at once and leave derived.dat at the next compaction
+past the cap. What a load reads from a record is untouched -- only which chunks are read back changes,
+and the consolidated records are the same bytes (the unit test; boot 4 below served all 362,106 hits
+with 0 extended and 0 fallback failures).
+
+**Measured** (debug exe, game dir `Banished-B`, MegaMod 7-part mounted + data0 / data1 = 9 packages,
+create_on_demand on, an empty derived cache at boot 1, each boot to the menu and Quit with
+`BANISHED_AUTOQUIT=1`; from the `[StreamCache]` boot-end line):
+
+| boot | hits | extended | records (in memory) | read back | chunks put | chunks read | superseded skipped | consolidated |
+|---|---|---|---|---|---|---|---|---|
+| 1 cold | 0 | 0 | 362,106 (150.4 MB) | 0 ms | 11 (150.4 MB) | 0 | 0 | 0 |
+| 2 warm | 362,106 | 0 | 362,106 (150.4 MB) | 120 ms | 0 | 11 | 0 | 0 |
+| 3 widening probe | 362,106 | 362,106 | 362,106 (300.8 MB) | 120 ms | 11 (150.4 MB) | 11 | 0 | 9 (150.4 MB) |
+| 4 warm | 362,106 | 0 | 362,106 (150.4 MB) | 122 ms | 0 | 9 | 22 | 0 |
+
+Boot 3 runs the section-5 fallback probe (TEMP, not committed: every served record cut by 16 bytes, so
+every hit reads outside it and is widened): it writes a whole second generation, and at its end each of
+the 9 packages is rewritten as one live chunk (`package df769ff1: 80535 live records of 2 chunks (63.8
+MB) rewritten as chunk 2 (31.9 MB), marker 0`). Boot 4 reads one chunk per package, skips the 22
+superseded ones, holds 150.4 MB instead of 300.8 MB, and reads back in the time of one generation (122
+ms; boot 2: 120 ms; two generations: 189 ms in section 6). `derived.used` went from 952 to 760 bytes (the
+22 dead chunk keys out, the 9 markers in). Crash log 0 bytes on every boot. Unit tests:
+`ext_stream_cache_consolidate_keeps_exactly_the_live_records`, `..._marker_round_trip`,
+`..._read_back_follows_the_marker`, `..._read_back_falls_back_when_the_start_is_missing`.

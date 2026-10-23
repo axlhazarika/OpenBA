@@ -29,6 +29,16 @@
 // package's bundle is one or more chunks (one per load bracket that recorded something); a later
 // chunk's record for an entry replaces an earlier one.
 //
+// GENERATIONS. A widened record leaves the record it replaced as dead weight in its chunk, and a
+// chunk whose records are all replaced is read back for nothing. When a bundle's dead bytes reach a
+// quarter of its bytes (or it spans more than kConsolidateChunks chunks), the boot's end writes ONE
+// chunk holding exactly the live records (Bundle::Consolidate, each byte for byte) at the next chunk
+// ordinal, then a MARKER naming that ordinal as the package's first chunk: 16 bytes { 'STRG',
+// kMarkerVersion, start ordinal, ~start }. Markers have their own ordinals 0, 1, ...; ReadBack
+// takes the newest marker whose start chunk is stored (a marker can outlive a chunk the cap refused
+// or a crash lost), else reads from ordinal 0 as before. Chunks below the start are never read
+// again: they drop out of the derived cache's keep list and age out through its cap.
+//
 // WHAT IS RECORDED. Every successful read is noted; overlapping and adjacent ranges merge (the bytes
 // of an overlap must agree, or the record is dropped). A stream is stored only when every read
 // succeeded and the bytes consumed are at most kRecordMax: the per-type load table (STREAMCACHE.md
@@ -39,6 +49,7 @@
 // ============================================================================
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -50,6 +61,10 @@ constexpr uint32_t kChunkMagic    = 0x43525453;  // 'STRC'
 constexpr uint32_t kChunkVersion  = 2;           // 2: records may be widened (segments merge)
 constexpr uint32_t kChunkHeader   = 16;
 constexpr uint32_t kRecordHeader  = 32;
+constexpr uint32_t kMarkerMagic   = 0x47525453;  // 'STRG'
+constexpr uint32_t kMarkerVersion = 1;
+constexpr uint32_t kMarkerBytes   = 16;
+constexpr uint32_t kConsolidateChunks = 16;      // more chunks than this are merged even when all live
 
 struct Segment {
     uint32_t pos;
@@ -133,12 +148,40 @@ public:
     size_t Records() const { return _index.size(); }
     size_t Chunks() const { return _chunks.size(); }
     size_t Bytes() const { return _bytes; }
+    // The bytes the indexed (live) records take in their chunks, chunk headers not counted.
+    size_t LiveBytes() const;
+    // One chunk holding exactly the indexed records, each byte for byte as its chunk holds it, in
+    // entry-offset order. Empty when there is no record.
+    std::vector<uint8_t> Consolidate() const;
 
 private:
     std::vector<std::vector<uint8_t>>             _chunks;
     std::unordered_map<uint64_t, RecordView>      _index;   // by entry offset
     size_t                                        _bytes = 0;
 };
+
+// True when `b` is worth rewriting as one chunk: at least two chunks, and the records later chunks
+// replaced take at least a quarter of its bytes, or it spans more than kConsolidateChunks chunks.
+bool ShouldConsolidate(const Bundle& b);
+
+// The generation marker's payload, and its parse (false: not a marker of this version).
+std::vector<uint8_t> EncodeMarker(uint32_t start);
+bool DecodeMarker(const std::vector<uint8_t>& marker, uint32_t& start);
+
+// Reads a package's chunks back. `findChunk(ordinal, out)` / `findMarker(ordinal, out)` are the
+// derived cache's lookups (false = a miss). Markers are read from ordinal 0 until a miss; the newest
+// one whose start chunk is found names the first chunk read, otherwise chunks are read from ordinal
+// 0; either way on to the first missing ordinal. Every chunk found goes into `bundle`.
+using FindFn = std::function<bool(uint32_t ordinal, std::vector<uint8_t>& out)>;
+struct ReadBackResult {
+    uint32_t start   = 0;   // the first chunk ordinal read
+    uint32_t next    = 0;   // the first missing chunk ordinal: where the next chunk goes
+    uint32_t read    = 0;   // chunks found (malformed ones included)
+    uint32_t markers = 0;   // markers found: where the next marker goes
+    bool     startMissing = false;    // the newest marker named a chunk that is not stored
+    std::vector<uint32_t> malformed;  // ordinals of the chunks AddChunk refused
+};
+ReadBackResult ReadBack(Bundle& bundle, const FindFn& findChunk, const FindFn& findMarker);
 
 }  // namespace StreamCache
 }  // namespace Ext

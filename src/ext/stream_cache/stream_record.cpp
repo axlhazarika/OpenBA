@@ -37,6 +37,12 @@ uint64_t GetU64(const uint8_t* p) {
     return x;
 }
 
+// A record's bytes in its chunk: the header, the segment table, the bytes padded to a multiple of 8.
+size_t RecordBytes(const RecordView& v) {
+    const size_t body = (static_cast<size_t>(v.byteCount) + 7) & ~static_cast<size_t>(7);
+    return kRecordHeader + static_cast<size_t>(v.segCount) * 8 + body;
+}
+
 }  // namespace
 
 bool SameEntry(const EntryId& a, const EntryId& b) {
@@ -260,6 +266,94 @@ void Bundle::Clear() {
     _index.clear();
     _chunks.clear();
     _bytes = 0;
+}
+
+size_t Bundle::LiveBytes() const {
+    size_t n = 0;
+    for (const auto& kv : _index) n += RecordBytes(kv.second);
+    return n;
+}
+
+std::vector<uint8_t> Bundle::Consolidate() const {
+    std::vector<uint8_t> chunk;
+    if (_index.empty()) return chunk;
+    std::vector<const RecordView*> live;
+    live.reserve(_index.size());
+    for (const auto& kv : _index) live.push_back(&kv.second);
+    std::sort(live.begin(), live.end(),
+              [](const RecordView* a, const RecordView* b) { return a->id.offset < b->id.offset; });
+    chunk.reserve(kChunkHeader + LiveBytes());
+    BeginChunk(chunk);
+    for (const RecordView* v : live) {
+        // A record is contiguous in its chunk: the header right before the segment table.
+        const uint8_t* const begin = reinterpret_cast<const uint8_t*>(v->segs) - kRecordHeader;   // CAST-OK: byte_io
+        chunk.insert(chunk.end(), begin, begin + RecordBytes(*v));
+    }
+    EndChunk(chunk, static_cast<uint32_t>(live.size()));
+    return chunk;
+}
+
+// ---- generations -----------------------------------------------------------------------------
+
+bool ShouldConsolidate(const Bundle& b) {
+    if (b.Chunks() < 2 || b.Records() == 0) return false;
+    if (b.Chunks() > kConsolidateChunks) return true;
+    const size_t live = kChunkHeader + b.LiveBytes();
+    const size_t dead = b.Bytes() > live ? b.Bytes() - live : 0;
+    return dead * 4 >= b.Bytes();
+}
+
+std::vector<uint8_t> EncodeMarker(uint32_t start) {
+    std::vector<uint8_t> m;
+    PutU32(m, kMarkerMagic);
+    PutU32(m, kMarkerVersion);
+    PutU32(m, start);
+    PutU32(m, ~start);
+    return m;
+}
+
+bool DecodeMarker(const std::vector<uint8_t>& marker, uint32_t& start) {
+    if (marker.size() != kMarkerBytes) return false;
+    const uint8_t* const p = marker.data();
+    if (GetU32(p) != kMarkerMagic || GetU32(p + 4) != kMarkerVersion) return false;
+    if (GetU32(p + 8) != ~GetU32(p + 12)) return false;
+    start = GetU32(p + 8);
+    return true;
+}
+
+ReadBackResult ReadBack(Bundle& bundle, const FindFn& findChunk, const FindFn& findMarker) {
+    ReadBackResult r;
+    std::vector<uint8_t> buf;
+    std::vector<uint32_t> starts;
+    while (findMarker(r.markers, buf)) {
+        uint32_t s = 0;
+        if (DecodeMarker(buf, s)) starts.push_back(s);
+        buf.clear();
+        ++r.markers;
+    }
+    // The newest marker whose start chunk is stored; ordinal 0 when none is.
+    std::vector<uint8_t> chunk;
+    uint32_t ordinal = 0;
+    bool found = false;
+    for (size_t i = starts.size(); i > 0 && !found; --i) {
+        ordinal = starts[i - 1];
+        found = findChunk(ordinal, chunk);
+        if (!found && i == starts.size()) r.startMissing = true;
+    }
+    if (!found) {
+        ordinal = 0;
+        found = findChunk(ordinal, chunk);
+    }
+    r.start = found ? ordinal : 0;
+    while (found) {
+        if (!bundle.AddChunk(std::move(chunk))) r.malformed.push_back(ordinal);
+        chunk.clear();
+        ++r.read;
+        ++ordinal;
+        found = findChunk(ordinal, chunk);
+    }
+    r.next = ordinal;
+    return r;
 }
 
 }  // namespace StreamCache

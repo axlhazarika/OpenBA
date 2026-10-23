@@ -11,7 +11,11 @@
 //     a later chunk's record replaces an earlier one, and a malformed chunk is refused whole;
 //   * a SegmentStream serves the record's bytes in the decompressed stream's coordinates, and a
 //     read outside the record falls back to the engine's own CompressedStream over the same entry
-//     (positioned where the read was) for the rest of the load; without an opener it fails.
+//     (positioned where the read was) for the rest of the load; without an opener it fails;
+//   * a bundle consolidates into one chunk of exactly its live records, byte for byte, when its
+//     superseded records reach a quarter of it; the generation marker round-trips; reading back
+//     follows the newest marker whose chunk is stored, never asks for the chunks below it, and
+//     falls back to an older marker or to ordinal 0 when the marked chunk is missing.
 // ============================================================================
 #include "unit.h"
 
@@ -468,4 +472,271 @@ UNIT_TEST(ext_stream_cache_segment_stream_serves_then_falls_back) {
     CHECK(!bare.Read(100, out.data()));
     CHECK(bare.Failed());
     CHECK(!bare.Extended());
+}
+
+namespace {
+
+// Every record of `a` is in `b` with the same identity, total, segments and bytes.
+bool SameRecords(const Bundle& a, const Bundle& b, const std::vector<EntryId>& ids) {
+    if (a.Records() != b.Records()) return false;
+    for (const EntryId& id : ids) {
+        const RecordView* x = a.Find(id);
+        const RecordView* y = b.Find(id);
+        if ((x == nullptr) != (y == nullptr)) return false;
+        if (x == nullptr) continue;
+        if (x->total != y->total || x->segCount != y->segCount || x->byteCount != y->byteCount) return false;
+        if (std::memcmp(x->segs, y->segs, static_cast<size_t>(x->segCount) * 8) != 0) return false;
+        if (std::memcmp(x->bytes, y->bytes, x->byteCount) != 0) return false;
+    }
+    return true;
+}
+
+// A package's chunks and markers as the derived cache holds them, with the chunk ordinals asked for.
+struct FakeStore {
+    std::vector<std::vector<uint8_t>> chunks;   // by ordinal; empty = not stored
+    std::vector<std::vector<uint8_t>> markers;
+    std::vector<uint32_t> chunkAsks;
+
+    bool FindChunk(uint32_t i, std::vector<uint8_t>& out) {
+        chunkAsks.push_back(i);
+        if (i >= chunks.size() || chunks[i].empty()) return false;
+        out = chunks[i];
+        return true;
+    }
+    bool FindMarker(uint32_t i, std::vector<uint8_t>& out) {
+        if (i >= markers.size() || markers[i].empty()) return false;
+        out = markers[i];
+        return true;
+    }
+    ReadBackResult Read(Bundle& b) {
+        chunkAsks.clear();
+        return ReadBack(
+            b, [this](uint32_t i, std::vector<uint8_t>& out) { return FindChunk(i, out); },
+            [this](uint32_t i, std::vector<uint8_t>& out) { return FindMarker(i, out); });
+    }
+};
+
+// Generation 0: whole-stream records (300 bytes) for 40 entries. Generation 1: every one of them
+// widened by one more segment, as a run that read outside its records makes.
+void TwoGenerations(const std::vector<uint8_t>& plain, std::vector<uint8_t>& gen0, std::vector<uint8_t>& gen1,
+                    std::vector<EntryId>& ids) {
+    Recorder r;
+    BeginChunk(gen0);
+    BeginChunk(gen1);
+    for (uint64_t off = 1; off <= 40; ++off) {
+        ids.push_back(Id(off * 64));
+        CHECK(RecordReads(r, Id(off * 64), plain, {{0, 300}}, gen0));
+        CHECK(RecordReads(r, Id(off * 64), plain, {{0, 300}, {4000 + static_cast<uint32_t>(off), 16}}, gen1));
+    }
+    EndChunk(gen0, 40);
+    EndChunk(gen1, 40);
+}
+
+}  // namespace
+
+UNIT_TEST(ext_stream_cache_consolidate_keeps_exactly_the_live_records) {
+    const std::vector<uint8_t> plain = Pattern(9000, 9);
+    std::vector<uint8_t> gen0;
+    std::vector<uint8_t> gen1;
+    std::vector<EntryId> ids;
+    TwoGenerations(plain, gen0, gen1, ids);
+    // a third chunk: half the entries replaced again, and one new entry
+    std::vector<uint8_t> gen2;
+    BeginChunk(gen2);
+    Recorder r;
+    for (uint64_t off = 1; off <= 20; ++off) {
+        CHECK(RecordReads(r, Id(off * 64), plain, {{0, 300}, {6000, 32}}, gen2));
+    }
+    ids.push_back(Id(50000));
+    CHECK(RecordReads(r, Id(50000), plain, {{0, 8000}}, gen2));
+    EndChunk(gen2, 21);
+    Bundle b;
+    CHECK(b.AddChunk(gen0));
+    CHECK(!ShouldConsolidate(b));   // one chunk: nothing to merge
+    CHECK(b.AddChunk(gen1));
+    CHECK(ShouldConsolidate(b));    // generation 0 is all dead: under half the bytes are live
+    CHECK(b.AddChunk(gen2));
+    CHECK_EQ(b.Records(), static_cast<size_t>(41));
+    CHECK_EQ(b.Chunks(), static_cast<size_t>(3));
+    const std::vector<uint8_t> merged = b.Consolidate();
+    CHECK_EQ(ChunkRecordCount(merged), 41u);
+    CHECK_EQ(merged.size(), static_cast<size_t>(kChunkHeader) + b.LiveBytes());
+    CHECK(merged.size() < b.Bytes());
+    Bundle c;
+    CHECK(c.AddChunk(merged));
+    CHECK_EQ(c.Chunks(), static_cast<size_t>(1));
+    CHECK(SameRecords(b, c, ids));
+    CHECK_EQ(c.LiveBytes(), b.LiveBytes());
+    CHECK(!ShouldConsolidate(c));
+    // the newest record of each entry won: 1..20 from gen2, 21..40 from gen1
+    uint8_t out[32];
+    CHECK(c.Find(Id(64 * 3))->Read(6000, 32, out));
+    CHECK(std::memcmp(out, plain.data() + 6000, 32) == 0);
+    CHECK(c.Find(Id(64 * 30))->Read(4030, 16, out));
+    CHECK(std::memcmp(out, plain.data() + 4030, 16) == 0);
+    CHECK(!c.Find(Id(64 * 30))->Read(6000, 32, out));
+    // consolidating the consolidated chunk gives the same bytes
+    CHECK(c.Consolidate() == merged);
+    // all-live chunks are not rewritten, until there are more than kConsolidateChunks of them
+    Bundle d;
+    for (uint64_t i = 1; i <= 2; ++i) {
+        std::vector<uint8_t> one;
+        BeginChunk(one);
+        CHECK(RecordReads(r, Id(i), plain, {{0, 100}}, one));
+        EndChunk(one, 1);
+        CHECK(d.AddChunk(one));
+    }
+    CHECK(!ShouldConsolidate(d));
+    for (uint64_t i = 3; i <= kConsolidateChunks + 1; ++i) {
+        std::vector<uint8_t> more;
+        BeginChunk(more);
+        CHECK(RecordReads(r, Id(i), plain, {{0, 100}}, more));
+        EndChunk(more, 1);
+        CHECK(d.AddChunk(more));
+    }
+    CHECK_EQ(d.Chunks(), static_cast<size_t>(kConsolidateChunks + 1));
+    CHECK(ShouldConsolidate(d));
+    CHECK(Bundle().Consolidate().empty());
+}
+
+UNIT_TEST(ext_stream_cache_marker_round_trip) {
+    uint32_t start = 99;
+    const std::vector<uint8_t> m = EncodeMarker(7);
+    CHECK_EQ(m.size(), static_cast<size_t>(kMarkerBytes));
+    CHECK(DecodeMarker(m, start));
+    CHECK_EQ(start, 7u);
+    CHECK(DecodeMarker(EncodeMarker(0), start));
+    CHECK_EQ(start, 0u);
+    std::vector<uint8_t> bad = m;
+    bad[8] ^= 1;   // the start no longer matches its complement
+    start = 99;
+    CHECK(!DecodeMarker(bad, start));
+    CHECK_EQ(start, 99u);
+    bad = m;
+    bad[0] ^= 1;
+    CHECK(!DecodeMarker(bad, start));
+    bad = m;
+    bad[4] ^= 1;
+    CHECK(!DecodeMarker(bad, start));
+    bad = m;
+    bad.push_back(0);
+    CHECK(!DecodeMarker(bad, start));
+    CHECK(!DecodeMarker(std::vector<uint8_t>(), start));
+}
+
+UNIT_TEST(ext_stream_cache_read_back_follows_the_marker) {
+    const std::vector<uint8_t> plain = Pattern(9000, 4);
+    std::vector<uint8_t> gen0;
+    std::vector<uint8_t> gen1;
+    std::vector<EntryId> ids;
+    TwoGenerations(plain, gen0, gen1, ids);
+    FakeStore s;
+    s.chunks = {gen0, gen1};
+    // no marker: ordinal 0 until a miss
+    Bundle all;
+    ReadBackResult r = s.Read(all);
+    CHECK_EQ(r.start, 0u);
+    CHECK_EQ(r.next, 2u);
+    CHECK_EQ(r.read, 2u);
+    CHECK_EQ(r.markers, 0u);
+    CHECK(!r.startMissing);
+    CHECK_EQ(all.Chunks(), static_cast<size_t>(2));
+    // the boot's end: the live records as chunk 2, then marker 0 naming it
+    CHECK(ShouldConsolidate(all));
+    s.chunks.push_back(all.Consolidate());
+    s.markers.push_back(EncodeMarker(r.next));
+    Bundle latest;
+    r = s.Read(latest);
+    CHECK_EQ(r.start, 2u);
+    CHECK_EQ(r.next, 3u);
+    CHECK_EQ(r.read, 1u);
+    CHECK_EQ(r.markers, 1u);
+    CHECK(!r.startMissing);
+    CHECK_EQ(latest.Chunks(), static_cast<size_t>(1));
+    CHECK(SameRecords(all, latest, ids));
+    // chunks 0 and 1 were never asked for: they leave the keep list
+    CHECK(std::find(s.chunkAsks.begin(), s.chunkAsks.end(), 0u) == s.chunkAsks.end());
+    CHECK(std::find(s.chunkAsks.begin(), s.chunkAsks.end(), 1u) == s.chunkAsks.end());
+    // a chunk after the marked one is read on top of it
+    std::vector<uint8_t> extra;
+    BeginChunk(extra);
+    Recorder rec;
+    CHECK(RecordReads(rec, Id(777777), plain, {{0, 50}}, extra));
+    EndChunk(extra, 1);
+    s.chunks.push_back(extra);
+    Bundle more;
+    r = s.Read(more);
+    CHECK_EQ(r.start, 2u);
+    CHECK_EQ(r.next, 4u);
+    CHECK_EQ(more.Records(), static_cast<size_t>(41));
+    s.chunks.pop_back();
+    // a second generation: the newer marker wins
+    s.chunks.push_back(latest.Consolidate());
+    s.markers.push_back(EncodeMarker(3));
+    Bundle second;
+    r = s.Read(second);
+    CHECK_EQ(r.start, 3u);
+    CHECK_EQ(r.next, 4u);
+    CHECK_EQ(r.markers, 2u);
+    CHECK(SameRecords(all, second, ids));
+}
+
+UNIT_TEST(ext_stream_cache_read_back_falls_back_when_the_start_is_missing) {
+    const std::vector<uint8_t> plain = Pattern(9000, 6);
+    std::vector<uint8_t> gen0;
+    std::vector<uint8_t> gen1;
+    std::vector<EntryId> ids;
+    TwoGenerations(plain, gen0, gen1, ids);
+    Bundle all;
+    CHECK(all.AddChunk(gen0));
+    CHECK(all.AddChunk(gen1));
+    // the marker was stored but its chunk was not (the cap refused it, or a crash lost it)
+    FakeStore s;
+    s.chunks = {gen0, gen1};
+    s.markers = {EncodeMarker(2)};
+    Bundle b;
+    ReadBackResult r = s.Read(b);
+    CHECK(r.startMissing);
+    CHECK_EQ(r.start, 0u);
+    CHECK_EQ(r.next, 2u);   // the consolidated chunk goes at 2 again
+    CHECK_EQ(r.markers, 1u);
+    CHECK(SameRecords(all, b, ids));
+    // an older marker whose chunk is there comes before ordinal 0
+    s.chunks.push_back(all.Consolidate());   // chunk 2
+    s.markers = {EncodeMarker(2), EncodeMarker(5)};
+    Bundle c;
+    r = s.Read(c);
+    CHECK(r.startMissing);
+    CHECK_EQ(r.start, 2u);
+    CHECK_EQ(r.next, 3u);
+    CHECK_EQ(c.Chunks(), static_cast<size_t>(1));
+    CHECK(SameRecords(all, c, ids));
+    // a corrupt marker is ignored (and counted: the next marker goes after it)
+    std::vector<uint8_t> torn = EncodeMarker(2);
+    torn[12] ^= 0xff;
+    s.markers = {torn};
+    Bundle d;
+    r = s.Read(d);
+    CHECK(!r.startMissing);
+    CHECK_EQ(r.start, 0u);
+    CHECK_EQ(r.next, 3u);
+    CHECK_EQ(r.markers, 1u);
+    CHECK_EQ(d.Chunks(), static_cast<size_t>(3));
+    // the chunks below the marked one aged out: the marked generation alone is read
+    s.chunks[0].clear();
+    s.chunks[1].clear();
+    s.markers = {EncodeMarker(2)};
+    Bundle e;
+    r = s.Read(e);
+    CHECK_EQ(r.start, 2u);
+    CHECK_EQ(r.next, 3u);
+    CHECK(SameRecords(all, e, ids));
+    // nothing stored at all
+    FakeStore empty;
+    Bundle f;
+    r = empty.Read(f);
+    CHECK_EQ(r.start, 0u);
+    CHECK_EQ(r.next, 0u);
+    CHECK_EQ(r.read, 0u);
+    CHECK_EQ(f.Records(), static_cast<size_t>(0));
 }
