@@ -23,8 +23,10 @@
 #include "share_gpu_data/share_create.h"   // ext.share_gpu_data: the create-or-share, at materialize
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -52,6 +54,9 @@ ID3D11Device* AcquireDevice() {
     return ok ? ::CreateOnDemand::Outcome::Made : ::CreateOnDemand::Outcome::Failed;
 }
 
+// After a materialization (no table lock held): the run's summary, at most every 30 s.
+void MaybePrint();
+
 void NoteDecodeFailure(const ::CreateOnDemand::Locator& loc) {
     const int64_t n = g_decodeFailed.fetch_add(1, std::memory_order_relaxed);
     if (n < 8)
@@ -78,6 +83,7 @@ public:
             NoteDecodeFailure(_loc);
         }
         dev->Release();
+        MaybePrint();
         return Result(ok);
     }
 
@@ -140,6 +146,7 @@ public:
             ok = _madeTexture != nullptr && _madeSrv != nullptr;
         }
         dev->Release();
+        MaybePrint();
         return Result(ok);
     }
 
@@ -176,6 +183,8 @@ int WorkerCount() {
 void Print(const char* when) {
     ::CreateOnDemand::LazyTable* const t = g_table.load(std::memory_order_relaxed);
     if (t == nullptr) return;
+    static std::mutex printMutex;   // the loader's LoadEnd, the workers and the using threads
+    std::lock_guard<std::mutex> lock(printMutex);
     const ::CreateOnDemand::LazyTable::Stats s = t->GetStats();
     if (s.recorded == g_lastPrinted.recorded && s.onUse == g_lastPrinted.onUse &&
         s.prefetched == g_lastPrinted.prefetched && s.forgotten == g_lastPrinted.forgotten)
@@ -195,6 +204,18 @@ void Print(const char* when) {
                  static_cast<long long>(s.failed), static_cast<long long>(s.forgotten),
                  static_cast<long long>(g_notLocatable.load(std::memory_order_relaxed)),
                  static_cast<long long>(m.live), static_cast<long long>(m.detached));
+}
+
+std::atomic<int64_t> g_lastPrintNs{0};
+
+void MaybePrint() {
+    const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+    int64_t last = g_lastPrintNs.load(std::memory_order_relaxed);
+    if (now - last < 30000000000LL) return;
+    if (!g_lastPrintNs.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
+    Print("in game (run total)");
 }
 
 }  // namespace
