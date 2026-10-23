@@ -166,6 +166,34 @@ uint64_t FileBytes(const std::u16string& path) {
     return size > 0 ? static_cast<uint64_t>(size) : 0;
 }
 
+// Keeps the last record of each key, in file order; returns how many earlier ones it dropped.
+size_t DropSuperseded(std::vector<IndexRecord>& records) {
+    std::unordered_multimap<uint64_t, size_t> last;   // sourceHash -> the index of the key's latest record
+    std::vector<bool> dropped(records.size(), false);
+    size_t count = 0;
+    for (size_t i = 0; i < records.size(); ++i) {
+        const Key key = RecordKey(records[i]);
+        bool seen = false;
+        auto range = last.equal_range(key.sourceHash);
+        for (auto it = range.first; it != range.second; ++it) {
+            if (!SameKey(RecordKey(records[it->second]), key)) continue;
+            dropped[it->second] = true;
+            it->second = i;
+            seen = true;
+            ++count;
+            break;
+        }
+        if (!seen) last.emplace(key.sourceHash, i);
+    }
+    if (count == 0) return 0;
+    size_t kept = 0;
+    for (size_t i = 0; i < records.size(); ++i) {
+        if (!dropped[i]) records[kept++] = records[i];
+    }
+    records.resize(kept);
+    return count;
+}
+
 }  // namespace
 
 bool SameKey(const Key& a, const Key& b) {
@@ -297,7 +325,15 @@ bool Store::LoadIndex(uint64_t capBytes) {
     }
     _dataEnd  = end;
     _indexEnd = indexEnd;
-    if (_dataEnd > capBytes && !Compact(capBytes, records)) return false;
+    // A key stored twice (its first payload failed its hash on a read, and the caller stored it
+    // again): the later record is the live one. The earlier ones are dropped here, and the rewrite
+    // below takes their bytes out of the files, so the next Open does not meet them again.
+    const size_t superseded = DropSuperseded(records);
+    if (superseded != 0)
+        std::fprintf(stderr, "[DerivedCache] %llu entries were stored again since: dropping the old copies\n",
+                     static_cast<unsigned long long>(superseded));
+    const bool overCap = _dataEnd > capBytes;
+    if ((overCap || superseded != 0) && !Compact(capBytes, records, overCap)) return false;
     for (const IndexRecord& r : records)
         _records.emplace(r.sourceHash, r);
     _stats.entries   = _records.size();
@@ -305,11 +341,12 @@ bool Store::LoadIndex(uint64_t capBytes) {
     return true;
 }
 
-// Over the cap at Open: rewrite the files keeping the entries the last session used, up to the cap.
-bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records) {
+// Rewrites the files with `records`, in their order, up to the cap. Over the cap only the entries
+// the last session used are kept (`usedOnly`); after DropSuperseded alone, every record left is.
+bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly) {
     std::unordered_set<uint64_t> keep;
     std::vector<uint8_t> used;
-    if (ReadWhole(FilePath(_dir, "derived.used"), used) && used.size() >= kHeaderSize) {
+    if (usedOnly && ReadWhole(FilePath(_dir, "derived.used"), used) && used.size() >= kHeaderSize) {
         FileHeader h = {};
         std::memcpy(&h, used.data(), sizeof(h));
         if (HeaderIs(h, "OBADCUSE", 8)) {
@@ -339,7 +376,8 @@ bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records) {
     std::vector<uint8_t> payload;
     for (const IndexRecord& r : records) {
         if (!ok) break;
-        if (keep.find(KeyId(RecordKey(r))) == keep.end() || end + r.size > capBytes) continue;
+        if (usedOnly && keep.find(KeyId(RecordKey(r))) == keep.end()) continue;
+        if (end + r.size > capBytes) continue;
         payload.resize(static_cast<size_t>(r.size));
         if (!ReadAt(_dat, r.offset, payload.data(), r.size)) continue;
         IndexRecord n = r;
@@ -370,9 +408,13 @@ bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records) {
         records.clear();
         return true;
     }
-    std::fprintf(stderr, "[DerivedCache] over the cap (%llu MB): kept %llu of %llu entries the last run used\n",
-                 static_cast<unsigned long long>(capBytes >> 20), static_cast<unsigned long long>(kept.size()),
-                 static_cast<unsigned long long>(records.size()));
+    if (usedOnly)
+        std::fprintf(stderr, "[DerivedCache] over the cap (%llu MB): kept %llu of %llu entries the last run used\n",
+                     static_cast<unsigned long long>(capBytes >> 20), static_cast<unsigned long long>(kept.size()),
+                     static_cast<unsigned long long>(records.size()));
+    else
+        std::fprintf(stderr, "[DerivedCache] rewritten without the old copies: %llu entries, %.1f MB\n",
+                     static_cast<unsigned long long>(kept.size()), static_cast<double>(end) / 1048576.0);
     records.swap(kept);
     _dataEnd  = end;
     _indexEnd = kHeaderSize + records.size() * sizeof(IndexRecord);
@@ -403,12 +445,16 @@ void Store::Close() {
     _stats       = Stats();
 }
 
+// The newest record of `key` (the highest offset: the files are append-only). Open leaves one per
+// key; preferring the newest keeps a re-stored entry ahead of its bad copy even if both were held.
 const IndexRecord* Store::Lookup(const Key& key) const {
+    const IndexRecord* best = nullptr;
     auto range = _records.equal_range(key.sourceHash);
     for (auto it = range.first; it != range.second; ++it) {
-        if (SameKey(RecordKey(it->second), key)) return &it->second;
+        if (!SameKey(RecordKey(it->second), key)) continue;
+        if (best == nullptr || it->second.offset > best->offset) best = &it->second;
     }
-    return nullptr;
+    return best;
 }
 
 bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
@@ -442,7 +488,7 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
             std::fprintf(stderr, "[DerivedCache] an entry's bytes do not match its record: re-deriving it\n");
         auto range = _records.equal_range(key.sourceHash);
         for (auto it = range.first; it != range.second; ++it) {
-            if (SameKey(RecordKey(it->second), key)) {
+            if (it->second.offset == rec.offset) {
                 _records.erase(it);
                 break;
             }

@@ -33,7 +33,9 @@
 // the payload. Open walks the index and keeps the longest valid prefix (magic, own hash, contiguous
 // offset, inside the data file), then truncates both files to it: a torn tail from a crash or a kill
 // is dropped. A payload whose bytes do not match its record's hash on a read (the OS wrote the
-// record but not the payload before a power loss) is a miss, and its key is stored again.
+// record but not the payload before a power loss) is a miss, and its key is stored again: a second
+// record for the key. Open keeps only a key's last record and rewrites the files without the earlier
+// ones, so the bad payload is read and rejected once, not at every start.
 //
 // THE CAP. Open with `capBytes`: a payload that would take the data file past it is not stored (one
 // log line). At the next Open a cache past its cap is rewritten keeping only the entries the
@@ -149,7 +151,7 @@ private:
     };
 
     bool LoadIndex(uint64_t capBytes);
-    bool Compact(uint64_t capBytes, std::vector<IndexRecord>& records);
+    bool Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly);
     void ResetFiles();
     void WriterMain();
     void WriteOne(Pending& p);

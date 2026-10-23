@@ -5,7 +5,8 @@
 //   * Hash64 is XXH64 (vectors checked against MSYS2's xxhsum -H1);
 //   * a payload stored, flushed, closed and reopened reads back byte for byte;
 //   * a torn tail (half a record, stray data bytes) is dropped at Open, the entries before it kept;
-//   * a payload whose bytes were damaged is a miss, and is stored again;
+//   * a payload whose bytes were damaged is a miss, and is stored again; the next Open serves the
+//     good copy and rewrites the files without the bad one (a key's newest record wins);
 //   * a new encoder version, or a key equal in hash but not in shape / size, misses;
 //   * the cap refuses a payload past it; an over-cap cache keeps what the last run used;
 //   * a second Store on the same folder gets InUse; a clear request empties the next Open;
@@ -15,6 +16,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -175,6 +177,87 @@ UNIT_TEST(ext_derived_cache_damaged_payload_misses_and_is_restored) {
     s.Flush();
     CHECK(s.Find(MakeKey(9), out));
     CHECK(out == a);
+}
+
+UNIT_TEST(ext_derived_cache_restored_payload_survives_reopen) {
+    TempDir t;
+    const std::vector<uint8_t> a = Payload(800, 11);
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        s.Put(MakeKey(9), a);
+    }
+    {
+        std::fstream f(t.File("derived.dat"), std::ios::binary | std::ios::in | std::ios::out);
+        f.seekp(32 + 100);
+        f.put(static_cast<char>(~a[100]));
+    }
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        std::vector<uint8_t> out;
+        CHECK(!s.Find(MakeKey(9), out));
+        s.Put(MakeKey(9), a);   // a second record for the key; the bad one is still in the files
+        s.Flush();
+        CHECK_EQ(s.BytesOnDisk(), 64ull + 2 * a.size() + 2 * sizeof(IndexRecord));
+    }
+    // The next start serves the good copy, and the files no longer hold the bad one.
+    for (int run = 0; run < 2; ++run) {
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        CHECK_EQ(s.GetStats().entries, 1ull);
+        CHECK_EQ(s.BytesOnDisk(), 64ull + a.size() + sizeof(IndexRecord));
+        std::vector<uint8_t> out;
+        CHECK(s.Find(MakeKey(9), out));
+        CHECK(out == a);
+        CHECK_EQ(s.GetStats().badPayloads, 0ull);
+        CHECK_EQ(s.GetStats().stored, 0ull);
+    }
+}
+
+UNIT_TEST(ext_derived_cache_newest_record_wins_and_old_is_dropped) {
+    TempDir t;
+    const std::vector<uint8_t> a = Payload(600, 12);
+    const std::vector<uint8_t> b = Payload(700, 13);
+    const std::vector<uint8_t> c = Payload(300, 14);
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        s.Put(MakeKey(5), a);
+        s.Put(MakeKey(6), c);
+    }
+    // A second, valid record for key 5 appended by hand (what a re-store leaves), with other bytes.
+    {
+        IndexRecord r = {};
+        r.magic = 0x31454344u;   // "DCE1"
+        const Key k = MakeKey(5);
+        r.producer = k.producer;
+        r.version  = k.version;
+        std::memcpy(r.shape, k.shape, sizeof(r.shape));
+        r.sourceSize  = k.sourceSize;
+        r.sourceHash  = k.sourceHash;
+        r.offset      = 32 + a.size() + c.size();
+        r.size        = b.size();
+        r.payloadHash = Hash64(b.data(), b.size());
+        r.check       = Hash64(&r, offsetof(IndexRecord, check));
+        std::ofstream d(t.File("derived.dat"), std::ios::binary | std::ios::app);
+        d.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
+        std::ofstream i(t.File("derived.idx"), std::ios::binary | std::ios::app);
+        i.write(reinterpret_cast<const char*>(&r), sizeof(r));
+    }
+    Store s;
+    CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    CHECK_EQ(s.GetStats().entries, 2ull);
+    // The Open's rewrite dropped the old record and its bytes: key 6, then key 5's newest.
+    CHECK_EQ(s.BytesOnDisk(), 64ull + c.size() + b.size() + 2 * sizeof(IndexRecord));
+    std::vector<uint8_t> out;
+    CHECK(s.Find(MakeKey(5), out));
+    CHECK(out == b);
+    CHECK(s.Find(MakeKey(6), out));
+    CHECK(out == c);
+    CHECK(!fs::exists(t.File("derived.dat.new")));
+    s.Close();
+    CHECK_EQ(BytesInDir(t.Path()), 64ull + c.size() + b.size() + 2 * sizeof(IndexRecord));
 }
 
 UNIT_TEST(ext_derived_cache_version_and_shape_are_part_of_the_key) {
