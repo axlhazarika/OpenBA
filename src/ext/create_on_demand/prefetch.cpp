@@ -61,6 +61,20 @@ void PrefetchMesh(const Graphics::MeshInstance& instance) {
     }
 }
 
+// Graphics::MeshInstance::_extLevelGathered: the gather (the view's, a shadow pass's) reaches every
+// instance it draws a frame or more before the render thread binds it. An instance whose chosen level's
+// vertex buffer is made is skipped on that one load; otherwise its creates are queued: an instance first
+// seen without a placement prefetch, or one the idle eviction gave back (a re-make). A use that comes
+// before the worker runs the record itself, as before.
+void PrefetchGathered(const Graphics::MeshInstance& instance, int32_t level) {
+    const Graphics::GraphicsMesh* const mesh = instance._mesh.Get();
+    const Graphics::GraphicsMesh::DetailLevel& drawn = mesh->_detailLevels.GetData()[level];
+    // A skinned level keeps its vertices in the skin buffer; its plain one is empty, never made.
+    const Video::VertexBuffer& vertices = drawn._vertexBuffer.size != 0 ? drawn._vertexBuffer : drawn._skinVertexBuffer;
+    if (CreateOnDemandBackend::VertexBufferMade(vertices.platformData)) return;
+    PrefetchMesh(instance);
+}
+
 // Graphics::ParticleInstance::_extParticleAssigned: an emitter gets its particle when its entity is
 // placed or loaded, well before it first emits (a chimney's smoke).
 void PrefetchParticle(const Graphics::Particle& particle) {

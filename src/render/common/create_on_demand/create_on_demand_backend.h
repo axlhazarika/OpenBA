@@ -33,4 +33,9 @@ void Prefetch(const void* companion);
 // when a window opens (the UI's sprite sheets, the cursors).
 void Keep(const void* companion);
 
+// True when a vertex buffer's companion holds its GPU object (made at load, by a prefetch or a use,
+// and not given back since). One load, no lock: the draw gather asks it for every mesh it draws, and
+// a stale answer costs one extra queueing at most.
+bool VertexBufferMade(const void* companion);
+
 }  // namespace CreateOnDemandBackend

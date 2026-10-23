@@ -39,6 +39,7 @@ void Boot() {
     ::Video::ImageBuffer::_extLevelSource = on ? &ReadLevels : nullptr;
     ::Graphics::MeshInstance::_extMeshAssigned = on ? &PrefetchMesh : nullptr;
     ::Graphics::MeshInstance::_extMaterialAssigned = on ? &PrefetchMaterial : nullptr;
+    ::Graphics::MeshInstance::_extLevelGathered = on ? &PrefetchGathered : nullptr;
     ::Graphics::ParticleInstance::_extParticleAssigned = on ? &PrefetchParticle : nullptr;
     ::UI::SpriteSheet::_extLoaded = on ? &KeepSpriteSheet : nullptr;
     ::WorldGeometry::_extMaterialTaken = on ? &PrefetchMaterial : nullptr;

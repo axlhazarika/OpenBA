@@ -20,6 +20,7 @@
 
 #include "compress_ao/bc4_create.h"        // ext.compress_ao: the conversion, at materialize
 #include "dx11_backend_access.h"           // Dx11Device
+#include "VideoDX11Data.h"                 // VertexBufferData::buffer (VertexBufferMade)
 #include "share_gpu_data/share_create.h"   // ext.share_gpu_data: the create-or-share, at materialize
 
 #include <algorithm>
@@ -363,6 +364,10 @@ void Prefetch(const void* companion) {
 void Keep(const void* companion) {
     if (::CreateOnDemand::LazyTable* const t = VideoDX11::CreateOnDemand::g_table.load(std::memory_order_relaxed))
         t->Keep(companion);
+}
+
+bool VertexBufferMade(const void* companion) {
+    return companion == nullptr || static_cast<const VideoDX11::VertexBufferData*>(companion)->buffer != nullptr;
 }
 
 }  // namespace CreateOnDemandBackend
