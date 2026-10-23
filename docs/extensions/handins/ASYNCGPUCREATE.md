@@ -115,6 +115,10 @@ serializer itself is untouched: the deferred path only moves the D3D11 calls, ne
   contract; not done.
 - The worker threads are not registered with the sampler (`DiagThreads`), so a profile does not show
   them.
+- Metal is still "not supported". MTLDevice's resource creation is thread-safe, so a worker needs no
+  device lock there; the work is the backend's own state (`stateMutex`'s buffer bookkeeping, the
+  `ImageBufferData` / buffer members a create writes) and an `Await` before each object's first use,
+  as on DX11.
 - The sampler (1000 and 2000 Hz) hung the boot inside D3D11 device creation in 4 of 8 boots of this
   branch and 1 of 2 of the base exe: the sampler suspends the main thread inside the loader / function-table lock and then calls
   `RtlLookupFunctionEntry`. Diagnostics only; not touched.

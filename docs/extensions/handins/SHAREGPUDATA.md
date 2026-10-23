@@ -2,7 +2,8 @@
 
 > Branch `issue13/dedupe`, based on `issue13/bc4` (`6acdb7902`). Windows only (perf + debug builds,
 > unit, the gate, the resave gate, the MegaMod runs below). Not built: Linux (dxvk-native: the same
-> DX11 code), macOS (Metal: a "not supported" body, see section 5).
+> DX11 code), macOS (Metal: a "not supported" body at the time; the Metal body followed on
+> `issue13/metal`, section 5).
 
 ## 1. The cost
 
@@ -50,8 +51,9 @@ maps shared by building variants.
 - Wiring (DESIGN.md section 3): registry row `share_gpu_data` ("Shared graphics data"),
   `Ext::ShareGpuData::Boot` (registry_boot.cpp), seam `ShareGpuDataBackend::Request` / `Supported`
   (`src/render/common/share_gpu_data/share_gpu_data_backend.h`), DX11 body
-  `src/render/dx11/share_gpu_data/share_create.*`, Metal "not supported"
-  (`src/render/metal/integration.mm`), `Entry_share_gpu_data.png` (`tools/ext_icons/sharegpudata.py`).
+  `src/render/dx11/share_gpu_data/share_create.*`, Metal body
+  `src/render/metal/share_gpu_data/share_create.*` (section 5), `Entry_share_gpu_data.png`
+  (`tools/ext_icons/sharegpudata.py`).
 
 ## 3. Proof
 
@@ -104,8 +106,17 @@ pixels over 24 / 255.
 
 ## 5. Open
 
-- Metal: `ShareGpuDataBackend::Supported()` is false. The same table works there (MTLBuffer /
-  MTLTexture retain / release), keyed the same way.
+- Metal (branch `issue13/metal`, built by CI on macOS arm64, **never run on a Mac**): the same
+  table through `src/render/metal/share_gpu_data/share_create.*`. Shared: a vertex / index buffer
+  created not dynamic and seeded (what D3D11 makes IMMUTABLE), and a kind-2 texture (shader read
+  only) with every mip of every face uploaded, after ext.compress_ao. Key: the device, length +
+  storage mode, or pixel format / type / size / mips / array length / usage / storage mode, and the
+  XXH64 of the uploaded bytes chained with each level's pitch and size. Metal itself could write
+  these objects, so the backend refuses it as D3D11 does: `SetData` does nothing and answers true,
+  `Lock` returns null, `Update` returns false. Lifetimes under ARC: the table's reference is a
+  `CFBridgingRetain` released with `CFBridgingRelease`; each user drops before its strong member lets
+  go (destructors, a re-Create, `Attach*`). `Shutdown` clears the table; `Slot4(false)` prints the
+  summary.
 - The textures' per-object samplers are not shared (D3D11 already returns one state object per
   descriptor).
 - A device lost during the boot's load (retail's own window, deferred) could let the loader insert an
