@@ -7,7 +7,7 @@
 > build (`MegaMod.pkm`, 10,757,625,300 bytes) crashed retail and OpenBA identically; with the row
 > on it boots, starts a new game and shows its content.
 
-Retail entry: `docs/retail_bugs.md` §8. Inventory row F10. Branch `issue13/largepkm` from main
+Retail entry: `docs/retail_bugs.md` §9. Inventory row F11. Branch `issue13/largepkm` from main
 30d98f24c.
 
 ## 1. The format facts (verified on the file, header and index reads only)
@@ -151,7 +151,7 @@ package up to 2 GiB is examined by one `GetFileSizeEx` per mount and read as ret
 | `src/ext/large_packages/` | `large_packages.{h,cpp}` (the hook), `large_packages_unwrap.{h,cpp}` (the rule) |
 | `src/ext/registry.{h,cpp}`, `src/ext/registry_boot.cpp` | the row, `LargePackages::Sync()` |
 | `tests/unit/ext_large_packages_test.cpp`, `tests/unit/sources.cmake`, `tests/unit/ext_registry_test.cpp` | tests |
-| `docs/retail_bugs.md` §8, `docs/extensions/INVENTORY.md` F10, this file | docs |
+| `docs/retail_bugs.md` §9, `docs/extensions/INVENTORY.md` F11, this file | docs |
 
 Overlap: the ReadFile packed arm is shared with block readpath (mapped reads), which takes
 `PackedReadOffset`; nothing else of this row touches another block's files.

@@ -1,7 +1,7 @@
 // ============================================================================
 // src/ext/large_packages/large_packages.h -- fix.large_packages: packages past 2 GiB
 // ============================================================================
-// NOT RETAIL. docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 8.
+// NOT RETAIL. docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 9.
 // The pure rule is large_packages_unwrap.h.
 //
 // WHAT. Retail reads a packed entry at the int32 `baseOffset + cursor` with a

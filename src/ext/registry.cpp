@@ -55,7 +55,17 @@ const Entry kEntries[] = {
       "meet them.",
       0, [](State& s) -> bool& { return s.fix.rock_seat; } },
 
-    // LARGEPKM (docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 8): a mod package
+    // TERRAINRESORT (docs/extensions/handins/TERRAINRESORT.md, docs/retail_bugs.md section 8): a cell
+    // sorted "too steep" is re-sorted once flattening has made the ground under it buildable, after
+    // every flatten and once on a load; a tree, ore or goods pile cleared from steep ground leaves its
+    // cell buildable.
+    // Sim-visible: the healed cells take buildings and trees.
+    { "terrain_resort", Tier::Fix, Class::None, true,
+      "No red squares on flat ground",
+      "Ground stays buildable after a tree on a hill edge is cut, and ground flattened by a road or "
+      "building next to it can be built on again, instead of staying marked as too steep.",
+      0, [](State& s) -> bool& { return s.fix.terrain_resort; } },
+    // LARGEPKM (docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 9): a mod package
     // larger than 2 GiB is read with 64-bit offsets. Only which bytes a packed read fetches changes;
     // packages up to 2 GiB, the mod list and the save are retail's. Applies at the next mount.
     { "large_packages", Tier::Fix, Class::None, true,

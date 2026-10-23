@@ -54,6 +54,7 @@
 #include "Game/PlayerToolManager.h"
 #include "Game/WorkScheduler.h"   // WorkScheduler::Insert (0x1400f88a0)
 #include "Action/PathAvl.h"
+#include "cell_trace.h"   // red square: BANISHED_CELL_TRACE (src/diag/cell_trace.h)
 
 namespace {
 
@@ -164,7 +165,10 @@ void Map::PlaceRoadCell(uint32_t cellIdx,
         if ((terrainFlag & 2) == 0 && (terrainFlag & 1) == 0 &&
             static_cast<int8_t>(tb->field_0x2A) == -1) {
             bool pending = PendingRoad(this, (int)cellIdx);
-            if (!pending) cell->footprintCount = static_cast<uint8_t>(cell->footprintCount + 1);
+            if (!pending) {
+                CellTrace::NoteCount(this, cell, cell->footprintCount, 1, "PlaceRoadCell");
+                cell->footprintCount = static_cast<uint8_t>(cell->footprintCount + 1);
+            }
         }
     }
 

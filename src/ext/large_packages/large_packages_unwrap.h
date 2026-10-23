@@ -2,7 +2,7 @@
 // ============================================================================
 // src/ext/large_packages/large_packages_unwrap.h -- fix.large_packages' pure rule
 // ============================================================================
-// NOT RETAIL (docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 8).
+// NOT RETAIL (docs/extensions/handins/LARGEPKM.md, docs/retail_bugs.md section 9).
 //
 // A .pkg / .pkm index stores each entry's offset as a uint32 (ReadPackfile
 // 0x1800b5de3), and retail reads a packed entry with a 32-bit signed seek

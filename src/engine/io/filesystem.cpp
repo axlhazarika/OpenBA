@@ -356,6 +356,15 @@ int Modification::Find(const System::Filename& path) const {
 // that is a fact about retail, not a gap. Every call allocates a FRESH buffer
 // (unlike GetDataDirectory / GetSourceDirectory, which AddRef a shared one).
 System::Filename FileSystem::GetSaveDirectory() const {
+    // NOT RETAIL: BANISHED_USER_DIR (harness, tools/game_dirs.sh) replaces the
+    // "<Documents>\Banished" folder as a whole, so the override takes the place of
+    // the Format below -- the folder plus retail's trailing separator. Unset, the
+    // retail arm runs unchanged.
+    if (const char* user = Platform::UserDirOverride()) {
+        System::String formatted = System::String::Format("%s\\", user);
+        return System::Filename(formatted);
+    }
+
     System::String docs;
     if (!Platform::DocumentsDir(docs)) {
         System::Error::SetText(

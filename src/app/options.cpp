@@ -99,6 +99,7 @@ void OptionsInit() {
     o.metalStats = On("BANISHED_METAL_STATS");
     o.inputTrace = On("BANISHED_INPUT_TRACE");
     o.background = On("BANISHED_BACKGROUND");
+    o.userDir = Raw("BANISHED_USER_DIR");
 
     // ── harness drivers: menu → game ─────────────────────────────────────────
     o.autostart       = On("BANISHED_AUTOSTART");
@@ -386,6 +387,9 @@ void OptionsInit() {
     o.disasterFrame[3] = Raw("BANISHED_FORCE_INFEST_FRAME");
     o.disasterPeriod[3]= Raw("BANISHED_FORCE_INFEST_PERIOD");
     o.forceSickDisease = Raw("BANISHED_FORCE_SICK_DISEASE");
+
+    o.cellDump  = Raw("BANISHED_CELL_DUMP");
+    o.cellTrace = On("BANISHED_CELL_TRACE");
 
     // The stress town rewrites the run's world setup, so it goes LAST — and it
     // is the only thing in the process that writes the environment.
