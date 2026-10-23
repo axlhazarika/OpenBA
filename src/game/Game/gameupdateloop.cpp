@@ -60,6 +60,7 @@
 #include "math/Math.h"
 #include "system/String.h"
 #include "system/Filename.h"
+#include "showroom.h"         // BANISHED_SHOWROOM shot sequence (src/diag/)
 #include "stress_harness.h"   // BANISHED_STRESS Update/Draw brackets (standalone/)
 #include "ext/render_culling/render_culling.h" // EXT SEAM (NOT RETAIL, docs/extensions/handins/PERFXEXT.md): ext.render_culling / ext.anim_batch (PerfX)
 #include "ext/walk_batch/walk_batch.h" // EXT SEAM (NOT RETAIL, docs/extensions/handins/WALKBATCH.md, WALKGRID.md): ext.walk_batch (A) / ext.walk_batch_grid (B)
@@ -577,6 +578,11 @@ bool GameUpdateLoop::Update(const System::Time& timeRef) {
     g_samplerTag = 1;   // [Sampler] inside Update
     struct SamplerTagReset { ~SamplerTagReset() { g_samplerTag = 0; } } samplerTagReset;
     ApplyForceSpeed(m_toolManager);
+    // [SHOWROOM] hold the world paused while the showroom frames and shoots its buildings,
+    // so every shot sees the same season, weather and sun.
+    if (Showroom_WantsPause()) {
+        m_toolManager->paused = true;
+    }
     StressHarness_UpdateBegin(s_frameNum);   // [STRESS] no-op unless BANISHED_STRESS
     Ext::RenderCulling::BeginFrame(m_renderer);      // EXT SEAM (NOT RETAIL, docs/extensions/handins/PERFXEXT.md): ext.render_culling / ext.anim_batch read once per frame (frustum, pause flush)
     Ext::WalkBatch::BeginFrame();            // EXT SEAM (NOT RETAIL, docs/extensions/handins/WALKBATCH.md, WALKGRID.md): ext.walk_batch (A) / ext.walk_batch_grid (B) read once per frame
@@ -1172,6 +1178,11 @@ post_simulation:
                 m_quickSavePressed = 1;
                 std::fprintf(stderr, "[Screenshot] BANISHED_SCREENSHOT_AT=%d reached at frame %d"
                                      " -- raising the TakeScreenshot request bit\n", ssAt, ssFrame);
+            }
+            // BANISHED_SHOWROOM (src/diag/showroom.h): the same request bit, once per
+            // building, after the camera pin has framed it.
+            if (Showroom_Tick()) {
+                m_quickSavePressed = 1;
             }
         }
 

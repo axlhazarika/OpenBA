@@ -36,6 +36,7 @@
 #include "Game/PlayerToolManager.h"   // the camera bodies' class (B.4 GAME-a)
 #include "Game/PlayerController.h"    // m_playerController's class
 #include "options.h"
+#include "showroom.h"          // BANISHED_SHOWROOM camera focus (src/diag/)
 #include "Game/exe_bodies.h"   // Reimpl_MapGetTerrainPos
 #include <cstdint>
 #include <cstring>
@@ -321,6 +322,22 @@ void PlayerToolManager::UpdateCamera(int inputFlag, int64_t timeTicks) {
                 }
                 if (!s_pin) s_pin = -1;   // not ready yet — retry next tick
             }
+        }
+    }
+    // BANISHED_SHOWROOM (src/diag/showroom.h): the pin follows the showroom's shot sequence,
+    // one placed building at a time.
+    {
+        float focusX = 0.0f;
+        float focusY = 0.0f;
+        float focusDist = 0.0f;
+        float focusYaw = 0.0f;
+        if (Showroom_CameraFocus(&focusX, &focusY, &focusDist, &focusYaw)) {
+            s_pin = 1;
+            s_pinX = focusX;
+            s_pinY = focusY;
+            s_pinDist = focusDist;
+            s_pinYaw = focusYaw;
+            s_pinHasYaw = true;
         }
     }
     if (s_pin) {

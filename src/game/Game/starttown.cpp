@@ -41,6 +41,7 @@
 #include "Component/pickingcomponent_funcs.h"   // PickingComponent_RegisterMesh (mesh-precise picking)
 #include "Component/spawncomponent_funcs.h"     // SpawnComponent_InitialSpawn (5cc0 seed)
 #include "stress_harness.h"                     // BANISHED_STRESS targets (standalone/)
+#include "showroom.h"                           // BANISHED_SHOWROOM list (src/diag/)
 #include <chrono>
 #include "object/Internal.h"   // ENDGAME B.3.3 step 6B
 #include "object/TypeInfo.h"   // caller batch CB6: Object::Base::Type()
@@ -1056,7 +1057,9 @@ static double StressNowMs() {
 static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
     const int target = StressHarness_TargetCitizens();
     const int sets   = StressHarness_Sets();
-    if (target <= 0 && sets <= 0) return 0;
+    // BANISHED_SHOWROOM (src/diag/showroom.h): the listed templates, spaced for the camera.
+    const bool showroom = Showroom_Enabled();
+    if (target <= 0 && sets <= 0 && !showroom) return 0;
     if (!game || !g_stPlaceStructure) {
         fprintf(stderr, "[Stress::place] no map/placeStructure — nothing placed\n");
         return 0;
@@ -1233,10 +1236,14 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
         }
         return false;
     };
+    // Free ring kept around every footprint: the 1-tile walk lane, or a wider one in the
+    // showroom so each building is framed without its neighbours in the shot.
+    const int margin = showroom ? 4 : 1;
     auto fits = [&](int tx, int ty, int w, int h, int doorDx, int doorDy) -> bool {
-        if (tx < 2 || ty < 2 || tx + w > mapW - 2 || ty + h > mapW - 2) return false;
-        for (int yy = ty - 1; yy <= ty + h; ++yy)
-            for (int xx = tx - 1; xx <= tx + w; ++xx)
+        const int edge = margin + 1;
+        if (tx < edge || ty < edge || tx + w > mapW - edge || ty + h > mapW - edge) return false;
+        for (int yy = ty - margin; yy < ty + h + margin; ++yy)
+            for (int xx = tx - margin; xx < tx + w + margin; ++xx)
                 if (occ[(size_t)yy * mapW + xx]) return false;
         for (int yy = 0; yy < h; ++yy)
             for (int xx = 0; xx < w; ++xx)
@@ -1263,6 +1270,7 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
     struct Tally { const char* tag; int n; };
     std::vector<Tally> tally;
     int placed = 0, failed = 0, houses = 0;
+    int lastX = 0, lastY = 0, lastW = 0, lastH = 0;   // the footprint the last place() picked
 
     auto place = [&](const StressBuilding& b) -> bool {
         ComponentDescription* tmpl = ResolveTemplateByPath(b.path);
@@ -1297,6 +1305,10 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
                     b.tag, w, h, ringMax);
             ++failed; return false;
         }
+        lastX = bestX;
+        lastY = bestY;
+        lastW = w;
+        lastH = h;
         ComponentEntity* ent = g_stPlaceStructure(tmpl, bestX, bestY, 0, w, h, /*isDemoFoundation=*/false, -1);
         g_stOccupied.push_back({ bestX, bestY, w, h });
         mark(bestX, bestY, w, h);
@@ -1388,6 +1400,31 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
             placeHouses(perSet);
         }
         placeHouses(wantHouses - housesQueued);
+    }
+
+    // The showroom: each listed template once, in list order, outward from the town.
+    // Only templates with a CreatePlacedDescription (a footprint the placement tool
+    // stamps) are placed; drag areas and non-building templates are reported and skipped.
+    if (showroom) {
+        for (int i = 0; i < Showroom_Count(); ++i) {
+            const char* path = Showroom_Path(i);
+            ComponentDescription* tmpl = ResolveTemplateByPath(path);
+            if (!tmpl) {
+                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, "template did not resolve");
+                continue;
+            }
+            const CreatePlacedDescription* cpd = FindDescriptionOnTemplate<CreatePlacedDescription>(tmpl, tidCPD);
+            if (!cpd || cpd->_i44 <= 0 || cpd->_i48 <= 0) {
+                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, "no CreatePlacedDescription footprint");
+                continue;
+            }
+            const StressBuilding b = { path, Showroom_Name(i), 0, 0 };
+            if (!place(b)) {
+                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, "no free footprint, or placement returned null");
+                continue;
+            }
+            Showroom_NotePlaced(i, true, lastX, lastY, lastW, lastH, mapW, nullptr);
+        }
     }
 
     // Hostels in the set also carry a ResidenceComponent and therefore also count as
@@ -3140,7 +3177,8 @@ static int StartTown_SpawnStructures(MapGenerator* startConfig, EntityList* enti
     }
 
     // -- BANISHED_STRESS -- the stress town, LAST so it fills around everything above --
-    if (StressHarness_Enabled()) {
+    // (BANISHED_SHOWROOM shares its siting.)
+    if (StressHarness_Enabled() || Showroom_Enabled()) {
         const int cx = (bbX0 + bbX1) / 2, cy = (bbY0 + bbY1) / 2;
         spawned += StartTown_StressSpawnStructures(game, cx, cy);
     }
