@@ -448,8 +448,10 @@ void DumpLoadCounters() {
 namespace RtObject {
 void DumpAddCounters();
 void DumpSaveTextCounters();
+void DumpVisitCounters();   // block VISITPASS, external_visit.cpp
 }
 void RtObjectExternalLoadInstallCounters() {
+    std::atexit(&RtObject::DumpVisitCounters);
     std::atexit(&RtObject::DumpSaveTextCounters);
     std::atexit(&RtObject::DumpAddCounters);
     std::atexit(&RtObject::DumpLoadCounters);

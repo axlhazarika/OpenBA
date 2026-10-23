@@ -75,6 +75,7 @@
 
 #include "external_set.h"
 #include "collection/fold_index.h"   // block PATHINDEX
+#include "collection/ptr_index.h"    // block VISITPASS
 #include "system/string_internal.h"
 #include "system/MemoryAllocator.h"   // B3R: MemAlloc / MemFree / FreeLockedIgnoringSelf
 
@@ -134,6 +135,17 @@ Collection::FoldIndex& ResIndex() {
     static Collection::FoldIndex* const index = new Collection::FoldIndex(&ResourceNodeKey);
     return *index;
 }
+// NOT RETAIL (block VISITPASS): which node holds an External (ptr_index.h); the
+// visit pass (external_visit.cpp) reads it. Kept in step at the same three
+// points as the fold index, and never destroyed for the same reason.
+Collection::PtrIndex& VisitIdx() {
+    static Collection::PtrIndex* const index = new Collection::PtrIndex();
+    return *index;
+}
+void IndexesInsert(const Set* set, Node* fresh) {
+    ResIndex().Insert(set, fresh);
+    VisitIdx().Insert(set, fresh, fresh != nullptr ? Elem(fresh)->external : nullptr);
+}
 }  // namespace
 
 bool IndexedFind(const void* set, int32_t count, const char* key, Node** out) {
@@ -146,6 +158,25 @@ bool IndexedFind(const void* set, int32_t count, const char* key, Node** out) {
 
 void IndexClear(const void* set) {
     ResIndex().Clear(set);
+    VisitIdx().Clear(set);
+}
+
+bool VisitIndexFind(const void* set, int32_t count, const ::Object::External* ext, Node** out, bool* verified) {
+    const void* node = nullptr;
+    if (!VisitIdx().Find(set, count, ext, &node, verified))
+        return false;
+    *out = const_cast<Node*>(static_cast<const Node*>(node));
+    return true;
+}
+
+bool VisitIndexSetVerified(const void* set, const ::Object::External* ext) {
+    return VisitIdx().SetFlag(set, ext, true);
+}
+
+void VisitIndexStats(uint64_t* size, bool* broken, uint64_t* duplicates) {
+    *size = VisitIdx().Size();
+    *broken = VisitIdx().Broken();
+    *duplicates = VisitIdx().Duplicates();
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +465,7 @@ Node** InsertCore(Set* set, Node** out, const ResourceEntry* pair) {
         Node* fresh = AllocNode(set, pair, nullptr);
         set->count += 1;               // 0x18002ce91, BEFORE the root store
         set->root = fresh;
-        ResIndex().Insert(set, fresh);   // NOT RETAIL (block PATHINDEX)
+        IndexesInsert(set, fresh);   // NOT RETAIL (blocks PATHINDEX, VISITPASS)
         *out = fresh;
         return out;
     }
@@ -449,7 +480,7 @@ Node** InsertCore(Set* set, Node** out, const ResourceEntry* pair) {
                 n->left = fresh;
                 rtresset::Retrace(set, &slot);   // 0x18002cf17, slot still holds `n`
                 set->count += 1;       // 0x18002cf1c, AFTER the retrace
-                ResIndex().Insert(set, fresh);   // NOT RETAIL (block PATHINDEX)
+                IndexesInsert(set, fresh);   // NOT RETAIL (blocks PATHINDEX, VISITPASS)
                 *out = fresh;
                 return out;
             }
@@ -464,7 +495,7 @@ Node** InsertCore(Set* set, Node** out, const ResourceEntry* pair) {
                 n->right = fresh;
                 rtresset::Retrace(set, &slot);
                 set->count += 1;
-                ResIndex().Insert(set, fresh);   // NOT RETAIL (block PATHINDEX)
+                IndexesInsert(set, fresh);   // NOT RETAIL (blocks PATHINDEX, VISITPASS)
                 *out = fresh;
                 return out;
             }
@@ -550,6 +581,7 @@ void FreeEntryNode(void* ignored, Node* node) {
 // ---------------------------------------------------------------------------
 void Erase(Set* set, Node* z) {
     ResIndex().Erase(set, z);               // NOT RETAIL (block PATHINDEX): the key is still live
+    VisitIdx().Erase(set, z, Elem(z)->external);   // NOT RETAIL (block VISITPASS)
     Node* retraceFromParent = z->parent;    // [RSP+0x50], "local A"
     set->count -= 1;                        // 0x18002cf85, before anything else
 
