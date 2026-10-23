@@ -510,26 +510,25 @@ void ImageBufferData::AttachDepthBuffer() {
 // re-points the pitches into the copy and hands the job over. The worker makes the texture, the SRV
 // only if the texture succeeded and the sampler always: slot 3's order and failure state. The
 // sampler's descriptor is built HERE, from the Configuration / Device values slot 3 would have read.
-// `bc4Offsets` (NOT RETAIL, ext.compress_ao): non-null when the subresources point at BC4 levels
-// (level i is bc4Offsets[i + 1] - bc4Offsets[i] bytes), which are copied instead of the R8 ones.
+// `encodeBc4` (NOT RETAIL, ext.compress_ao): the R8 levels are copied as they are and the job turns
+// them into BC4 (the cache lookup or the encode) on its worker before the create, so neither runs on
+// the loader.
 static void CreateTextureDeferred(ImageBufferData* self,
                                   const Collection::Array<Collection::Array<uint8_t> >* levels,
                                   const D3D11_TEXTURE2D_DESC& desc, SubresArray* subres,
-                                  const std::vector<size_t>* bc4Offsets) {
+                                  bool encodeBc4) {
     ::Video::ImageBuffer* const ib = self->_owner;
 
     uint64_t total = 0;
     for (int i = 0; i < levels->GetSize(); ++i)
-        total += bc4Offsets != nullptr ? (*bc4Offsets)[i + 1] - (*bc4Offsets)[i]
-                                       : static_cast<uint64_t>(levels->GetData()[i].GetSize());
+        total += static_cast<uint64_t>(levels->GetData()[i].GetSize());
 
     uint8_t* const bytes = new uint8_t[total > 0 ? total : 1];
     D3D11_SUBRESOURCE_DATA* copy = new D3D11_SUBRESOURCE_DATA[subres->count > 0 ? subres->count : 1];
     uint64_t at = 0;
     for (int i = 0; i < subres->count; ++i) {
         const Collection::Array<uint8_t>& level = levels->GetData()[i];
-        const uint64_t n = bc4Offsets != nullptr ? (*bc4Offsets)[i + 1] - (*bc4Offsets)[i]
-                                                 : static_cast<uint64_t>(level.GetSize());
+        const uint64_t n = static_cast<uint64_t>(level.GetSize());
         if (n != 0) std::memcpy(bytes + at, subres->data[i].pSysMem, n);
         copy[i]         = subres->data[i];
         copy[i].pSysMem = bytes + at;
@@ -553,7 +552,8 @@ static void CreateTextureDeferred(ImageBufferData* self,
     }
 
     AsyncCreate::EnqueueTexture(self, Dx11Device(), desc, copy, subres->count, bytes, total, srvDescPtr,
-                                SamplerDescFor(ib), &self->texture, &self->shaderResourceView,
+                                SamplerDescFor(ib), encodeBc4 ? static_cast<uint32_t>(ib->_format) : 0,
+                                &self->texture, &self->shaderResourceView,
                                 &self->sampler);
 }
 
@@ -635,11 +635,15 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     // texture seeded from a resource file (the baked AO maps), every level present and the top level
     // a multiple of 4 each way, is created as BC4_UNORM from its levels encoded (or found in the
     // derived cache). ImageBuffer keeps format 4; only the D3D format and the pitches change.
+    // Inside an armed loader bracket the conversion moves to the deferred create's worker (below).
     std::vector<uint8_t> bc4;
     std::vector<size_t> bc4Offsets;
     bool asBc4 = false;
-    if (CompressAo::Requested() && levels != nullptr && kind == 2 && ib->_format == 4 && ib->_dimension == 0 &&
-        (width & 3) == 0 && (height & 3) == 0 && levels->GetSize() == ib->GetLevelCount()) {
+    const bool bc4Candidate = CompressAo::Requested() && levels != nullptr && kind == 2 && ib->_format == 4 &&
+                              ib->_dimension == 0 && (width & 3) == 0 && (height & 3) == 0 &&
+                              levels->GetSize() == ib->GetLevelCount();
+    const bool deferred = AsyncCreate::Deferring() && levels != nullptr && kind == 2;
+    if (bc4Candidate && !deferred) {
         std::vector<::CompressAo::Level> in(static_cast<size_t>(levels->GetSize()));
         for (int i = 0; i < levels->GetSize(); ++i) {
             in[i].data = levels->GetData()[i].GetData();
@@ -659,8 +663,8 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/ASYNCGPUCREATE.md): inside an armed loader
     // bracket a plain texture seeded from a resource file (usage 2: no render target, no depth, not
     // dynamic, so no RTV / DSV) is created on a worker, from a copy of its level bytes.
-    if (AsyncCreate::Deferring() && levels != nullptr && kind == 2) {
-        CreateTextureDeferred(this, levels, desc, &subres, asBc4 ? &bc4Offsets : nullptr);
+    if (deferred) {
+        CreateTextureDeferred(this, levels, desc, &subres, bc4Candidate);
         return true;
     }
 

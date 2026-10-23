@@ -19,6 +19,7 @@
 
 #include "dx11_backend_access.h"   // Dx11Device
 #include "share_gpu_data/share_create.h"   // NOT RETAIL: ext.share_gpu_data (the create-or-share)
+#include "compress_ao/bc4_create.h"        // NOT RETAIL: ext.compress_ao (the conversion on the worker)
 #include "system/MemoryAllocator.h"
 
 #include <algorithm>
@@ -60,6 +61,7 @@ struct Job {
     bool                            hasSrvDesc;
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
     D3D11_SAMPLER_DESC              samplerDesc;
+    uint32_t                        bc4SourceFormat;   // non-zero: convert the R8 levels first
     ID3D11Texture2D**               outTexture;
     ID3D11ShaderResourceView**      outSrv;
     ID3D11SamplerState**            outSampler;
@@ -100,6 +102,11 @@ void Run(Job& j) {
                                                         : j.texBytes + j.bytes;
             sizes[static_cast<size_t>(i)] = static_cast<uint64_t>(next - at);
         }
+        // ext.compress_ao: the cache lookup or the encode, here instead of on the loader. `bc4` holds
+        // the converted levels until the create has copied them.
+        std::vector<uint8_t> bc4;
+        if (j.bc4SourceFormat != 0)
+            CompressAo::ConvertForCreate(&j.texDesc, j.subres, j.subresCount, &sizes, j.bc4SourceFormat, &bc4);
         ShareGpuData::CreateTexture(j.dev, j.texDesc, j.subres, j.subresCount, sizes.data(),
                                     j.hasSrvDesc ? &j.srvDesc : nullptr, j.outTexture, j.outSrv);
         j.dev->CreateSamplerState(&j.samplerDesc, j.outSampler);
@@ -228,7 +235,7 @@ void EnqueueBuffer(const void* obj, ID3D11Device* dev, const D3D11_BUFFER_DESC& 
 void EnqueueTexture(const void* obj, ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& desc,
                     D3D11_SUBRESOURCE_DATA* subres, int subresCount, uint8_t* bytes, uint64_t byteCount,
                     const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDesc, const D3D11_SAMPLER_DESC& samplerDesc,
-                    ID3D11Texture2D** outTexture, ID3D11ShaderResourceView** outSrv,
+                    uint32_t bc4SourceFormat, ID3D11Texture2D** outTexture, ID3D11ShaderResourceView** outSrv,
                     ID3D11SamplerState** outSampler) {
     Job j = {};
     j.kind        = JobKind::Texture;
@@ -242,6 +249,7 @@ void EnqueueTexture(const void* obj, ID3D11Device* dev, const D3D11_TEXTURE2D_DE
     j.hasSrvDesc  = srvDesc != nullptr;
     if (srvDesc != nullptr) j.srvDesc = *srvDesc;
     j.samplerDesc = samplerDesc;
+    j.bc4SourceFormat = bc4SourceFormat;
     j.outTexture  = outTexture;
     j.outSrv      = outSrv;
     j.outSampler  = outSampler;

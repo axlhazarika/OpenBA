@@ -6,6 +6,7 @@
 #include "compress_ao/bc4_create.h"
 
 #include "compress_ao/bc4_chain.h"
+#include "bc4/bc4.h"
 #include "compress_ao/compress_ao_backend.h"
 
 #include <atomic>
@@ -20,6 +21,28 @@ std::atomic<bool> g_requested{false};
 
 bool Requested() {
     return g_requested.load(std::memory_order_relaxed);
+}
+
+bool ConvertForCreate(D3D11_TEXTURE2D_DESC* desc, D3D11_SUBRESOURCE_DATA* subres, int count,
+                      std::vector<uint64_t>* sizes, uint32_t sourceFormat, std::vector<uint8_t>* bc4) {
+    if (subres == nullptr || count <= 0) return false;
+    std::vector<::CompressAo::Level> in(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        in[i].data = static_cast<const uint8_t*>(subres[i].pSysMem);
+        in[i].size = static_cast<int64_t>((*sizes)[i]);
+    }
+    const int width  = static_cast<int>(desc->Width);
+    const int height = static_cast<int>(desc->Height);
+    std::vector<size_t> offsets;
+    if (!::CompressAo::Encode(in.data(), count, width, height, sourceFormat, bc4, &offsets)) return false;
+    desc->Format = DXGI_FORMAT_BC4_UNORM;
+    for (int i = 0; i < count; ++i) {
+        const int levelWidth = (width >> i) > 0 ? (width >> i) : 1;
+        subres[i].pSysMem     = bc4->data() + offsets[i];
+        subres[i].SysMemPitch = static_cast<UINT>(Bc4::BlockRowPitch(levelWidth));
+        (*sizes)[i]           = offsets[i + 1] - offsets[i];
+    }
+    return true;
 }
 
 }  // namespace CompressAo
