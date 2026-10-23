@@ -99,6 +99,7 @@ void OptionsInit() {
     o.metalStats = On("BANISHED_METAL_STATS");
     o.inputTrace = On("BANISHED_INPUT_TRACE");
     o.background = On("BANISHED_BACKGROUND");
+    o.userDir = Raw("BANISHED_USER_DIR");
 
     // ── harness drivers: menu → game ─────────────────────────────────────────
     o.autostart       = On("BANISHED_AUTOSTART");

@@ -43,6 +43,11 @@ struct Options {
                                         //   --background sets it; the launcher scripts of the packaging PR also set it)
     bool metalStats = false;            // BANISHED_METAL_STATS: Metal allocation / frame diagnostics (tools/macos/handtest/run_handtest.sh sets it)
 
+    // ── harness: a second game directory (tools/game_dirs.sh) ─────────────
+    const char* userDir = nullptr;      // BANISHED_USER_DIR: replaces "<Documents>\Banished" AS A WHOLE (the directory itself
+                                        //   holds settings.cfg, Save\, Cache\); tools/game_dirs.sh sets it for the functional
+                                        //   dir. Handed to Platform::SetUserDirOverride by main.cpp; nothing else reads it.
+
     // ── harness drivers: menu → game (src/diag/autostart.cpp) ──────────────
     bool        autostart            = false;  // Makefile sa-run, tools/cutover_run.sh, perf/mintsel, CLAUDE.md
     int         autostartFrames      = 0;      //   numeric value > 1 overrides the 60-frame menu settle; 0 = default
