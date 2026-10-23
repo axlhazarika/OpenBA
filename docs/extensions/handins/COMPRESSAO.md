@@ -86,8 +86,9 @@ sampled every 2 s, "in game" = the median of the last 30 s of in-game + 60 s):
 - Metal: `CompressAoBackend::Supported()` is false; its texture create takes R8 levels as they are.
   A BC4 path there is `MTLPixelFormatBC4_RUnormalized` from the same `bc4_chain` output.
 - Full-disk behaviour is covered by code review only (no test fills a disk).
-- The first start after a mod change still pays the encode on the loader (~5 s on 8 workers);
-  moving it behind ext.async_gpu_create's deferred create is possible later.
+- Done on `issue13/dedupe` (SHAREGPUDATA.md section 4): inside the async loader bracket the
+  conversion runs on the create worker; a cold start's big load went 16.8 -> 12.8 s, level with a
+  warm one.
 - The Enhanced tab row (our text + `SharedElements.rsc:buttonApply` with our caption) loads and its
   elements are found (`[DerivedCache] Enhanced tab: text=.. button=..`, `tabs=5 entries=5`, Options
   opened with `BANISHED_AUTOMENU_BUTTON=4`); its look and the click were not checked on screen.
