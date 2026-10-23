@@ -288,6 +288,16 @@ const Entry kEntries[] = {
       "Prepares a model's graphics when the game first shows it instead of at start-up: much less "
       "memory with large mods. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.create_on_demand; } },
+    // STREAMCACHE (docs/extensions/handins/STREAMCACHE.md, issue #13): the part of each compiled
+    // resource a load reads (all of a small one; a mesh's or texture's header and size fields when
+    // create_on_demand skips the payloads) is kept decoded in the derived-data cache and read from
+    // there at the next start, instead of through the compressed stream. Read once at boot (next
+    // start). ON by default, like the other derived-cache rows.
+    { "stream_cache", Tier::Extension, Class::A, true,
+      "Cache decoded resources",
+      "Keeps the small part of every resource file the game reads at start-up decoded on disk "
+      "(in the cache folder), so the next start skips the decompression. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.stream_cache; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

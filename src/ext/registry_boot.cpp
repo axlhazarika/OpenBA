@@ -25,6 +25,7 @@
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
 #include "ext/share_gpu_data/share_gpu_data.h"   // ext.share_gpu_data: the backend's request, at boot
 #include "ext/create_on_demand/create_on_demand.h"   // ext.create_on_demand: the backend's request + seams, at boot
+#include "ext/stream_cache/stream_cache.h"           // ext.stream_cache: the resource-record seams, at boot
 #include "ext/resources/text_provider.h"        // the Extensions dialog / Enhanced tab resources from the exe's text (KITFREE)
 #include "rsc_text_check.h"                      // src/diag: the kit cross-check, /rsccheck:1 on the command line
 #include "ext/resources/font_provider.h"         // KITFREE RSCFONT: ext.sharp_ui's font variants, provided at run time
@@ -185,6 +186,10 @@ void InitFromSettings() {
     // before the boot's first load (src/render/common/create_on_demand/). Off under the faithful
     // profile (the row is off).
     Ext::CreateOnDemand::Boot();
+    // ext.stream_cache (class A, next start): the resource-record seams and the derived cache, once,
+    // before the boot's first load; after create_on_demand, whose value the records are keyed on.
+    // Off under the faithful profile (the row is off).
+    Ext::StreamCache::Boot();
     // The extension resources built in the exe (docs/extensions/KITFREE.md): the
     // providers register here, never under a COMMAND-LINE faithful profile
     // (`/profile:faithful`: the gate run, no Extensions button, no Enhanced tab,

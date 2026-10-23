@@ -104,6 +104,7 @@ struct Extensions {
     bool compress_ao = false; // class A, next start: src/ext/compress_ao/, backend seam CompressAoBackend + the derived cache src/ext/derived_cache/ (docs/extensions/handins/COMPRESSAO.md)
     bool share_gpu_data = false; // class A, next start: src/ext/share_gpu_data/, backend seam ShareGpuDataBackend (docs/extensions/handins/SHAREGPUDATA.md)
     bool create_on_demand = false; // class A, next start: src/ext/create_on_demand/, backend seam CreateOnDemandBackend + seams IO::FileSystem::_extHandleClosing, Video::ImageBuffer::_extLevelSource, Graphics::MeshInstance::_extMeshAssigned (docs/extensions/handins/CREATEONDEMAND.md)
+    bool stream_cache = false; // class A, next start: src/ext/stream_cache/, seams Object::ExternalFactory::_extLoadBegin/_extLoadEnd, IO::CompressedStream::_extReadTap, Engine::LoaderLoop::_extLoadDone, CreateOnDemand::g_altLocate/g_altSkip + the derived cache (docs/extensions/handins/STREAMCACHE.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.

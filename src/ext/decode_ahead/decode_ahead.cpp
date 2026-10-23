@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <thread>
 
 #include "ext/decode_ahead/block_cache.h"
@@ -81,6 +82,17 @@ bool Hook(IO::CompressedStream& cs, int32_t point, int32_t blk, uint8_t* dst) {
 }  // namespace
 
 void Sync() {
+    if (Ext().decode_ahead && Ext().create_on_demand) {
+        // With the payloads skipped (docs/extensions/handins/STREAMCACHE.md section 2) a resource
+        // stream is read in its header block and in the block each skipped payload ends in: the
+        // kAhead blocks queued at the header are mostly never wanted, and the one that is waits in
+        // the queue behind them. Sampled on a MegaMod boot: 9% of the loader thread waiting for its
+        // own block, 19% of the blocks served. Nothing to run ahead of: the seam stays null.
+        ::IO::CompressedStream::_extDecodeAhead = nullptr;
+        std::fprintf(stderr, "[DecodeAhead] off while ext.create_on_demand is on: the loader reads only the "
+                     "blocks around the payloads it skips\n");
+        return;
+    }
     if (Ext().decode_ahead) {
         if (g_cache == nullptr) g_cache = new BlockCache(Workers(), kMaxJobs, &::System::Compression::Decompress);
         ::IO::CompressedStream::_extDecodeAhead = &Hook;

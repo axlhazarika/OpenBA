@@ -19,7 +19,10 @@
 
 namespace Ext { namespace DecodeAhead {
 
-// The seam follows Ext().decode_ahead (boot only: a toggle takes effect at the next start).
+// The seam follows Ext().decode_ahead (boot only: a toggle takes effect at the next start). With
+// ext.create_on_demand on as well the seam stays null (one [DecodeAhead] line says so): the loader
+// then reads only the blocks around the payloads it skips, and a block queued ahead is a block the
+// loader waits for (docs/extensions/handins/STREAMCACHE.md section 2).
 void Sync();
 
 }}  // namespace Ext::DecodeAhead

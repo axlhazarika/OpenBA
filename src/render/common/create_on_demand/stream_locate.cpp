@@ -15,9 +15,13 @@
 
 namespace CreateOnDemand {
 
+AltLocateFn g_altLocate = nullptr;
+AltSkipFn   g_altSkip   = nullptr;
+
 bool Locate(IO::Stream* stream, int32_t len, Locator* out) {
     IO::CompressedStream* const cs = dynamic_cast<IO::CompressedStream*>(stream);
-    if (cs == nullptr || cs->GetDirection() != IO::kReading || len < 0) return false;
+    if (cs == nullptr) return g_altLocate != nullptr && g_altLocate(stream, len, out);
+    if (cs->GetDirection() != IO::kReading || len < 0) return false;
     IO::FileStream* const fs = dynamic_cast<IO::FileStream*>(cs->_source);
     IO::FileSystem* const sys = IO::FileSystem::_singleton;
     if (fs == nullptr || sys == nullptr) return false;
@@ -49,6 +53,7 @@ bool Locate(IO::Stream* stream, int32_t len, Locator* out) {
 }
 
 void Skip(IO::Stream* stream, int32_t len) {
+    if (g_altSkip != nullptr && g_altSkip(stream, len)) return;
     IO::CompressedStream* const cs = static_cast<IO::CompressedStream*>(stream);
     cs->_position += len;
 }

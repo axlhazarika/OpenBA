@@ -415,6 +415,8 @@ namespace IO {
 
 // EXT SEAM (NOT RETAIL, docs/extensions/handins/DECODEAHEAD.md): ext.decode_ahead (Stream.h).
 CompressedStream::ExtDecodeAheadFn CompressedStream::_extDecodeAhead = nullptr;
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): ext.stream_cache (Stream.h).
+CompressedStream::ExtReadTapFn CompressedStream::_extReadTap = nullptr;
 
 // ?Read@CompressedStream@IO@@UEAA_NHPEAX@Z                   retail 0x1800aa780
 //   while (n > 0) {
@@ -428,9 +430,14 @@ CompressedStream::ExtDecodeAheadFn CompressedStream::_extDecodeAhead = nullptr;
 bool CompressedStream::Read(int n, void* dst) {
 
     uint8_t* out = static_cast<uint8_t*>(dst);          // CAST-OK: byte_io
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): what this read started at,
+    // for the tap below. Reads nothing retail does not read.
+    const int32_t tapPos = _position;
+    const int32_t tapN   = n;
 
     while (n > 0) {                                     // 1800aa7a2 / 1800aa806
         if (!SetWindow(_position)) {                    // 1800aa7b6
+            if (_extReadTap != nullptr) _extReadTap(*this, tapPos, tapN, dst, false);
             return false;                               // 1800aa825
         }
         const RtIo::CompressedStreamWindow* const w =
@@ -445,6 +452,7 @@ bool CompressedStream::Read(int n, void* dst) {
         out += chunk;                                   // 1800aa801
     }
 
+    if (_extReadTap != nullptr) _extReadTap(*this, tapPos, tapN, dst, true);   // EXT SEAM (STREAMCACHE)
     return true;                                        // 1800aa808
 }
 
@@ -510,6 +518,10 @@ void CompressedStream::ReadArray(int count, int elemSize, void* dst) {
                     const int64_t bytes = m * elemSize;
                     std::memcpy(out, w.buffer + (pos - start), static_cast<size_t>(bytes));
                     _position = static_cast<int32_t>(pos + bytes);
+                    // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): the batched copy,
+                    // as the m Reads it stands for would each have been tapped.
+                    if (_extReadTap != nullptr)
+                        _extReadTap(*this, static_cast<int32_t>(pos), static_cast<int32_t>(bytes), out, true);
                     out += bytes;
                     i += static_cast<int32_t>(m);
                     continue;
