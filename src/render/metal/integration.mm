@@ -15,6 +15,7 @@
 #include "better_trees/foliage_aa_backend.h"
 #include "better_trees/billboard_shadow_backend.h"
 #include "async_gpu_create/async_gpu_create_backend.h"
+#include "compress_ao/compress_ao_backend.h"
 #include "draw_batch/smoke_vs_backend.h"
 #include "ext/render_pipe/finish_split.h"
 #include "graphics/renderer_ext_ao.h"
@@ -82,6 +83,22 @@ bool Supported() {
 }
 
 }  // namespace AsyncGpuCreateBackend
+
+// ext.compress_ao: the Metal backend does not create BC4 textures from encoded levels yet (its
+// texture create takes the R8 levels as they are), so the request is ignored, the AO maps stay R8,
+// the derived cache is never asked, and the answer is "not supported".
+namespace CompressAoBackend {
+
+void Request(bool on, Ext::DerivedCache::Store* cache) {
+    (void)on;
+    (void)cache;
+}
+
+bool Supported() {
+    return false;
+}
+
+}  // namespace CompressAoBackend
 
 // ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader
 // that writes an emitter slot into each vertex. Metal has no such rewrite, so it answers "not

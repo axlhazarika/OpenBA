@@ -24,7 +24,7 @@
 //   derived.dat    32-byte header, then the payloads back to back, append-only
 //   derived.idx    32-byte header, then one 80-byte IndexRecord per payload, in payload order
 //   derived.used   the key ids the last session read or wrote (the cap's keep list), rewritten
-//                  at every Flush (the exe: each load's end) and at Close
+//                  at every Flush / RequestFlush (the exe: each load's end) and at Close
 //   derived.clear  the Options dialog's "Clear cache": the next Open deletes the cache first
 // Little-endian on disk (x86-64 and arm64 both are). The header's format word changing resets both
 // files.
@@ -127,6 +127,8 @@ public:
     void Put(const Key& key, std::vector<uint8_t> payload);
     // Waits until every queued payload is written and the keep list is current.
     void Flush();
+    // The same without waiting: the writer rewrites the keep list once its queue is empty.
+    void RequestFlush();
     // Stops every read and write for the rest of the run (the clear request: the files go at the
     // next Open).
     void Disable();

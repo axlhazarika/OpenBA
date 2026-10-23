@@ -33,6 +33,7 @@
 
 #include "VideoDX11Data.h"
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
+#include "compress_ao/bc4_chain.h"           // NOT RETAIL: ext.compress_ao (the load's summary)
 
 namespace VideoDX11 {
 
@@ -45,11 +46,17 @@ namespace VideoDX11 {
 // seeded creates the extension may defer: `true` arms it for this thread (row on, driver with
 // concurrent creates), `false` waits for every deferred create and disarms it. Off: two calls that
 // test a bool and return, as the `ret` did nothing.
+//
+// NOT RETAIL (ext.compress_ao, docs/extensions/handins/COMPRESSAO.md): the close also prints the
+// load's BC4 summary (when a texture was converted since the last) and asks the derived cache to
+// persist its keep list, without waiting.
 void DeviceData::Slot4(bool loading) {
-    if (loading)
+    if (loading) {
         AsyncCreate::Begin();
-    else
+    } else {
         AsyncCreate::End();
+        ::CompressAo::LoadEnd();
+    }
 }
 
 // 0x180005430 — `xorps xmm0,xmm0; ret`

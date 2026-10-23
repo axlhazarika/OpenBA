@@ -263,6 +263,14 @@ const Entry kEntries[] = {
       "Creates the graphics resources of loading content on other cores, so large mods load faster. "
       "Same game data. Takes effect at the next load.",
       0, [](State& s) -> bool& { return s.ext.async_gpu_create; } },
+    // COMPRESSAO (docs/extensions/handins/COMPRESSAO.md, issue #13): the baked AO maps (2D R8 textures
+    // from the resource files) are created as BC4, half the memory, the same look; the encode is kept
+    // in the derived-data cache in the user's documents folder. Read once at boot (next start).
+    { "compress_ao", Tier::Extension, Class::A, true,
+      "Compressed AO maps",
+      "Keeps the models' baked shading maps compressed: half the memory, the same look. Prepared once "
+      "after a mod change, then reused. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.compress_ao; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).
@@ -311,6 +319,11 @@ const ValueKey kValueKeys[] = {
     // fix's bool is the off switch.
     { "rock_seat_mode", "rock_seat", 1, 2, 2,
       [](State& s) -> int32_t& { return s.val.rock_seat_mode; }, nullptr, 0 },
+    // COMPRESSAO: the derived-data cache's size cap in MB (src/ext/derived_cache/derived_cache.h "THE
+    // CAP"). Owned by compress_ao, the cache's first user; a later user shares the one cache and the
+    // one cap. 4096 holds a MegaMod 7-part boot's AO maps (~1.04 GB) four times over.
+    { "derived_cache_mb", "compress_ao", 256, 65536, 4096,
+      [](State& s) -> int32_t& { return s.val.derived_cache_mb; }, nullptr, 0 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

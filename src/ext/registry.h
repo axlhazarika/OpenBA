@@ -101,6 +101,7 @@ struct Extensions {
     bool decode_ahead = false; // class A, next start: src/ext/decode_ahead/, seam IO::CompressedStream::_extDecodeAhead (docs/extensions/handins/DECODEAHEAD.md)
     bool load_progress = false; // class A, next start: src/ext/load_progress/, seams LoaderLoop::_extFrame + UpdateLoop::_extLoadProgress (docs/extensions/handins/LOADPROGRESS.md)
     bool async_gpu_create = false; // class A, next load: src/ext/async_gpu_create/, backend seam AsyncGpuCreateBackend (docs/extensions/handins/ASYNCGPUCREATE.md)
+    bool compress_ao = false; // class A, next start: src/ext/compress_ao/, backend seam CompressAoBackend + the derived cache src/ext/derived_cache/ (docs/extensions/handins/COMPRESSAO.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.
@@ -125,6 +126,7 @@ struct Values {
     int32_t foliage_aa_mode = 2; // ext.foliage_aa_mode 1..2 (owner better_trees): 1 smooth edges, 2 + distance fill (FOLIAGE_AA.md §1 ruling 4)
     int32_t max_shadow_size = 4096; // ext.max_shadow_size 4096 | 8192 (owner max_shadow_res): the sun map at High (FAA-SHADOW2)
     int32_t rock_seat_mode = 2; // ext.rock_seat_mode 1..2 (owner fix rock_seat): 1 sink to the lowest ground under the rock, 2 tilt to the slope (the default, ROCKSEAT.md)
+    int32_t derived_cache_mb = 4096; // ext.derived_cache_mb 256..65536 (owner compress_ao, the cache's first user): the derived-data cache's cap in MB (COMPRESSAO.md)
 };
 
 // All three together: what the tables' `slot` accessors index.

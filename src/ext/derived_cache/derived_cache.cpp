@@ -472,7 +472,15 @@ void Store::Flush() {
     _flushRequested = true;
     _cv.notify_all();
     _cv.wait(lock, [&] { return (_queue.empty() && !_writing && !_usedDirty) || _stop; });
-    _flushRequested = false;
+}
+
+void Store::RequestFlush() {
+    if (!_open) return;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _flushRequested = true;
+    }
+    _cv.notify_all();
 }
 
 void Store::Disable() {
@@ -521,8 +529,9 @@ void Store::WriterMain() {
             lock.unlock();
             if (!_disabled.load(std::memory_order_acquire)) WriteUsedList();
             lock.lock();
-            _usedDirty = false;
-            _writing   = false;
+            _usedDirty      = false;
+            _flushRequested = false;
+            _writing        = false;
             _cv.notify_all();
             continue;
         }
