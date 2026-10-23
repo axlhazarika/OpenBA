@@ -17,6 +17,7 @@
 #include "async_gpu_create/async_gpu_create_backend.h"
 #include "compress_ao/compress_ao_backend.h"
 #include "share_gpu_data/share_gpu_data_backend.h"
+#include "create_on_demand/create_on_demand_backend.h"
 #include "draw_batch/smoke_vs_backend.h"
 #include "ext/render_pipe/finish_split.h"
 #include "graphics/renderer_ext_ao.h"
@@ -114,6 +115,25 @@ bool Supported() {
 }
 
 }  // namespace ShareGpuDataBackend
+
+// ext.create_on_demand: the Metal backend has no deferred create yet (its buffer and texture creates
+// read their bytes at load), so the request is ignored, nothing is ever recorded or prefetched, and
+// the answer is "not supported".
+namespace CreateOnDemandBackend {
+
+void Request(bool on) {
+    (void)on;
+}
+
+bool Supported() {
+    return false;
+}
+
+void Prefetch(const void* companion) {
+    (void)companion;
+}
+
+}  // namespace CreateOnDemandBackend
 
 // ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader
 // that writes an emitter slot into each vertex. Metal has no such rewrite, so it answers "not

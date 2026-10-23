@@ -438,7 +438,33 @@ void FileSystem::PackedMapNoteRead(const RtIO::FileInfo& fi, int32_t cursor, int
     m->pointer.store(abs + n, std::memory_order_relaxed);
 }
 
+// NOT RETAIL (ext.create_on_demand, FileSystem.h): PackedMapSpan's arithmetic for cursor 0, without
+// needing the engine's own mapping.
+bool FileSystem::PackedEntryOrigin(const RtIO::FileInfo& fi, Platform::FileHandle* package,
+                                   int64_t* offset) const {
+    if (static_cast<uint32_t>(fi.handle) > 0xFFFFFFFDu) return false;    // loose
+    const uint32_t packIndex = static_cast<uint32_t>(fi.handle) >> 24;
+    if (packIndex >= static_cast<uint32_t>(_packfiles._size)) return false;
+    const PackageFile* const pkg = _packfiles[packIndex];
+    if (static_cast<uint32_t>(pkg->_file.handle) <= 0xFFFFFFFDu) return false;   // nested
+    int64_t abs = static_cast<int32_t>(static_cast<uint32_t>(fi.baseOffset));
+    if (_extWidePackages != nullptr) {
+        bool wide = false;
+        const int64_t at = PackedReadOffset(fi, &wide);
+        if (wide) abs = at - fi.cursor;
+    }
+    if (abs < 0) return false;
+    *package = pkg->_file.winHandle;
+    *offset  = abs;
+    return true;
+}
+
+void (*FileSystem::_extHandleClosing)(Platform::FileHandle h) = nullptr;
+
 void PackedMapRelease(Platform::FileHandle h) {
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand forgets
+    // this handle before it is closed. Null by default and under the faithful profile.
+    if (FileSystem::_extHandleClosing != nullptr) FileSystem::_extHandleClosing(h);
     std::lock_guard<std::mutex> lock(g_packedMapLock);
     for (PackedMap& m : g_packedMaps) {
         if (m.handle != h) continue;

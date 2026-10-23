@@ -35,6 +35,7 @@
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 #include "compress_ao/bc4_chain.h"           // NOT RETAIL: ext.compress_ao (the load's summary)
 #include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data (the load's summary)
+#include "create_on_demand/lazy_create.h"    // NOT RETAIL: ext.create_on_demand (the load's summary)
 
 namespace VideoDX11 {
 
@@ -54,6 +55,9 @@ namespace VideoDX11 {
 //
 // NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): and, after the drain, the
 // run's sharing summary (when anything was shared since the last).
+//
+// NOT RETAIL (ext.create_on_demand, docs/extensions/handins/CREATEONDEMAND.md): and the deferred
+// creates' summary (when anything changed since the last).
 void DeviceData::Slot4(bool loading) {
     if (loading) {
         AsyncCreate::Begin();
@@ -61,6 +65,7 @@ void DeviceData::Slot4(bool loading) {
         AsyncCreate::End();
         ::CompressAo::LoadEnd();
         ShareGpuData::LoadEnd();
+        CreateOnDemand::LoadEnd();
     }
 }
 

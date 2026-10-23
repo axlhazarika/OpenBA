@@ -279,6 +279,15 @@ const Entry kEntries[] = {
       "Keeps one copy of graphics data that several models or mods load identically: less memory, "
       "the same look. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.share_gpu_data; } },
+    // CREATEONDEMAND (docs/extensions/handins/CREATEONDEMAND.md, issue #13): static vertex / index
+    // buffers and file-seeded textures are created at their first use (or when the world places a
+    // mesh that uses them) instead of at load; their bytes are read again from the mapped package.
+    // Read once at boot (next start). OFF by default until ruled.
+    { "create_on_demand", Tier::Extension, Class::A, false,
+      "Load graphics on demand",
+      "Prepares a model's graphics when the game first shows it instead of at start-up: much less "
+      "memory with large mods. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.create_on_demand; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

@@ -24,6 +24,7 @@
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
 #include "ext/share_gpu_data/share_gpu_data.h"   // ext.share_gpu_data: the backend's request, at boot
+#include "ext/create_on_demand/create_on_demand.h"   // ext.create_on_demand: the backend's request + seams, at boot
 #include "ext/resources/text_provider.h"        // the Extensions dialog / Enhanced tab resources from the exe's text (KITFREE)
 #include "rsc_text_check.h"                      // src/diag: the kit cross-check, /rsccheck:1 on the command line
 #include "ext/resources/font_provider.h"         // KITFREE RSCFONT: ext.sharp_ui's font variants, provided at run time
@@ -180,6 +181,10 @@ void InitFromSettings() {
     // ext.share_gpu_data (class A, next start): the backend's request, once, before the boot's first
     // load (src/render/common/share_gpu_data/). Off under the faithful profile (the row is off).
     Ext::ShareGpuData::Boot();
+    // ext.create_on_demand (class A, next start): the backend's request and the engine seams, once,
+    // before the boot's first load (src/render/common/create_on_demand/). Off under the faithful
+    // profile (the row is off).
+    Ext::CreateOnDemand::Boot();
     // The extension resources built in the exe (docs/extensions/KITFREE.md): the
     // providers register here, never under a COMMAND-LINE faithful profile
     // (`/profile:faithful`: the gate run, no Extensions button, no Enhanced tab,

@@ -516,6 +516,11 @@ public:
     // where that ReadFile would have left it.
     const uint8_t* PackedMapSpan(const RtIO::FileInfo& fi, int32_t cursor, int32_t n);
     void PackedMapNoteRead(const RtIO::FileInfo& fi, int32_t cursor, int32_t n);
+    // NOT RETAIL (ext.create_on_demand, docs/extensions/handins/CREATEONDEMAND.md): where the bytes
+    // of a packed `fi` live: its package's OS handle and the entry's absolute offset in that file
+    // (the offset ReadFile's packed arm reads cursor 0 at, wide or not). False for a loose file, a
+    // nested package, an index past the package table or an offset retail could not seek to.
+    bool PackedEntryOrigin(const RtIO::FileInfo& fi, Platform::FileHandle* package, int64_t* offset) const;
     // ?PlatformOpenFile@FileSystem@IO@@AEAA_NAEAUFileInfo@12@AEBVFilename@System@@@Z
     //                                                             0x1800adce0
     // `AEAA`, private in retail, public here for the door reason above.
@@ -579,6 +584,13 @@ public:
     };
     static const ExtWidePackage* _extWidePackages;
     static int32_t               _extWideCount;
+
+    // ---- ext.create_on_demand (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md) ----------
+    // Engine-side seam (DESIGN.md hook rule 5), null by default and under the faithful profile:
+    // run by PlatformCloseFile (through PackedMapRelease) for every handle it is about to close,
+    // before CloseHandle. The extension keeps its own read-only mappings of the packages; a handle
+    // being closed is never used to find one again (the OS may hand the value out anew).
+    static void (*_extHandleClosing)(Platform::FileHandle h);
 
     // The absolute offset the packed arm of ReadFile seeks to for `fi` (a
     // PACKED FileInfo: handle = packIndex << 24 | fileIndex). With a wide
