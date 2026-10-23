@@ -733,8 +733,12 @@ void FileSystem::LoadPackages() {
     }
 
     // ---- LOOP 3: the path -> {packIndex, fileIndex} index ------------------
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/PKGCACHE.md): ext.package_cache may build the
+    // identical tree from the derived cache; the loop then runs over no package.
+    const bool restored = _extIndexRestore != nullptr && _extIndexRestore(*this);
+    const int32_t indexedPacks = restored ? 0 : _packfiles._size;
     int64_t inserted = 0, overridden = 0, kept = 0;
-    for (int32_t pi = 0; pi < _packfiles._size; ++pi) {
+    for (int32_t pi = 0; pi < indexedPacks; ++pi) {
         PackageFile* pkg = _packfiles[pi];
         const int32_t entries = pkg->_entries._size;      // MOV EAX,[RCX+0xb8]
         for (int32_t fi = 0; fi < entries; ++fi) {
@@ -806,6 +810,10 @@ void FileSystem::LoadPackages() {
             // ~key is retail's release at the bottom of the iteration.
         }
     }
+
+    // EXT SEAM (NOT RETAIL, PKGCACHE.md): the tree the loop built, for the derived cache.
+    if (!restored && _extIndexBuilt != nullptr)
+        _extIndexBuilt(*this);
 
     // ---- teardown of the temporary Filename array -------------------------
     // Retail releases each element with the inlined String idiom and then frees
