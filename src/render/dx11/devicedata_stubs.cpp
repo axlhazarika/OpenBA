@@ -34,6 +34,7 @@
 #include "VideoDX11Data.h"
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 #include "compress_ao/bc4_chain.h"           // NOT RETAIL: ext.compress_ao (the load's summary)
+#include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data (the load's summary)
 
 namespace VideoDX11 {
 
@@ -50,12 +51,16 @@ namespace VideoDX11 {
 // NOT RETAIL (ext.compress_ao, docs/extensions/handins/COMPRESSAO.md): the close also prints the
 // load's BC4 summary (when a texture was converted since the last) and asks the derived cache to
 // persist its keep list, without waiting.
+//
+// NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): and, after the drain, the
+// run's sharing summary (when anything was shared since the last).
 void DeviceData::Slot4(bool loading) {
     if (loading) {
         AsyncCreate::Begin();
     } else {
         AsyncCreate::End();
         ::CompressAo::LoadEnd();
+        ShareGpuData::LoadEnd();
     }
 }
 

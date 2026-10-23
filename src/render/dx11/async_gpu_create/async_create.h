@@ -60,11 +60,12 @@ void EnqueueBuffer(const void* obj, ID3D11Device* dev, const D3D11_BUFFER_DESC& 
 
 // A deferred CreateTexture2D + CreateShaderResourceView + CreateSamplerState (the order of
 // ImageBufferData::Create for a plain texture). `subres` points into `bytes`, a new[] block the job
-// now owns. `srvDesc` null = the default view. The SRV is made only after a successful texture; the
-// sampler always, as the synchronous path does. `subres` is a new[] array the job owns too;
-// `byteCount` is the size of `bytes` (the back-pressure count).
+// now owns, its `subresCount` levels back to back in order. `srvDesc` null = the default view. The SRV
+// is made only after a successful texture; the sampler always, as the synchronous path does.
+// `subres` is a new[] array the job owns too; `byteCount` is the size of `bytes` (the back-pressure
+// count).
 void EnqueueTexture(const void* obj, ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& desc,
-                    D3D11_SUBRESOURCE_DATA* subres, uint8_t* bytes, uint64_t byteCount,
+                    D3D11_SUBRESOURCE_DATA* subres, int subresCount, uint8_t* bytes, uint64_t byteCount,
                     const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDesc, const D3D11_SAMPLER_DESC& samplerDesc,
                     ID3D11Texture2D** outTexture, ID3D11ShaderResourceView** outSrv,
                     ID3D11SamplerState** outSampler);

@@ -55,5 +55,6 @@ SpriteSheet resource
 		{ String _name = "ExtensionsEntry_terrain_batch";	String _source = "Sprite/Extensions/Entry_terrain_batch.png"; }
 		{ String _name = "ExtensionsEntry_load_progress";	String _source = "Sprite/Extensions/Entry_load_progress.png"; }
 		{ String _name = "ExtensionsEntry_compress_ao";	String _source = "Sprite/Extensions/Entry_compress_ao.png"; }
+		{ String _name = "ExtensionsEntry_share_gpu_data";	String _source = "Sprite/Extensions/Entry_share_gpu_data.png"; }
 	]
 }

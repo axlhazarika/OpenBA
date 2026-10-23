@@ -18,6 +18,7 @@
 #include "async_gpu_create/async_gpu_create_backend.h"
 
 #include "dx11_backend_access.h"   // Dx11Device
+#include "share_gpu_data/share_create.h"   // NOT RETAIL: ext.share_gpu_data (the create-or-share)
 #include "system/MemoryAllocator.h"
 
 #include <algorithm>
@@ -28,6 +29,7 @@
 #include <set>
 #include <thread>
 #include <unordered_set>
+#include <vector>
 
 namespace VideoDX11 {
 namespace AsyncCreate {
@@ -53,6 +55,7 @@ struct Job {
     // Texture
     D3D11_TEXTURE2D_DESC            texDesc;
     D3D11_SUBRESOURCE_DATA*         subres;
+    int                             subresCount;
     uint8_t*                        texBytes;
     bool                            hasSrvDesc;
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
@@ -79,17 +82,26 @@ std::atomic<int>  g_driverConcurrent{-1};   // -1 = not queried yet (no device s
 thread_local bool t_deferring = false;
 
 // The creates of one job, in ImageBufferData::Create's / GpuBuffer_Create's order, writing the same
-// fields with what D3D11 writes into them.
+// fields with what D3D11 writes into them. ext.share_gpu_data's create-or-share (a plain create when
+// its row is off) runs here too, so its hashing stays off the loader.
 void Run(Job& j) {
     if (j.kind == JobKind::Buffer) {
         D3D11_SUBRESOURCE_DATA init = {};
         init.pSysMem = j.bufferData;
-        j.dev->CreateBuffer(&j.bufferDesc, &init, j.outBuffer);
+        ShareGpuData::CreateBuffer(j.dev, j.bufferDesc, &init, j.outBuffer);
         System::MemoryAllocator::MemFree(j.bufferData);
     } else {
-        const HRESULT hr = j.dev->CreateTexture2D(&j.texDesc, j.subres, j.outTexture);
-        if (hr == 0)
-            j.dev->CreateShaderResourceView(*j.outTexture, j.hasSrvDesc ? &j.srvDesc : nullptr, j.outSrv);
+        // The levels lie back to back in texBytes (CreateTextureDeferred's copy): each one's size is
+        // the distance to the next, the last one's to the end of the block.
+        std::vector<uint64_t> sizes(static_cast<size_t>(j.subresCount));
+        for (int i = 0; i < j.subresCount; ++i) {
+            const uint8_t* at   = static_cast<const uint8_t*>(j.subres[i].pSysMem);
+            const uint8_t* next = i + 1 < j.subresCount ? static_cast<const uint8_t*>(j.subres[i + 1].pSysMem)
+                                                        : j.texBytes + j.bytes;
+            sizes[static_cast<size_t>(i)] = static_cast<uint64_t>(next - at);
+        }
+        ShareGpuData::CreateTexture(j.dev, j.texDesc, j.subres, j.subresCount, sizes.data(),
+                                    j.hasSrvDesc ? &j.srvDesc : nullptr, j.outTexture, j.outSrv);
         j.dev->CreateSamplerState(&j.samplerDesc, j.outSampler);
         delete[] j.subres;
         delete[] j.texBytes;
@@ -214,7 +226,7 @@ void EnqueueBuffer(const void* obj, ID3D11Device* dev, const D3D11_BUFFER_DESC& 
 }
 
 void EnqueueTexture(const void* obj, ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& desc,
-                    D3D11_SUBRESOURCE_DATA* subres, uint8_t* bytes, uint64_t byteCount,
+                    D3D11_SUBRESOURCE_DATA* subres, int subresCount, uint8_t* bytes, uint64_t byteCount,
                     const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDesc, const D3D11_SAMPLER_DESC& samplerDesc,
                     ID3D11Texture2D** outTexture, ID3D11ShaderResourceView** outSrv,
                     ID3D11SamplerState** outSampler) {
@@ -225,6 +237,7 @@ void EnqueueTexture(const void* obj, ID3D11Device* dev, const D3D11_TEXTURE2D_DE
     j.bytes       = byteCount;
     j.texDesc     = desc;
     j.subres      = subres;
+    j.subresCount = subres != nullptr ? subresCount : 0;
     j.texBytes    = bytes;
     j.hasSrvDesc  = srvDesc != nullptr;
     if (srvDesc != nullptr) j.srvDesc = *srvDesc;

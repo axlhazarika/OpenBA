@@ -161,6 +161,7 @@
 #include "compress_ao/bc4_create.h"          // NOT RETAIL: ext.compress_ao
 #include "compress_ao/bc4_chain.h"           // NOT RETAIL: ext.compress_ao (the encode / the cache)
 #include "bc4/bc4.h"                         // NOT RETAIL: ext.compress_ao (the BC4 block-row pitch)
+#include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data
 
 // The real `Video::ImageBufferData` abstract base. B5 RES: `VideoDX11::
 // ImageBufferData` derives from it in C++, so the compiler chains its destructor
@@ -311,6 +312,8 @@ void PushSubresource(SubresArray* arr, const D3D11_SUBRESOURCE_DATA& value) {
 // The order is +0x28, +0x20, +0x30, +0x10, +0x18 — NOT declaration order.
 // ============================================================
 void ImageBufferData::ReleaseInterfaces() {
+    // NOT RETAIL (ext.share_gpu_data): a shared texture's user is dropped before its releases below.
+    ShareGpuData::DropTexture(texture);
     if (depthStencilView)   depthStencilView->Release();
     if (renderTargetView)   renderTargetView->Release();
     if (shaderResourceView) shaderResourceView->Release();
@@ -549,7 +552,7 @@ static void CreateTextureDeferred(ImageBufferData* self,
         srvDescPtr = &srvDesc;
     }
 
-    AsyncCreate::EnqueueTexture(self, Dx11Device(), desc, copy, bytes, total, srvDescPtr,
+    AsyncCreate::EnqueueTexture(self, Dx11Device(), desc, copy, subres->count, bytes, total, srvDescPtr,
                                 SamplerDescFor(ib), &self->texture, &self->shaderResourceView,
                                 &self->sampler);
 }
@@ -659,6 +662,31 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     if (AsyncCreate::Deferring() && levels != nullptr && kind == 2) {
         CreateTextureDeferred(this, levels, desc, &subres, asBc4 ? &bc4Offsets : nullptr);
         return true;
+    }
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/SHAREGPUDATA.md): ext.share_gpu_data -- outside
+    // the async bracket, a texture seeded from a resource file (usage 2: the texture and its SRV only,
+    // no RTV / DSV) is made through the create-or-share; the sampler and the scratch array as below.
+    if (ShareGpuData::Requested() && levels != nullptr && kind == 2) {
+        std::vector<uint64_t> sizes(static_cast<size_t>(subres.count));
+        for (int i = 0; i < subres.count; ++i)
+            sizes[static_cast<size_t>(i)] = asBc4 ? bc4Offsets[i + 1] - bc4Offsets[i]
+                                                  : static_cast<uint64_t>(levels->GetData()[i].GetSize());
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDescPtr = nullptr;
+        if (ib->_dimension == 1) {   // slot 3's cube arm (a usage-2 texture is never a depth buffer)
+            srvDesc.Format                      = static_cast<DXGI_FORMAT>(kFormatToDxgi[ib->_format]);
+            srvDesc.ViewDimension               = D3D11_SRV_DIMENSION_TEXTURECUBE;
+            srvDesc.TextureCube.MipLevels       = static_cast<UINT>(ib->GetLevelCount());
+            srvDesc.TextureCube.MostDetailedMip = 0;
+            srvDescPtr = &srvDesc;
+        }
+        const HRESULT shared = ShareGpuData::CreateTexture(Dx11Device(), desc, subres.data, subres.count,
+                                                           sizes.data(), srvDescPtr, &texture,
+                                                           &shaderResourceView);
+        CreateSamplerState();
+        System::MemoryAllocator::MemFree(subres.data);
+        return shared == 0;
     }
 
     ID3D11Device* const dev = Dx11Device();

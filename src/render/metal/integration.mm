@@ -16,6 +16,7 @@
 #include "better_trees/billboard_shadow_backend.h"
 #include "async_gpu_create/async_gpu_create_backend.h"
 #include "compress_ao/compress_ao_backend.h"
+#include "share_gpu_data/share_gpu_data_backend.h"
 #include "draw_batch/smoke_vs_backend.h"
 #include "ext/render_pipe/finish_split.h"
 #include "graphics/renderer_ext_ao.h"
@@ -99,6 +100,20 @@ bool Supported() {
 }
 
 }  // namespace CompressAoBackend
+
+// ext.share_gpu_data: the Metal backend has no create-or-share path yet (its buffer and texture
+// creates make one object each), so the request is ignored and the answer is "not supported".
+namespace ShareGpuDataBackend {
+
+void Request(bool on) {
+    (void)on;
+}
+
+bool Supported() {
+    return false;
+}
+
+}  // namespace ShareGpuDataBackend
 
 // ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader
 // that writes an emitter slot into each vertex. Metal has no such rewrite, so it answers "not

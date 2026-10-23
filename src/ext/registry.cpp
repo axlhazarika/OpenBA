@@ -271,6 +271,14 @@ const Entry kEntries[] = {
       "Keeps the models' baked shading maps compressed: half the memory, the same look. Prepared once "
       "after a mod change, then reused. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.compress_ao; } },
+    // SHAREGPUDATA (docs/extensions/handins/SHAREGPUDATA.md, issue #13): immutable vertex / index
+    // buffers and file-seeded textures with the same descriptor and the same bytes are created once
+    // and shared by every engine object that loads them. Read once at boot (next start).
+    { "share_gpu_data", Tier::Extension, Class::A, true,
+      "Shared graphics data",
+      "Keeps one copy of graphics data that several models or mods load identically: less memory, "
+      "the same look. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.share_gpu_data; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

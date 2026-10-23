@@ -92,6 +92,7 @@
 #include "VideoDX11Data.h"
 #include "dx11_backend_access.h"
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
+#include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data
 // ENDGAME B.3.5 block D2, RULE B5-3: the three real Runtime abstract bases (B5 BUF:
 // now the C++ bases of the three classes below).
 #include "video/CompanionData.h"
@@ -387,8 +388,10 @@ bool GpuBuffer_Create(Owner* owner, ID3D11Buffer** outBuffer,
     init.SysMemPitch      = 0;
     init.SysMemSlicePitch = 0;
 
-    HRESULT hr = Dx11Device()->CreateBuffer(
-        &desc, initialData ? &init : nullptr, outBuffer);
+    // NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): an IMMUTABLE seeded
+    // buffer equal to one already made shares it; anything else, and the row off, is this CreateBuffer.
+    HRESULT hr = ShareGpuData::CreateBuffer(
+        Dx11Device(), desc, initialData ? &init : nullptr, outBuffer);
 
     return hr == 0 && *outBuffer != nullptr;
 }
@@ -555,6 +558,7 @@ bool GpuBuffer_SetData(const Owner* owner, ID3D11Buffer* buffer,
 // there is one, then clear the three fields.
 VertexBufferData::~VertexBufferData() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less, before the Release
     if (buffer) buffer->Release();
     buffer      = nullptr;
     writeCursor = 0;
@@ -618,6 +622,7 @@ void VertexBufferData::Serialize(::IO::Serializer* serializer) {
 // compiler's).
 IndexBufferData::~IndexBufferData() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less, before the Release
     if (buffer) buffer->Release();
     buffer      = nullptr;
     writeCursor = 0;

@@ -102,6 +102,7 @@ struct Extensions {
     bool load_progress = false; // class A, next start: src/ext/load_progress/, seams LoaderLoop::_extFrame + UpdateLoop::_extLoadProgress (docs/extensions/handins/LOADPROGRESS.md)
     bool async_gpu_create = false; // class A, next load: src/ext/async_gpu_create/, backend seam AsyncGpuCreateBackend (docs/extensions/handins/ASYNCGPUCREATE.md)
     bool compress_ao = false; // class A, next start: src/ext/compress_ao/, backend seam CompressAoBackend + the derived cache src/ext/derived_cache/ (docs/extensions/handins/COMPRESSAO.md)
+    bool share_gpu_data = false; // class A, next start: src/ext/share_gpu_data/, backend seam ShareGpuDataBackend (docs/extensions/handins/SHAREGPUDATA.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.
