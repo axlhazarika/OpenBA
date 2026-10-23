@@ -8,8 +8,10 @@
 
 #include "create_on_demand/create_on_demand_backend.h"
 #include "create_on_demand/payload.h"
+#include "ext/create_on_demand/level_source.h"
 #include "ext/registry.h"
 #include "io/FileSystem.h"
+#include "video/ImageBuffer.h"
 
 #include <cstdio>
 
@@ -29,6 +31,7 @@ void Boot() {
         std::fprintf(stderr, "[CreateOnDemand] the renderer does not support deferred creates: all made at load\n");
     CreateOnDemandBackend::Request(on);
     ::IO::FileSystem::_extHandleClosing = on ? &HandleClosing : nullptr;
+    ::Video::ImageBuffer::_extLevelSource = on ? &ReadLevels : nullptr;
 }
 
 }}  // namespace Ext::CreateOnDemand

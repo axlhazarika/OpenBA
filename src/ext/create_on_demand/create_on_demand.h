@@ -14,6 +14,8 @@
 //     Request, once (objects already made stay as they are: the toggle is for the next start).
 //   - IO::FileSystem::_extHandleClosing: a package handle the engine closes is never used to find the
 //     extension's own mapping again.
+//   - Video::ImageBuffer::_extLevelSource (level_source.h): a file-seeded texture's level sizes are
+//     read, its level bytes skipped; the backend's Create records the texture for its first use.
 // Never under the faithful profile.
 
 namespace Ext { namespace CreateOnDemand {
