@@ -180,4 +180,16 @@ inline uint32_t FileMapRead(const FileMapping& m, uint64_t pos, uint32_t bytes, 
     return got;
 }
 
+// ---- an exclusive read / write file (NOT RETAIL; issue #13 COMPRESSAO) --------------------
+// The derived-data cache's files (src/ext/derived_cache/derived_cache.h). FileOpenExclusive opens
+// `path` for reading and writing, creating it when absent, and holds it exclusively: a second
+// opener, in this process or another, fails until FileClose. Windows: CreateFileW(GENERIC_READ |
+// GENERIC_WRITE, share 0, OPEN_ALWAYS, NORMAL) -- the share mode IS the lock. POSIX
+// (file_rw_posix.cpp, Linux and macOS): open(O_RDWR | O_CREAT, 0644) + flock(LOCK_EX | LOCK_NB);
+// the handle is fd + 1 as everywhere. Returns kInvalidFileHandle on failure (held elsewhere included).
+// FileTruncate sets the file's size to `size` (SetFilePointerEx + SetEndOfFile / ftruncate);
+// 1 on success. A mapped file cannot be truncated on Windows: truncate before FileMapOpen.
+FileHandle FileOpenExclusive(const PathChar* path);
+int32_t    FileTruncate(FileHandle h, int64_t size);
+
 }  // namespace Platform

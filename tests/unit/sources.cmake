@@ -90,6 +90,9 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/engine/system/widestring.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/win/file_win.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/win/file_map_win.cpp   # file_map_read_test.cpp (MAPREAD)
+  ${CMAKE_SOURCE_DIR}/src/platform/win/file_rw_win.cpp    # ext_derived_cache_test.cpp (COMPRESSAO)
+  ${CMAKE_SOURCE_DIR}/src/ext/derived_cache/derived_cache.cpp   # ext_derived_cache_test.cpp (COMPRESSAO)
+  ${CMAKE_SOURCE_DIR}/src/ext/derived_cache/hash64.cpp          #   its content hash
   ${CMAKE_SOURCE_DIR}/src/render/common/bc4/bc4.cpp             # bc4_test.cpp (COMPRESSAO)
   ${CMAKE_SOURCE_DIR}/src/ext/decode_ahead/block_cache.cpp   # ext_decode_ahead_test.cpp (DECODEAHEAD)
   ${CMAKE_SOURCE_DIR}/src/engine/system/compression.cpp       # ext_decode_ahead_test.cpp: the real Decompress
