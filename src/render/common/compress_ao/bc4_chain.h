@@ -47,8 +47,8 @@ void SetCache(Ext::DerivedCache::Store* cache);
 bool Encode(const Level* levels, int count, int width, int height, uint32_t sourceFormat,
             std::vector<uint8_t>* out, std::vector<size_t>* offsets);
 
-// The load's end (the backend's loader bracket): one summary line when anything was converted since
-// the last, and the cache asked to persist its keep list (without waiting).
+// The load's end (the backend's loader bracket): when anything was converted since the last, one
+// summary line, the cache asked to persist its keep list (without waiting) and its mapping released.
 void LoadEnd();
 
 }  // namespace CompressAo

@@ -39,9 +39,11 @@
 // log line). At the next Open a cache past its cap is rewritten keeping only the entries the
 // previous session used, in their order, up to the cap; with no keep list it is emptied.
 //
-// THREADS. Find is called from any thread (the loader's texture creates); Put queues the payload
-// and returns, and one writer thread appends it (at most 256 MB queued, then Put waits). A write
-// that fails (the disk is full) turns storing off for the run with one log line; reads go on.
+// THREADS. Find is called from any thread (the loader's texture creates); its copy out of the
+// mapping (or read through the handle) holds the file lock, so ReleaseMapping is safe at any time.
+// Put queues the payload and returns, and one writer thread appends it (at most 256 MB queued, then
+// Put waits). A write that fails (the disk is full) turns storing off for the run with one log line;
+// reads go on.
 // ============================================================================
 #include <atomic>
 #include <condition_variable>
@@ -129,6 +131,10 @@ public:
     void Flush();
     // The same without waiting: the writer rewrites the keep list once its queue is empty.
     void RequestFlush();
+    // Unmaps derived.dat: later reads go through the file handle. The mapping's pages count in the
+    // process's working set while it is held (file-backed, ~1 GB after a MegaMod boot), so the exe
+    // drops it once the load that read the cache is over.
+    void ReleaseMapping();
     // Stops every read and write for the rest of the run (the clear request: the files go at the
     // next Open).
     void Disable();
@@ -159,8 +165,8 @@ private:
     Platform::FileHandle  _lock = Platform::kInvalidFileHandle;
     Platform::FileHandle  _dat  = Platform::kInvalidFileHandle;
     Platform::FileHandle  _idx  = Platform::kInvalidFileHandle;
-    Platform::FileMapping _map;     // derived.dat as it was at Open (immutable until Close)
-    std::mutex            _fileMutex;   // the two handles' file positions
+    Platform::FileMapping _map;     // derived.dat as it was at Open (until ReleaseMapping / Close)
+    std::mutex            _fileMutex;   // the two handles' file positions, and the mapping
 
     mutable std::mutex                             _mutex;   // everything below
     std::condition_variable                        _cv;

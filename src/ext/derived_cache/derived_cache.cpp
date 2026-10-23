@@ -426,11 +426,12 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
     }
     out.resize(static_cast<size_t>(rec.size));
     bool ok = true;
-    if (_map.data != nullptr && rec.offset + rec.size <= _map.size) {
-        std::memcpy(out.data(), _map.data + rec.offset, static_cast<size_t>(rec.size));
-    } else {
-        std::lock_guard<std::mutex> files(_fileMutex);
-        ok = ReadAt(_dat, rec.offset, out.data(), rec.size);
+    {
+        std::lock_guard<std::mutex> files(_fileMutex);   // also keeps the mapping until the copy is done
+        if (_map.data != nullptr && rec.offset + rec.size <= _map.size)
+            std::memcpy(out.data(), _map.data + rec.offset, static_cast<size_t>(rec.size));
+        else
+            ok = ReadAt(_dat, rec.offset, out.data(), rec.size);
     }
     ok = ok && Hash64(out.data(), out.size()) == rec.payloadHash;
     std::lock_guard<std::mutex> lock(_mutex);
@@ -481,6 +482,11 @@ void Store::RequestFlush() {
         _flushRequested = true;
     }
     _cv.notify_all();
+}
+
+void Store::ReleaseMapping() {
+    std::lock_guard<std::mutex> files(_fileMutex);
+    Platform::FileMapClose(&_map);
 }
 
 void Store::Disable() {

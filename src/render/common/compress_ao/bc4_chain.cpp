@@ -211,7 +211,10 @@ void LoadEnd() {
                  static_cast<double>(g_bc4Bytes.load(std::memory_order_relaxed)) / 1073741824.0,
                  static_cast<double>(g_encodeNs.load(std::memory_order_relaxed)) / 1e6,
                  static_cast<double>(g_lookupNs.load(std::memory_order_relaxed)) / 1e6, cache ? "on" : "off");
-    if (cache != nullptr) cache->RequestFlush();
+    if (cache != nullptr) {
+        cache->RequestFlush();
+        cache->ReleaseMapping();   // the load that read it is over: its pages leave the working set
+    }
 }
 
 }  // namespace CompressAo
