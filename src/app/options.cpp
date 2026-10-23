@@ -230,8 +230,6 @@ void OptionsInit() {
         o.deferWindowShow = !v || (std::strcmp(v, "0") != 0 && std::strcmp(v, "false") != 0); }
     {   const char* v = Raw("BANISHED_SKIP_ENGINE_LOADER");
         o.skipEngineLoader = v && v[0] != '0'; }
-    {   const char* v = Raw("BANISHED_SYNC_ENGINE_LOADER");
-        o.syncEngineLoader = !(v && (v[0] == '0' || v[0] == 'f' || v[0] == 'F')); }
     {   const char* v = Raw("BANISHED_NO_FOL_LOCK");
         o.noFolLock = v && v[0] != '0'; }
 
@@ -258,6 +256,7 @@ void OptionsInit() {
     o.forceSnow              = Raw("BANISHED_FORCE_SNOW");
     o.forceDeviceLost        = Raw("BANISHED_FORCE_DEVICE_LOST");
     o.screenshotAt           = Raw("BANISHED_SCREENSHOT_AT");
+    o.showroom               = Raw("BANISHED_SHOWROOM");
     o.captureIngame          = Raw("BANISHED_CAPTURE_INGAME");
     o.achIgnoreMods          = Raw("BANISHED_ACH_IGNORE_MODS");
     o.fastTrig               = Raw("BANISHED_FAST_TRIG");

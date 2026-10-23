@@ -151,7 +151,6 @@ struct Options {
                                                //   AUTOTUTORIAL/AUTOMENU_BUTTON/PAUSEMENU_BUTTON says nobody is watching
     bool        deferWindowShow      = true;   // src/app/boot_window.cpp — default ON, "0"/"false" shows the window early
     bool        skipEngineLoader     = false;  // src/game/Game/loader_loop_stubs.cpp [no tool reader]
-    bool        syncEngineLoader     = true;   // src/game/Game/loader_loop_stubs.cpp — default ON, "0"/"f" goes async
     bool        noFolLock            = false;  // src/app/res_load_lock.cpp — kill switch for the resource-load lock
 
 
@@ -180,6 +179,8 @@ struct Options {
     const char* forceDeviceLost      = nullptr;// BANISHED_FORCE_DEVICE_LOST — src/render/dx11/contextdata.cpp; "bgsave" =
                                                //   on the first Present after a background save starts (src/diag/device_lost_drive.h)
     const char* screenshotAt         = nullptr;// BANISHED_SCREENSHOT_AT — gameupdateloop.cpp
+    const char* showroom             = nullptr;// BANISHED_SHOWROOM=<template list> — src/diag/showroom.cpp; set by the
+                                               //   issue #13 showroom run script (scratchpad showroom/run.sh)
     const char* captureIngame        = nullptr;// BANISHED_CAPTURE_INGAME — gameupdateloop.cpp
     const char* achIgnoreMods        = nullptr;// BANISHED_ACH_IGNORE_MODS — gameupdateloop.cpp achievements
     const char* fastTrig             = nullptr;// BANISHED_FAST_TRIG — src/game/Component/character_trig.cpp

@@ -340,3 +340,31 @@ span valid. Looks like an off-by-one, not a rule.
 end the bridge ring at the last body cell; clamp the count at 0 in `FinishRoadCell`; exclude
 road-adjacent cells from the removal re-sort. (Re-sorting the cells around a flattened tile is
 `fix.terrain_resort`, above.)
+## 9. A mod package larger than 2 GiB crashes the content load
+
+**Symptom.** A single-file mod package past 2 GiB (the reporter's MegaMod "All In One" build,
+`MegaMod.pkm`, 10,757,625,300 bytes; GitHub fran-cap/OpenBA#13) mounts, and about 2 s into the
+content load the game dies with an access violation in `MaterialInstance::BuildParameters`
+(retail Runtime `0x180103933`). The same content split into seven packages under 2 GiB loads.
+
+**Retail mechanism.**
+- The package index stores each entry's offset as a uint32 (`ReadPackfile` `0x1800b5de3`), and
+  `OpenFile` copies it into the FileInfo's int32 `baseOffset` (`0x1800aca0c`).
+- `FileSystem::ReadFile` (`0x1800ace00`) reads a packed entry at the int32
+  `baseOffset + cursor` (`0x1800ace43`) with `SetFilePointer(h, abs, NULL, FILE_BEGIN)`
+  (`0x1800ace61`): no high dword. An entry in [2, 4) GiB seeks negative and the read fails; an
+  entry past 4 GiB has a stored offset already wrapped mod 2^32 and reads bytes from the wrong
+  place. `GetFileSize` is called with no high dword too.
+- The packer lays the data out contiguously in index order, so the stored offsets decrease
+  exactly where the true offset crosses 4 and 8 GiB (twice in this file).
+
+**Proof it is retail.** Retail and OpenBA crash identically on the file (issue #13 scoping);
+the read path above is byte-faithful in the port.
+
+**Lever.** The packed read's absolute offset. `FileInfo` and `PackageFile` layouts are pinned,
+so the 64-bit offsets live in a side table built when the packages are mounted.
+
+Fix: `fix.large_packages` (tier 1), default on: a mounted package larger than 2 GiB gets 64-bit
+entry offsets, unwrapped from its index and validated, and its packed reads seek 64-bit; packages
+up to 2 GiB are read exactly as retail. `src/ext/large_packages/`,
+docs/extensions/handins/LARGEPKM.md.
