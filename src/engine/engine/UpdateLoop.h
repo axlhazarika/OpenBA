@@ -361,6 +361,13 @@ public:
     using ExtFrameFn = bool (*)(LoaderLoop& loop, int32_t point, const System::Time* time);
     static ExtFrameFn _extFrame;   // defined in loops.cpp
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): ext.stream_cache -- null by
+    // default. Loader::Run calls it on the loader thread once the loop's LoadResources and Load
+    // have returned (right after the `loader.done` stamp): the extension stores what the bracket
+    // recorded. It reads no engine state.
+    using ExtLoadDoneFn = void (*)();
+    static ExtLoadDoneFn _extLoadDone;   // defined in loops.cpp
+
 private:
     void InitFields(UpdateLoop* nextLoop, int64_t delayTicks);   // loops.cpp
 

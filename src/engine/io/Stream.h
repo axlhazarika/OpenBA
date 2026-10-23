@@ -745,6 +745,13 @@ public:
     static constexpr int32_t kExtDecodeRelease = 1;
     using ExtDecodeAheadFn = bool (*)(CompressedStream& cs, int32_t point, int32_t index, uint8_t* dst);
     static ExtDecodeAheadFn _extDecodeAhead;       // defined in compressed_stream_read.cpp
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md, DESIGN.md hook rule 5):
+    // ext.stream_cache's read tap. Null by default and under the faithful profile. Read and
+    // ReadArray's batched copy call it after the copy with the position it started at, the byte
+    // count, the destination and whether the read succeeded; the extension records what a load
+    // consumed. It changes nothing in the stream.
+    using ExtReadTapFn = void (*)(CompressedStream& cs, int32_t pos, int32_t n, const void* dst, bool ok);
+    static ExtReadTapFn _extReadTap;               // defined in compressed_stream_read.cpp
 
     // ---- the 0x68 bytes, at retail's offsets -------------------------------
     // `_unknown18` and `_unknown24` are the two gaps `??0CompressedStream`

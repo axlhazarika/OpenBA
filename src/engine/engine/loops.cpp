@@ -815,6 +815,8 @@ bool Engine::LoaderLoop::Update(const System::Time& time) {
 
 // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): null by default.
 Engine::LoaderLoop::ExtFrameFn Engine::LoaderLoop::_extFrame = nullptr;
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): null by default.
+Engine::LoaderLoop::ExtLoadDoneFn Engine::LoaderLoop::_extLoadDone = nullptr;
 
 // ---- ?Draw@LoaderLoop@Engine@@UEAAXM@Z  0x1800dc310  ord 2250 ---------------
 // Clears the whole target to BLACK and draws nothing else — this is the frame
@@ -1027,6 +1029,9 @@ void Engine::Loader::Run() {
     ::Video::Device* owner2 = engine->_videoDevice;
     ::Video::DeviceData* mode2 = owner2->deviceData;
     LoadTime::Stamp("loader.done");   // NOT RETAIL: print-only
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): ext.stream_cache stores the
+    // bracket's records (UpdateLoop.h). Null by default.
+    if (LoaderLoop::_extLoadDone != nullptr) LoaderLoop::_extLoadDone();
     mode2->Slot4(false);
 }
 
