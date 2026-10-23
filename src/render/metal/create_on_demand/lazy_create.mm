@@ -85,6 +85,18 @@ public:
         *_outShared = _shared;
     }
 
+    // share_gpu_data's user is dropped before the strong member lets go (the destructor's order,
+    // share_create.h); ARC releases the buffer with the nil store.
+    void Evict() override {
+        id<MTLBuffer> const buffer = *_out;
+        *_out       = nil;
+        *_outShared = false;
+        _made       = nil;
+        _shared     = false;
+        if (buffer == nil) return;
+        ShareGpuData::DropBuffer(buffer);
+    }
+
     uint64_t Bytes() const override {
         return static_cast<uint64_t>(_loc.len);
     }
@@ -143,6 +155,18 @@ public:
     void Publish() override {
         *_out       = _made;
         *_outShared = _shared;
+    }
+
+    // As the buffer's: the share table's user first, then the strong member lets the texture go. The
+    // sampler stays (made at load, as retail makes it).
+    void Evict() override {
+        id<MTLTexture> const texture = *_out;
+        *_out       = nil;
+        *_outShared = false;
+        _made       = nil;
+        _shared     = false;
+        if (texture == nil) return;
+        ShareGpuData::DropTexture(texture);
     }
 
     uint64_t Bytes() const override {
