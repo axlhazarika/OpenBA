@@ -94,6 +94,7 @@ public:
         _made       = nil;
         _shared     = false;
         if (buffer == nil) return;
+        ForgetBufferUses(buffer);
         ShareGpuData::DropBuffer(buffer);
     }
 
@@ -199,7 +200,8 @@ void Print(const char* when) {
     std::lock_guard<std::mutex> lock(printMutex);
     const ::CreateOnDemand::LazyTable::Stats s = t->GetStats();
     if (s.recorded == g_lastPrinted.recorded && s.onUse == g_lastPrinted.onUse &&
-        s.prefetched == g_lastPrinted.prefetched && s.forgotten == g_lastPrinted.forgotten) {
+        s.prefetched == g_lastPrinted.prefetched && s.forgotten == g_lastPrinted.forgotten &&
+        s.evicted == g_lastPrinted.evicted) {
         return;
     }
     g_lastPrinted = s;
@@ -217,6 +219,14 @@ void Print(const char* when) {
                  static_cast<long long>(s.failed), static_cast<long long>(s.forgotten),
                  static_cast<long long>(g_notLocatable.load(std::memory_order_relaxed)),
                  static_cast<long long>(m.live), static_cast<long long>(m.detached));
+    if (s.evicted != 0 || s.sweeps != 0) {
+        std::fprintf(stderr,
+                     "[CreateOnDemand] %s: given back %lld (%.1f MB) over %lld sweeps (uses held %.1f ms), "
+                     "re-made %lld, kept %lld; made and held %.1f MB\n",
+                     when, static_cast<long long>(s.evicted), s.evictedBytes * mb, static_cast<long long>(s.sweeps),
+                     s.evictNs / 1e6, static_cast<long long>(s.remade), static_cast<long long>(s.kept),
+                     (static_cast<double>(s.recordedBytes) - static_cast<double>(s.pendingBytes)) * mb);
+    }
 }
 
 std::atomic<int64_t> g_lastPrintNs{0};
@@ -287,20 +297,35 @@ void LoadEnd() {
     Print("load end (run total)");
 }
 
+void AfterSweep(int64_t evicted) {
+    (void)evicted;
+    Print("given back (run total)");
+}
+
 }  // namespace CreateOnDemand
 }  // namespace VideoMetal
 
 // ---- the backend-neutral interface (create_on_demand_backend.h) -----------------------------------
 namespace CreateOnDemandBackend {
 
-void Request(bool on) {
+void Request(bool on, int idleMinutes) {
     if (on && VideoMetal::CreateOnDemand::g_table.load(std::memory_order_relaxed) == nullptr) {
         // Never destroyed: records and workers live to the end of the process.
-        VideoMetal::CreateOnDemand::g_table.store(
-            new ::CreateOnDemand::LazyTable(VideoMetal::CreateOnDemand::WorkerCount()), std::memory_order_release);
+        ::CreateOnDemand::LazyTable* const t =
+            new ::CreateOnDemand::LazyTable(VideoMetal::CreateOnDemand::WorkerCount());
+        // One epoch is a minute: an object unused for `idleMinutes` epochs is given back.
+        t->SetSweepHook(&VideoMetal::CreateOnDemand::AfterSweep);
+        t->SetIdleLimit(idleMinutes > 0 ? static_cast<uint32_t>(idleMinutes) : 0, std::chrono::minutes(1));
+        VideoMetal::CreateOnDemand::g_table.store(t, std::memory_order_release);
     }
-    std::fprintf(stderr, "[CreateOnDemand] %s\n",
-                 on ? "on: static buffers and textures are created at their first use" : "off");
+    if (on) {
+        std::fprintf(stderr,
+                     "[CreateOnDemand] on: static buffers and textures are created at their first use; "
+                     "given back after %d idle minute(s) (0 = never)\n",
+                     idleMinutes);
+    } else {
+        std::fprintf(stderr, "[CreateOnDemand] off\n");
+    }
 }
 
 // Every Metal device can: the deferred create is the load's create, made later.
@@ -312,6 +337,21 @@ void Prefetch(const void* companion) {
     if (::CreateOnDemand::LazyTable* const t = VideoMetal::CreateOnDemand::g_table.load(std::memory_order_relaxed)) {
         t->Prefetch(companion);
     }
+}
+
+void Keep(const void* companion) {
+    if (::CreateOnDemand::LazyTable* const t = VideoMetal::CreateOnDemand::g_table.load(std::memory_order_relaxed)) {
+        t->Keep(companion);
+    }
+}
+
+bool VertexBufferMade(const void* companion) {
+    return companion == nullptr || static_cast<const VideoMetal::VertexBufferData*>(companion)->buffer != nil;
+}
+
+// A Metal texture has no separate view: the texture is the made object.
+bool ImageMade(const void* companion) {
+    return companion == nullptr || static_cast<const VideoMetal::ImageBufferData*>(companion)->texture != nil;
 }
 
 }  // namespace CreateOnDemandBackend
