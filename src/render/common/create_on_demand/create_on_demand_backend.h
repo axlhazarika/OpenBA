@@ -37,5 +37,7 @@ void Keep(const void* companion);
 // and not given back since). One load, no lock: the draw gather asks it for every mesh it draws, and
 // a stale answer costs one extra queueing at most.
 bool VertexBufferMade(const void* companion);
+// The same for an image's companion (its shader view).
+bool ImageMade(const void* companion);
 
 }  // namespace CreateOnDemandBackend

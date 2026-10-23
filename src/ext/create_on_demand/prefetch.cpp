@@ -26,17 +26,36 @@
 
 namespace Ext { namespace CreateOnDemand {
 
-// Every texture of one material. Also Graphics::MeshInstance::_extMaterialAssigned (a skin chosen
-// after SetMesh) and WorldGeometry::_extMaterialTaken: the terrain's ground and water materials, its
-// roads' and decals', taken while the world is built or loaded (the main menu's town drew ~16 of
-// them, ~30 ms, in its first frame).
-void PrefetchMaterial(const Graphics::MaterialInstance* material) {
+namespace {
+
+void QueueMaterial(const Graphics::MaterialInstance* material, bool keep) {
     if (material == nullptr) return;
     const RtGraphics::MaterialTexture* const textures = material->_textures.GetData();
     for (int32_t t = 0; t < material->_textures.GetSize(); ++t) {
         const Video::ImageBuffer* const image = textures[t].image;
-        if (image != nullptr) CreateOnDemandBackend::Prefetch(image->_data);
+        if (image == nullptr) continue;
+        if (keep) {
+            CreateOnDemandBackend::Keep(image->_data);
+        } else {
+            CreateOnDemandBackend::Prefetch(image->_data);
+        }
     }
+}
+
+}  // namespace
+
+// Every texture of one material. Also Graphics::MeshInstance::_extMaterialAssigned (a skin chosen
+// after SetMesh).
+void PrefetchMaterial(const Graphics::MaterialInstance* material) {
+    QueueMaterial(material, false);
+}
+
+// WorldGeometry::_extMaterialTaken: the terrain's ground and water materials, its roads' and decals'
+// (a building's footprint), taken while the world is built or loaded or a decal is added (the main
+// menu's town drew ~16 of them, ~30 ms, in its first frame). KEPT: the terrain draws them with no
+// gather to re-queue one the idle eviction gave back.
+void KeepMaterial(const Graphics::MaterialInstance* material) {
+    QueueMaterial(material, true);
 }
 
 void PrefetchMesh(const Graphics::MeshInstance& instance) {
@@ -63,15 +82,19 @@ void PrefetchMesh(const Graphics::MeshInstance& instance) {
 
 // Graphics::MeshInstance::_extLevelGathered: the gather (the view's, a shadow pass's) reaches every
 // instance it draws a frame or more before the render thread binds it. An instance whose chosen level's
-// vertex buffer is made is skipped on that one load; otherwise its creates are queued: an instance first
-// seen without a placement prefetch, or one the idle eviction gave back (a re-make). A use that comes
-// before the worker runs the record itself, as before.
+// vertex buffer and image are made is skipped on those two loads; otherwise its creates are queued: an
+// instance first seen without a placement prefetch, or one the idle eviction gave back (a re-make; the
+// image is tested too because a shadow pass binds the buffers alone, keeping them while the image
+// goes). A use that comes before the worker runs the record itself, as before.
 void PrefetchGathered(const Graphics::MeshInstance& instance, int32_t level) {
     const Graphics::GraphicsMesh* const mesh = instance._mesh.Get();
     const Graphics::GraphicsMesh::DetailLevel& drawn = mesh->_detailLevels.GetData()[level];
     // A skinned level keeps its vertices in the skin buffer; its plain one is empty, never made.
     const Video::VertexBuffer& vertices = drawn._vertexBuffer.size != 0 ? drawn._vertexBuffer : drawn._skinVertexBuffer;
-    if (CreateOnDemandBackend::VertexBufferMade(vertices.platformData)) return;
+    const Video::ImageBuffer* const image = drawn._image.Get();
+    if (CreateOnDemandBackend::VertexBufferMade(vertices.platformData) &&
+        (image == nullptr || CreateOnDemandBackend::ImageMade(image->_data)))
+        return;
     PrefetchMesh(instance);
 }
 
@@ -86,13 +109,7 @@ void PrefetchParticle(const Graphics::Particle& particle) {
 // render thread. Every sheet (the UI's, the fonts', the cursors') is queued as it loads instead, and
 // KEPT: an idle eviction would only bring the same frame back the next time the window opens.
 void KeepSpriteSheet(const UI::SpriteSheet& sheet) {
-    const Graphics::MaterialInstance* const material = sheet.m_field30;
-    if (material == nullptr) return;
-    const RtGraphics::MaterialTexture* const textures = material->_textures.GetData();
-    for (int32_t t = 0; t < material->_textures.GetSize(); ++t) {
-        const Video::ImageBuffer* const image = textures[t].image;
-        if (image != nullptr) CreateOnDemandBackend::Keep(image->_data);
-    }
+    QueueMaterial(sheet.m_field30, true);
 }
 
 }}  // namespace Ext::CreateOnDemand

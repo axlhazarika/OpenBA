@@ -20,7 +20,7 @@
 
 #include "compress_ao/bc4_create.h"        // ext.compress_ao: the conversion, at materialize
 #include "dx11_backend_access.h"           // Dx11Device
-#include "VideoDX11Data.h"                 // VertexBufferData::buffer (VertexBufferMade)
+#include "VideoDX11Data.h"                 // VertexBufferData::buffer, ImageBufferData::shaderResourceView
 #include "share_gpu_data/share_create.h"   // ext.share_gpu_data: the create-or-share, at materialize
 
 #include <algorithm>
@@ -368,6 +368,11 @@ void Keep(const void* companion) {
 
 bool VertexBufferMade(const void* companion) {
     return companion == nullptr || static_cast<const VideoDX11::VertexBufferData*>(companion)->buffer != nullptr;
+}
+
+bool ImageMade(const void* companion) {
+    return companion == nullptr ||
+           static_cast<const VideoDX11::ImageBufferData*>(companion)->shaderResourceView != nullptr;
 }
 
 }  // namespace CreateOnDemandBackend

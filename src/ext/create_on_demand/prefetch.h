@@ -17,6 +17,7 @@ void PrefetchMesh(const Graphics::MeshInstance& instance);
 void PrefetchGathered(const Graphics::MeshInstance& instance, int32_t level);
 void PrefetchParticle(const Graphics::Particle& particle);
 void PrefetchMaterial(const Graphics::MaterialInstance* material);
+void KeepMaterial(const Graphics::MaterialInstance* material);
 void KeepSpriteSheet(const UI::SpriteSheet& sheet);
 
 }}  // namespace Ext::CreateOnDemand

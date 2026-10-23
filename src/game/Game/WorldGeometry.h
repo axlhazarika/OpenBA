@@ -172,7 +172,7 @@ public:
     // same and the batches' at the end of a loading Serialize / SerializeLegacyBatches, AddDecal's,
     // StoreBatchMaterial's):
     // the extension queues the first-use creates of its textures, ahead of the first frame that draws
-    // the terrain.
+    // the terrain, and keeps them out of its idle eviction.
     static void (*_extMaterialTaken)(const Graphics::MaterialInstance* material);
 };
 

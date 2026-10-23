@@ -143,6 +143,11 @@ bool VertexBufferMade(const void* companion) {
     return true;
 }
 
+bool ImageMade(const void* companion) {
+    (void)companion;
+    return true;
+}
+
 }  // namespace CreateOnDemandBackend
 
 // ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader

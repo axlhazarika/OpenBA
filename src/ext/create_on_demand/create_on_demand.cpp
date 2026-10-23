@@ -42,7 +42,7 @@ void Boot() {
     ::Graphics::MeshInstance::_extLevelGathered = on ? &PrefetchGathered : nullptr;
     ::Graphics::ParticleInstance::_extParticleAssigned = on ? &PrefetchParticle : nullptr;
     ::UI::SpriteSheet::_extLoaded = on ? &KeepSpriteSheet : nullptr;
-    ::WorldGeometry::_extMaterialTaken = on ? &PrefetchMaterial : nullptr;
+    ::WorldGeometry::_extMaterialTaken = on ? &KeepMaterial : nullptr;
 }
 
 }}  // namespace Ext::CreateOnDemand
