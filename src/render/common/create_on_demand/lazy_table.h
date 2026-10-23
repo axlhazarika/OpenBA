@@ -11,7 +11,7 @@
 //   - Ensure(obj): a use of the object (Bind, Lock, SetData, Update, Read, a save) on any thread,
 //     which runs the record there, or waits for a worker already running it;
 //   - a prefetch worker, after Prefetch(obj) queued it (the extension queues the buffers and textures
-//     of a mesh when a mesh instance is given it: before the object is ever drawn).
+//     of a mesh when a mesh instance is given it: before the object is ever drawn), or Keep(obj) did.
 // Materialize does the heavy part (re-decode, create) with no lock held; Publish then writes the
 // object's handles under the table's mutex and the record is kept, MADE. So a use sees either a made
 // object, no record (the object was never deferred) or waits until the record is made.
@@ -22,7 +22,8 @@
 // the exe), a made object not used for that long gives its handles back (Record::Evict, under the
 // table's mutex and inside a closed UseGate, so no use is reading them) and its record is IDLE again:
 // the next use re-materializes it from its Locator. Every use stamps the object (Use / UseStamps);
-// a sweep (Sweep, from worker 0 once per epoch in the exe) advances the epoch and evicts.
+// a sweep (Sweep, from worker 0 once per epoch in the exe) advances the epoch and evicts. A KEPT object
+// (Keep) is never evicted: what is drawn all at once when a window opens (the UI's sprite sheets).
 //
 // DEVICE. Pause() (the device going away: exit, a device-lost recovery) stops new materializations
 // and waits for the running ones; Resume() (a device made) lets them go on. A record that meets a
@@ -90,6 +91,8 @@ public:
     }
     // Queue obj's record for a worker (no-op when it has none, or it is queued / running / made).
     void Prefetch(const void* obj);
+    // Prefetch, and the object is never evicted (made already: it leaves the sweep's set).
+    void Keep(const void* obj);
 
     // Every slot that reads a companion's handles: Enter, Use(obj), ..., Leave.
     void Enter() { _gate.Enter(); }
@@ -118,6 +121,7 @@ public:
         uint64_t pendingBytes   = 0;
         int64_t  onUse          = 0;   // materialized by Ensure on the using thread
         int64_t  prefetched     = 0;   // materialized by a worker
+        int64_t  kept           = 0;   // records marked Keep, run total
         uint64_t materialBytes  = 0;   // made, run total (a re-made object counts again)
         int64_t  failed         = 0;   // Materialize failed (published as a failed create)
         int64_t  retried        = 0;   // Materialize found no usable device (kept)
@@ -141,6 +145,7 @@ private:
         State                   state   = State::Idle;
         bool                    tracked = false;   // in _stamps (made, and it fit)
         bool                    madeOnce = false;
+        bool                    kept    = false;   // Keep: never evicted
     };
 
     void EnsureSlow(const void* obj);
@@ -149,6 +154,8 @@ private:
     // returns with `lock` held.
     void RunClaimed(std::unique_lock<std::mutex>& lock, const void* obj, bool onUse);
     void Untrack(Entry& e, const void* obj);
+    // Prefetch's body, with the table's mutex held.
+    void QueueLocked(Entry& e, const void* obj);
     void StartWorkers();
     void WorkerMain(int index);
 

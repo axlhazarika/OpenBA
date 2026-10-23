@@ -29,4 +29,8 @@ bool Supported();
 // data, a Video::ImageBuffer's) for a prefetch worker. A no-op for any object that has none.
 void Prefetch(const void* companion);
 
+// Prefetch, and the object is never given back by the idle eviction: what is drawn many at a time
+// when a window opens (the UI's sprite sheets, the cursors).
+void Keep(const void* companion);
+
 }  // namespace CreateOnDemandBackend

@@ -13,6 +13,7 @@
 #include "graphics/Mesh.h"
 #include "ext/registry.h"
 #include "io/FileSystem.h"
+#include "ui/SpriteSheet.h"
 #include "video/ImageBuffer.h"
 
 #include <cstdio>
@@ -35,6 +36,7 @@ void Boot() {
     ::IO::FileSystem::_extHandleClosing = on ? &HandleClosing : nullptr;
     ::Video::ImageBuffer::_extLevelSource = on ? &ReadLevels : nullptr;
     ::Graphics::MeshInstance::_extMeshAssigned = on ? &PrefetchMesh : nullptr;
+    ::UI::SpriteSheet::_extLoaded = on ? &KeepSpriteSheet : nullptr;
 }
 
 }}  // namespace Ext::CreateOnDemand

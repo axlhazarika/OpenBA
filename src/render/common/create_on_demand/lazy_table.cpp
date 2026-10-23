@@ -61,6 +61,7 @@ void LazyTable::Add(const void* obj, std::unique_ptr<Record> record) {
     e.record   = std::move(record);
     e.state    = State::Idle;
     e.madeOnce = false;
+    e.kept     = false;
     ++_stats.recorded;
     _stats.recordedBytes += bytes;
     ++_stats.pending;
@@ -103,7 +104,7 @@ void LazyTable::RunClaimed(std::unique_lock<std::mutex>& lock, const void* obj, 
         if (e.madeOnce) ++_stats.remade;
         e.madeOnce = true;
         e.state    = State::Made;
-        e.tracked  = _stamps.Insert(obj, _epoch.load(std::memory_order_relaxed));
+        e.tracked  = !e.kept && _stamps.Insert(obj, _epoch.load(std::memory_order_relaxed));
         if (e.tracked) _made.insert(obj);
     } else {
         ++_stats.failed;
@@ -167,8 +168,25 @@ void LazyTable::Prefetch(const void* obj) {
     if (_count.load(std::memory_order_acquire) == 0 || _workers == 0) return;
     std::lock_guard<std::mutex> lock(_mutex);
     auto it = _entries.find(obj);
-    if (it == _entries.end() || it->second.state != State::Idle || _stop) return;
-    it->second.state = State::Queued;
+    if (it == _entries.end()) return;
+    QueueLocked(it->second, obj);
+}
+
+void LazyTable::Keep(const void* obj) {
+    if (_count.load(std::memory_order_acquire) == 0) return;
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _entries.find(obj);
+    if (it == _entries.end() || it->second.kept) return;
+    Entry& e = it->second;
+    e.kept = true;
+    ++_stats.kept;
+    if (e.state == State::Made) Untrack(e, obj);   // out of the sweep's set
+    if (_workers > 0) QueueLocked(e, obj);
+}
+
+void LazyTable::QueueLocked(Entry& e, const void* obj) {
+    if (e.state != State::Idle || _stop) return;
+    e.state = State::Queued;
     _queue.push_back(obj);
     if (_threads.empty()) StartWorkers();
     _workCv.notify_one();

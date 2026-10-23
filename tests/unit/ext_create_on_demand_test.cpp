@@ -753,6 +753,45 @@ UNIT_TEST(ext_create_on_demand_table_evicts_idle_and_remakes) {
     CHECK_EQ(c.evicted.load(), 2);
 }
 
+UNIT_TEST(ext_create_on_demand_table_kept_is_never_evicted) {
+    LazyTable t(1);
+    t.SetIdleLimit(1, std::chrono::milliseconds(0));
+    Counters c;
+    int fa = 0;
+    int fb = 0;
+    int fc = 0;
+    const int a = 0;
+    const int b = 0;
+    const int d = 0;
+    t.Add(&a, Fake(&c, &fa, 1));
+    t.Add(&b, Fake(&c, &fb, 2));
+    t.Add(&d, Fake(&c, &fc, 3));
+    t.Keep(&a);       // unmade: queued for the worker, and kept
+    t.DrainQueue();
+    CHECK_EQ(fa, 1);
+    t.Ensure(&b);
+    t.Ensure(&d);
+    t.Keep(&b);       // made already: it leaves the sweep's set
+    t.Keep(&b);       // a second Keep counts once
+    for (int i = 0; i < 4; ++i) {
+        t.Sweep();
+    }
+    CHECK_EQ(fa, 1);
+    CHECK_EQ(fb, 2);
+    CHECK_EQ(fc, 0);   // the one not kept is given back
+    CHECK_EQ(c.evicted.load(), 1);
+    LazyTable::Stats s = t.GetStats();
+    CHECK_EQ(s.kept, int64_t(2));
+    CHECK_EQ(s.prefetched, int64_t(1));
+    t.Forget(&a);
+    t.Add(&a, Fake(&c, &fa, 4));   // a new record for the same object is not kept
+    t.Ensure(&a);
+    for (int i = 0; i < 3; ++i) {
+        t.Sweep();
+    }
+    CHECK_EQ(fa, 0);
+}
+
 UNIT_TEST(ext_create_on_demand_table_idle_zero_never_evicts) {
     LazyTable t(0);
     t.SetIdleLimit(0, std::chrono::milliseconds(0));

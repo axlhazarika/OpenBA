@@ -1,5 +1,5 @@
 // ============================================================================
-// src/ext/create_on_demand/prefetch.cpp -- NOT RETAIL. ext.create_on_demand's mesh prefetch
+// src/ext/create_on_demand/prefetch.cpp -- NOT RETAIL. ext.create_on_demand's prefetches
 // ============================================================================
 // Class A (docs/extensions/handins/CREATEONDEMAND.md). Installed as Graphics::MeshInstance::
 // _extMeshAssigned (Mesh.h has the seam's contract) while the row is on.
@@ -9,7 +9,7 @@
 // first draws it. The world gives notice earlier: a mesh instance gets its mesh (SetMesh) when an
 // entity is placed, loaded from a save, or changes its model, well before it is drawn. This queues
 // the first-use creates of everything that instance draws with -- every detail level's four
-// buffers, every material's textures -- for the backend's prefetch workers. Queueing an object that
+// buffers and image, every material's textures -- for the backend's prefetch workers. Queueing an object that
 // has no deferred create (already made, never deferred) is a lookup that finds nothing.
 // ============================================================================
 
@@ -19,6 +19,7 @@
 #include "graphics/GraphicsMesh.h"
 #include "graphics/Material.h"
 #include "graphics/Mesh.h"
+#include "ui/SpriteSheet.h"
 #include "video/Buffers.h"
 #include "video/ImageBuffer.h"
 
@@ -34,6 +35,10 @@ void PrefetchMesh(const Graphics::MeshInstance& instance) {
             CreateOnDemandBackend::Prefetch(level._indexBuffer.platformData);
             CreateOnDemandBackend::Prefetch(level._skinVertexBuffer.platformData);
             CreateOnDemandBackend::Prefetch(level._skinIndexBuffer.platformData);
+            // The level's own image (its baked occlusion map), which the draw binds to slot 3 apart
+            // from the materials (MeshInstance draw, BindMaterialImage).
+            const Video::ImageBuffer* const image = level._image.Get();
+            if (image != nullptr) CreateOnDemandBackend::Prefetch(image->_data);
         }
     }
     const Object::ExternalPtr<Graphics::MaterialInstance>* const materials = instance._materials.GetData();
@@ -45,6 +50,20 @@ void PrefetchMesh(const Graphics::MeshInstance& instance) {
             const Video::ImageBuffer* const image = textures[t].image;
             if (image != nullptr) CreateOnDemandBackend::Prefetch(image->_data);
         }
+    }
+}
+
+// UI::SpriteSheet::_extLoaded. A window draws its sprite sheets all in the frame it opens: a
+// sub-toolbar of a large mod set shows icons from ~80 sheets at once, ~27 ms of creates made on the
+// render thread. Every sheet (the UI's, the fonts', the cursors') is queued as it loads instead, and
+// KEPT: an idle eviction would only bring the same frame back the next time the window opens.
+void KeepSpriteSheet(const UI::SpriteSheet& sheet) {
+    const Graphics::MaterialInstance* const material = sheet.m_field30;
+    if (material == nullptr) return;
+    const RtGraphics::MaterialTexture* const textures = material->_textures.GetData();
+    for (int32_t t = 0; t < material->_textures.GetSize(); ++t) {
+        const Video::ImageBuffer* const image = textures[t].image;
+        if (image != nullptr) CreateOnDemandBackend::Keep(image->_data);
     }
 }
 

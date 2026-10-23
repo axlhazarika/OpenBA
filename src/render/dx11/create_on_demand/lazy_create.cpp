@@ -256,9 +256,9 @@ void Print(const char* when) {
     if (s.evicted != 0 || s.sweeps != 0)
         std::fprintf(stderr,
                      "[CreateOnDemand] %s: given back %lld (%.1f MB) over %lld sweeps (uses held %.1f ms), "
-                     "re-made %lld; made and held %.1f MB\n",
+                     "re-made %lld, kept %lld; made and held %.1f MB\n",
                      when, static_cast<long long>(s.evicted), s.evictedBytes * mb, static_cast<long long>(s.sweeps),
-                     s.evictNs / 1e6, static_cast<long long>(s.remade),
+                     s.evictNs / 1e6, static_cast<long long>(s.remade), static_cast<long long>(s.kept),
                      (static_cast<double>(s.recordedBytes) - static_cast<double>(s.pendingBytes)) * mb);
 }
 
@@ -358,6 +358,11 @@ bool Supported() {
 void Prefetch(const void* companion) {
     if (::CreateOnDemand::LazyTable* const t = VideoDX11::CreateOnDemand::g_table.load(std::memory_order_relaxed))
         t->Prefetch(companion);
+}
+
+void Keep(const void* companion) {
+    if (::CreateOnDemand::LazyTable* const t = VideoDX11::CreateOnDemand::g_table.load(std::memory_order_relaxed))
+        t->Keep(companion);
 }
 
 }  // namespace CreateOnDemandBackend
