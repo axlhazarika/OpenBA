@@ -282,8 +282,8 @@ const Entry kEntries[] = {
     // CREATEONDEMAND (docs/extensions/handins/CREATEONDEMAND.md, issue #13): static vertex / index
     // buffers and file-seeded textures are created at their first use (or when the world places a
     // mesh that uses them) instead of at load; their bytes are read again from the mapped package.
-    // Read once at boot (next start). OFF by default until ruled.
-    { "create_on_demand", Tier::Extension, Class::A, false,
+    // Read once at boot (next start). ON by default (the user ruled 2026-10-23).
+    { "create_on_demand", Tier::Extension, Class::A, true,
       "Load graphics on demand",
       "Prepares a model's graphics when the game first shows it instead of at start-up: much less "
       "memory with large mods. Takes effect at the next start.",
@@ -341,6 +341,11 @@ const ValueKey kValueKeys[] = {
     // one cap. 4096 holds a MegaMod 7-part boot's AO maps (~1.04 GB) four times over.
     { "derived_cache_mb", "compress_ao", 256, 65536, 4096,
       [](State& s) -> int32_t& { return s.val.derived_cache_mb; }, nullptr, 0 },
+    // CREATEONDEMAND section 7: minutes a made object may go unused before it is given back (released,
+    // re-made from its package at the next use); 0 = never. Read once at boot. Default 0 until re-makes
+    // are prefetched: a re-made object is otherwise created on the render thread in the frame that draws it.
+    { "create_on_demand_idle_min", "create_on_demand", 0, 120, 0,
+      [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

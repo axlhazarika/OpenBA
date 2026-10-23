@@ -108,7 +108,12 @@ bool PendingRoad(const Map* map, int cellIdx) {
 // (count +0x218) with a parallel int array at +0x220 (count +0x228); both grow to
 // `index+1` and the new int slots are zeroed.
 // ============================================================================
+void (*WorldGeometry::_extMaterialTaken)(const Graphics::MaterialInstance* material) = nullptr;
+
 void WorldGeometry::StoreBatchMaterial(int index, Graphics::MaterialInstance* decal) {
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): the batch material's textures
+    // are queued for their first-use creates (WorldGeometry.h has the contract).
+    if (_extMaterialTaken != nullptr) _extMaterialTaken(decal);
     RawArray<Graphics::MaterialInstance*>& refs = _batchMaterials;   // +0x210
     Collection::Array<int32_t>& ints = _batchCounters;     // +0x220
     int oldCount = refs.size;   // +0x218

@@ -1,5 +1,5 @@
 #pragma once
-// src/ext/create_on_demand/create_on_demand.h -- ext.create_on_demand (class A, next start, default OFF)
+// src/ext/create_on_demand/create_on_demand.h -- ext.create_on_demand (class A, next start, default ON)
 //
 // NOT RETAIL (docs/extensions/handins/CREATEONDEMAND.md, issue #13). Retail creates every static
 // vertex buffer, index buffer and texture of a resource file while the file loads: a MegaMod 7-part

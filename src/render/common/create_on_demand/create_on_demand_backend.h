@@ -19,7 +19,8 @@ namespace CreateOnDemandBackend {
 
 // The extension's one call (Ext::CreateOnDemand::Boot, main thread, once at boot, before the first
 // load: the row takes effect at the next start). Off: every object is created at load, retail's.
-void Request(bool on);
+// `idleMinutes` > 0: a made object unused that long is given back and re-made at its next use.
+void Request(bool on, int idleMinutes);
 
 // False when the backend has no deferred path (none today: DX11 and Metal both have one): the request is
 // then ignored.
@@ -28,5 +29,16 @@ bool Supported();
 // Queue the deferred create of an engine companion (a Video::VertexBuffer / IndexBuffer's platform
 // data, a Video::ImageBuffer's) for a prefetch worker. A no-op for any object that has none.
 void Prefetch(const void* companion);
+
+// Prefetch, and the object is never given back by the idle eviction: what is drawn many at a time
+// when a window opens (the UI's sprite sheets, the cursors).
+void Keep(const void* companion);
+
+// True when a vertex buffer's companion holds its GPU object (made at load, by a prefetch or a use,
+// and not given back since). One load, no lock: the draw gather asks it for every mesh it draws, and
+// a stale answer costs one extra queueing at most.
+bool VertexBufferMade(const void* companion);
+// The same for an image's companion (its shader view).
+bool ImageMade(const void* companion);
 
 }  // namespace CreateOnDemandBackend

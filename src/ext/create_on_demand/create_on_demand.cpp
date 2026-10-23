@@ -11,8 +11,11 @@
 #include "ext/create_on_demand/level_source.h"
 #include "ext/create_on_demand/prefetch.h"
 #include "graphics/Mesh.h"
+#include "graphics/ParticleInstance.h"
+#include "Game/WorldGeometry.h"
 #include "ext/registry.h"
 #include "io/FileSystem.h"
+#include "ui/SpriteSheet.h"
 #include "video/ImageBuffer.h"
 
 #include <cstdio>
@@ -31,10 +34,15 @@ void Boot() {
     const bool on = Ext().create_on_demand && CreateOnDemandBackend::Supported();
     if (Ext().create_on_demand && !on)
         std::fprintf(stderr, "[CreateOnDemand] the renderer does not support deferred creates: all made at load\n");
-    CreateOnDemandBackend::Request(on);
+    CreateOnDemandBackend::Request(on, Val().create_on_demand_idle_min);
     ::IO::FileSystem::_extHandleClosing = on ? &HandleClosing : nullptr;
     ::Video::ImageBuffer::_extLevelSource = on ? &ReadLevels : nullptr;
     ::Graphics::MeshInstance::_extMeshAssigned = on ? &PrefetchMesh : nullptr;
+    ::Graphics::MeshInstance::_extMaterialAssigned = on ? &PrefetchMaterial : nullptr;
+    ::Graphics::MeshInstance::_extLevelGathered = on ? &PrefetchGathered : nullptr;
+    ::Graphics::ParticleInstance::_extParticleAssigned = on ? &PrefetchParticle : nullptr;
+    ::UI::SpriteSheet::_extLoaded = on ? &KeepSpriteSheet : nullptr;
+    ::WorldGeometry::_extMaterialTaken = on ? &KeepMaterial : nullptr;
 }
 
 }}  // namespace Ext::CreateOnDemand

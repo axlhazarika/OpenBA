@@ -97,6 +97,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/render/common/share_gpu_data/share_table.cpp   # ext_share_gpu_data_test.cpp (SHAREGPUDATA)
   ${CMAKE_SOURCE_DIR}/src/render/common/create_on_demand/payload.cpp      # ext_create_on_demand_test.cpp (CREATEONDEMAND)
   ${CMAKE_SOURCE_DIR}/src/render/common/create_on_demand/lazy_table.cpp   #   the deferred-create table
+  ${CMAKE_SOURCE_DIR}/src/render/common/create_on_demand/use_tracker.cpp  #   its use stamps (eviction)
   ${CMAKE_SOURCE_DIR}/src/ext/decode_ahead/block_cache.cpp   # ext_decode_ahead_test.cpp (DECODEAHEAD)
   ${CMAKE_SOURCE_DIR}/src/engine/system/compression.cpp       # ext_decode_ahead_test.cpp: the real Decompress
   ${CMAKE_SOURCE_DIR}/src/platform/common/window_messages.cpp
