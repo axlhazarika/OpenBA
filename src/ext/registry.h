@@ -62,6 +62,7 @@ struct Fixes {
     bool start_barn_height = true;   // docs/retail_bugs.md §4
     bool ui_scale_layout   = true;   // docs/retail_bugs.md §5 (engine seam UI::UserInterface::_extFixScaleLayout)
     bool rock_seat         = true;   // docs/retail_bugs.md §7, src/ext/rock_seat/ (docs/extensions/handins/ROCKSEAT.md): render only
+    bool terrain_resort    = true;   // docs/retail_bugs.md §8, src/ext/terrain_resort/ (docs/extensions/handins/TERRAINRESORT.md)
 };
 
 // One bool per registered extension (settings key `ext.<id>`). Each extension
