@@ -82,6 +82,7 @@
 #include <new>
 
 #include "external_set.h"
+#include "collection/fold_index.h"   // block PATHINDEX
 #include "system/string_internal.h"
 #include "object/External.h"
 #include "io/FileStream.h"
@@ -207,22 +208,32 @@ extern "C" void RtObject_ExternalFactory_Add(ExternalFactory* self, ::Object::Ex
     // one needs the NODE (to update its usageMask in place) while `Find`
     // returns the `External*`.
     rtresset::Set* const set = reinterpret_cast<rtresset::Set*>(&self->_resources);  // CAST-OK: elem_stride
-    rtresset::Node* node = set->root;
-    if (node == nullptr) ++g_ac.emptyTree;
+    // NOT RETAIL (block PATHINDEX): the tree's hash index answers when it can
+    // (src/engine/collection/fold_index.h); the descent runs otherwise.
+    rtresset::Node* indexed = nullptr;
+    const bool answered = rtresset::IndexedFind(set, set->count, path._data, &indexed);
+    if (set->root == nullptr) ++g_ac.emptyTree;
 
-    while (node != nullptr) {
-        const char* const nodeKey = rtresset::Elem(node)->path._data;
-        if (FilenameLess(path._data, nodeKey)) {
-            ++g_ac.descLeft;
-            node = node->left;                                  // 1800be6bb
-            continue;
+    rtresset::Node* node = nullptr;
+    if (answered && !OPENBA_PATHINDEX_CHECK) {
+        node = indexed;
+    } else {
+        node = set->root;
+        while (node != nullptr) {
+            const char* const nodeKey = rtresset::Elem(node)->path._data;
+            if (FilenameLess(path._data, nodeKey)) {
+                ++g_ac.descLeft;
+                node = node->left;                              // 1800be6bb
+                continue;
+            }
+            if (FilenameLess(nodeKey, path._data)) {
+                ++g_ac.descRight;
+                node = node->right;                             // 1800be6b2
+                continue;
+            }
+            break;                                              // equal key
         }
-        if (FilenameLess(nodeKey, path._data)) {
-            ++g_ac.descRight;
-            node = node->right;                                 // 1800be6b2
-            continue;
-        }
-        break;                                                  // equal key
+        Collection::FoldIndex::Check("resources/Add", path._data, answered, indexed, node);
     }
 
     // The clean-generation bit for THIS generation. `_cleanBitIndex` is a plain

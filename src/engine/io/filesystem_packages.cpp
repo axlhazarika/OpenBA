@@ -307,7 +307,7 @@
 #include "collection/Collection.h"
 #include "system/string_internal.h"
 #include "collection/avl_trees.h"   // rtavl::FilenameSetInsert
-#include "io/packfile_generation.h"   // block SAVELOAD: the index change counter
+#include "io/packfile_fold_index.h"   // block PATHINDEX: the hash index beside _packfileIndex
 
 #include <new>        // placement new into the retail hidden return slot
 #include <utility>    // std::move -- the pointer steal out of a POD out-param
@@ -591,6 +591,7 @@ void FileSystem::ClosePackages() {
     _packfiles._size    = 0;
     _packfiles._capacity = 0;
 
+    ::IO::PackIndexClear(&_packfileIndex);   // NOT RETAIL (block PATHINDEX): the nodes go next
     RtIO::PackfileIndexNode* const root = _packfileIndex.root;
     if (root != nullptr) {
         // ENDGAME B.3.2 step 2 — FUN_180008340, the recursive subtree free, IS
@@ -613,7 +614,6 @@ void FileSystem::ClosePackages() {
     // Zeroed unconditionally, even when root was already null.
     _packfileIndex.count = 0;
     _packfileIndex.root  = nullptr;
-    ::IO::BumpPackfileIndexGeneration();   // NOT RETAIL (block SAVELOAD): the tree changed
     // NOT RETAIL (fix.large_packages, docs/extensions/handins/LARGEPKM.md): the packages are gone,
     // so are their 64-bit offsets. The next LoadPackages rebuilds them.
     _extWidePackages = nullptr;
@@ -746,8 +746,14 @@ void FileSystem::LoadPackages() {
             // place, and the one release is ~key at the bottom of the iteration.
             System::Filename key(owner->IO::PackageFile::GetFileName(fi));
 
-            RtIO::PackfileIndexNode* node =
-                RtIO::IndexFind(_packfileIndex.root, key._data);
+            // NOT RETAIL (block PATHINDEX): the hash index answers when it can.
+            RtIO::PackfileIndexNode* node = nullptr;
+            const bool answered = ::IO::PackIndexFind(&_packfileIndex, key._data, &node);
+            if (!answered || OPENBA_PATHINDEX_CHECK) {
+                RtIO::PackfileIndexNode* const indexed = node;
+                node = RtIO::IndexFind(_packfileIndex.root, key._data);
+                ::IO::PackIndexCheck(answered, key._data, indexed, node);
+            }
             if (node != nullptr) {
                 // The incumbent's OWN +0xAC decides, not the newcomer's: retail
                 // indexes packfiles[] with the FOUND NODE's packIndex
@@ -758,7 +764,6 @@ void FileSystem::LoadPackages() {
                     node->element.value = RtIO::PackfileIndexValue{
                         static_cast<uint32_t>(pi), static_cast<uint32_t>(fi) };
                     ++overridden;
-                    ::IO::BumpPackfileIndexGeneration();   // NOT RETAIL (block SAVELOAD): conservative, the key set is unchanged
                 } else {
                     ++kept;
                 }
@@ -794,7 +799,7 @@ void FileSystem::LoadPackages() {
                                                       static_cast<uint32_t>(fi) };
                 RtIO::PackfileIndexNode* out = nullptr;
                 rtavl::FilenameSetInsert(&_packfileIndex, &out, &key, &value);
-                ::IO::BumpPackfileIndexGeneration();   // NOT RETAIL (block SAVELOAD): the tree changed
+                ::IO::PackIndexInsert(&_packfileIndex, out);   // NOT RETAIL (block PATHINDEX)
                 ++inserted;
             }
 

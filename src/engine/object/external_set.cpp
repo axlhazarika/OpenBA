@@ -74,6 +74,7 @@
 #include <new>          // placement new into raw node/array element bytes
 
 #include "external_set.h"
+#include "collection/fold_index.h"   // block PATHINDEX
 #include "system/string_internal.h"
 #include "system/MemoryAllocator.h"   // B3R: MemAlloc / MemFree / FreeLockedIgnoringSelf
 
@@ -121,6 +122,30 @@ ProbeCounters g_rc = {};
 // keeps the four sites' spelling.
 static void ReleaseInline(System::Filename* slot) {
     slot->~Filename();
+}
+
+// NOT RETAIL (block PATHINDEX): the resource tree's hash index. Never destroyed,
+// for the reason expand_memo.cpp gives (a loader thread at exit).
+namespace {
+const char* ResourceNodeKey(const void* node) {
+    return Elem(static_cast<const Node*>(node))->path._data;
+}
+Collection::FoldIndex& ResIndex() {
+    static Collection::FoldIndex* const index = new Collection::FoldIndex(&ResourceNodeKey);
+    return *index;
+}
+}  // namespace
+
+bool IndexedFind(const void* set, int32_t count, const char* key, Node** out) {
+    const void* node = nullptr;
+    if (!ResIndex().Find(set, count, key, &node))
+        return false;
+    *out = const_cast<Node*>(static_cast<const Node*>(node));
+    return true;
+}
+
+void IndexClear(const void* set) {
+    ResIndex().Clear(set);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +434,7 @@ Node** InsertCore(Set* set, Node** out, const ResourceEntry* pair) {
         Node* fresh = AllocNode(set, pair, nullptr);
         set->count += 1;               // 0x18002ce91, BEFORE the root store
         set->root = fresh;
+        ResIndex().Insert(set, fresh);   // NOT RETAIL (block PATHINDEX)
         *out = fresh;
         return out;
     }
@@ -423,6 +449,7 @@ Node** InsertCore(Set* set, Node** out, const ResourceEntry* pair) {
                 n->left = fresh;
                 rtresset::Retrace(set, &slot);   // 0x18002cf17, slot still holds `n`
                 set->count += 1;       // 0x18002cf1c, AFTER the retrace
+                ResIndex().Insert(set, fresh);   // NOT RETAIL (block PATHINDEX)
                 *out = fresh;
                 return out;
             }
@@ -437,6 +464,7 @@ Node** InsertCore(Set* set, Node** out, const ResourceEntry* pair) {
                 n->right = fresh;
                 rtresset::Retrace(set, &slot);
                 set->count += 1;
+                ResIndex().Insert(set, fresh);   // NOT RETAIL (block PATHINDEX)
                 *out = fresh;
                 return out;
             }
@@ -521,6 +549,7 @@ void FreeEntryNode(void* ignored, Node* node) {
 // conditional rather than as two calls.
 // ---------------------------------------------------------------------------
 void Erase(Set* set, Node* z) {
+    ResIndex().Erase(set, z);               // NOT RETAIL (block PATHINDEX): the key is still live
     Node* retraceFromParent = z->parent;    // [RSP+0x50], "local A"
     set->count -= 1;                        // 0x18002cf85, before anything else
 
@@ -611,13 +640,20 @@ void Erase(Set* set, Node* z) {
 // The two are checked against each other in the probe, which drives this one.
 // ---------------------------------------------------------------------------
 Node* Find(const Set* set, const System::Filename* key) {
+    // NOT RETAIL (block PATHINDEX): the index's answer when it has one; the
+    // descent below otherwise.
+    Node* indexed = nullptr;
+    const bool answered = IndexedFind(set, set->count, key->_data, &indexed);
+    if (answered && !OPENBA_PATHINDEX_CHECK)
+        return indexed;
     Node* n = set->root;
     while (n != nullptr) {
         if (FilenameLess(key->_data, Elem(n)->path._data))      n = n->left;
         else if (FilenameLess(Elem(n)->path._data, key->_data)) n = n->right;
-        else                                                  return n;
+        else                                                  break;
     }
-    return nullptr;
+    Collection::FoldIndex::Check("resources", key->_data, answered, indexed, n);
+    return n;
 }
 
 // ---------------------------------------------------------------------------
