@@ -24,6 +24,7 @@
 | Ext A | Batched terrain drawing | Draws each row of visible terrain chunks in one call and skips shadow work for terrain whose shadow cannot reach the screen. Same picture. |
 | Ext A | Parallel resource decoding | While a resource loads, the next compressed parts of its file are decoded on other cores. Same game data, faster loading of large mods. Takes effect at the next start. |
 | Ext A | Parallel graphics loading | While content loads, its GPU buffers and textures are created on other cores. Same resources, all made before the load ends; faster loading of large mods. Takes effect at the next load. |
+| Ext A | Compressed AO maps | Keeps the models' baked shading maps compressed (BC4): half their memory (-1.1 GB with MegaMod), the same look. The first start after a mod change prepares them; later starts reuse them from a cache beside settings.cfg (Options > Enhanced: size + Clear cache). Takes effect at the next start. |
 | Ext A | Mod loading screen | While mods load at start-up, shows the loading screen and which mod is loading instead of a black window. |
 | Ext A | Background saving | Writes the save on a worker thread while the town holds still for a moment; the screen and camera keep moving. Identical save files. |
 | Ext A | No fog | Removes the fog that hazes the far map when the camera is zoomed far out. Off by default; live. |
