@@ -42,6 +42,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "create_on_demand/use_tracker.h"
@@ -155,6 +156,7 @@ private:
     std::condition_variable                    _doneCv;   // a record finished or the table resumed
     std::condition_variable                    _workCv;   // a record was queued or the table resumed
     std::unordered_map<const void*, Entry>     _entries;
+    std::unordered_set<const void*>            _made;     // the entries in state Made (the sweep's scan)
     std::deque<const void*>                    _queue;
     std::vector<std::thread>                   _threads;
     std::atomic<int64_t>                       _count{0};   // _entries.size(), for the fast path

@@ -35,6 +35,7 @@ LazyTable::~LazyTable() {
 void LazyTable::Untrack(Entry& e, const void* obj) {
     if (e.tracked) _stamps.Remove(obj);
     e.tracked = false;
+    _made.erase(obj);
 }
 
 void LazyTable::Add(const void* obj, std::unique_ptr<Record> record) {
@@ -103,6 +104,7 @@ void LazyTable::RunClaimed(std::unique_lock<std::mutex>& lock, const void* obj, 
         e.madeOnce = true;
         e.state    = State::Made;
         e.tracked  = _stamps.Insert(obj, _epoch.load(std::memory_order_relaxed));
+        if (e.tracked) _made.insert(obj);
     } else {
         ++_stats.failed;
         Untrack(e, obj);
@@ -190,22 +192,36 @@ int64_t LazyTable::Sweep() {
         idle = _paused ? 0 : _idleEpochs;
     }
     if (idle == 0) return 0;
-    // No use may be reading a handle while it is given back: close the gate first (no lock held),
-    // then take the table's mutex (no materialization publishes meanwhile).
+    // The candidates first, from the made objects only, under the table's mutex alone (no use waits on the
+    // scan): what was not used for more than `idle` whole epochs (a use late in the last
+    // epoch is not idle yet).
+    auto idleNow = [&](const void* obj) {
+        uint32_t last = 0;
+        return _stamps.LastUse(obj, &last) && now - last > idle;
+    };
+    std::vector<const void*> candidates;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (const void* obj : _made) {
+            if (idleNow(obj)) candidates.push_back(obj);
+        }
+    }
+    if (candidates.empty()) return 0;
+    // No use may be reading a handle while it is given back: close the gate (no lock held), then take
+    // the table's mutex (no materialization publishes meanwhile) and give back each candidate still
+    // made and still idle.
     const uint64_t t0 = NowNs();
     _gate.Close();
     int64_t evicted = 0;
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        for (auto& kv : _entries) {
-            Entry& e = kv.second;
-            if (e.state != State::Made || !e.tracked) continue;
-            uint32_t last = 0;
-            // Last used in epoch `last`: kept until `idle` whole epochs have passed without a use (a use
-            // late in the previous epoch is not idle at all yet).
-            if (!_stamps.LastUse(kv.first, &last) || now - last <= idle) continue;
+        for (const void* obj : candidates) {
+            auto it = _entries.find(obj);
+            if (it == _entries.end()) continue;
+            Entry& e = it->second;
+            if (e.state != State::Made || !e.tracked || !idleNow(obj)) continue;
             e.record->Evict();
-            Untrack(e, kv.first);
+            Untrack(e, obj);
             e.state = State::Idle;
             const uint64_t bytes = e.record->Bytes();
             ++_stats.pending;
