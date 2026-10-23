@@ -15,7 +15,6 @@
 #include "better_trees/foliage_aa_backend.h"
 #include "better_trees/billboard_shadow_backend.h"
 #include "async_gpu_create/async_gpu_create_backend.h"
-#include "create_on_demand/create_on_demand_backend.h"
 #include "draw_batch/smoke_vs_backend.h"
 #include "ext/render_pipe/finish_split.h"
 #include "graphics/renderer_ext_ao.h"
@@ -87,27 +86,8 @@ bool Supported() {
 
 }  // namespace AsyncGpuCreateBackend
 
-// ext.compress_ao and ext.share_gpu_data: their bodies are compress_ao/bc4_create.mm and
-// share_gpu_data/share_create.mm (the DX11 layout).
-
-// ext.create_on_demand: the Metal backend has no deferred create yet (its buffer and texture creates
-// read their bytes at load), so the request is ignored, nothing is ever recorded or prefetched, and
-// the answer is "not supported".
-namespace CreateOnDemandBackend {
-
-void Request(bool on) {
-    (void)on;
-}
-
-bool Supported() {
-    return false;
-}
-
-void Prefetch(const void* companion) {
-    (void)companion;
-}
-
-}  // namespace CreateOnDemandBackend
+// ext.compress_ao, ext.share_gpu_data and ext.create_on_demand: their bodies are compress_ao/bc4_create.mm,
+// share_gpu_data/share_create.mm and create_on_demand/lazy_create.mm (the DX11 layout).
 
 // ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader
 // that writes an emitter slot into each vertex. Metal has no such rewrite, so it answers "not

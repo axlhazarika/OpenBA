@@ -13,6 +13,8 @@
 #include "compress_ao/bc4_create.h"
 #include "compress_ao/bc4_chain.h"
 #include "share_gpu_data/share_create.h"
+#include "create_on_demand/lazy_create.h"
+#include "seeded_create.h"
 #include "video/Device.h"
 #include "platform/common/cursor_image.h"
 #include "video/Buffers.h"
@@ -978,10 +980,15 @@ bool DeviceData::CreateDevice() {
         Platform::Window::ConfigureBackgroundWindow(w);
         _owner->settingsChanged = 0;
         fprintf(stderr, "[Metal] device %s created\n", gpu.name.UTF8String);
+        // NOT RETAIL (ext.create_on_demand): objects waiting for their first use are made on this device.
+        CreateOnDemand::Resume();
         return true;
     }
 }
 void DeviceData::Shutdown() {
+    // NOT RETAIL (ext.create_on_demand): no first-use create runs against the device going away (the rest
+    // wait for the next device).
+    CreateOnDemand::Pause();
     if (watchedWindow) {
         SDL_RemoveEventWatch(OnWindowEvent, watchedWindow);
         watchedWindow = nullptr;
@@ -1032,11 +1039,13 @@ void DeviceData::Shutdown() {
 }
 // NOT RETAIL (ext.compress_ao, ext.share_gpu_data): the loader bracket's close prints the load's BC4
 // summary and asks the derived cache to persist its keep list and release its mapping, then the run's
-// sharing summary -- DX11's Slot4(false) (devicedata_stubs.cpp). Retail's body is empty here.
+// sharing summary and the deferred creates' summary (ext.create_on_demand) -- DX11's Slot4(false)
+// (devicedata_stubs.cpp). Retail's body is empty here.
 void DeviceData::Slot4(bool loading) {
     if (!loading) {
         ::CompressAo::LoadEnd();
         ShareGpuData::LoadEnd();
+        CreateOnDemand::LoadEnd();
     }
 }
 float DeviceData::Slot5() { return 0; }
@@ -1391,6 +1400,7 @@ void ContextData::EndInstancedIndexedVertices(int primitiveType) {
     DrawIndexed(primitiveType, 0, c->_unknown2104, 0, c->_unknown2124, c->_instanceCount);
 }
 ImageBufferData::~ImageBufferData() {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): no first-use create after this
     if (shared) {
         ShareGpuData::DropTexture(texture);   // NOT RETAIL (ext.share_gpu_data): one user less
     }
@@ -1399,6 +1409,7 @@ ImageBufferData::~ImageBufferData() {
     depthAliases.erase(this);
 }
 void ImageBufferData::AttachColorBuffer() {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this replaces a deferred one
     auto dev = Video::Device::_singleton;
     _owner->_width = dev->backBufferWidth;
     _owner->_height = dev->backBufferHeight;
@@ -1421,6 +1432,7 @@ void ImageBufferData::AttachColorBuffer() {
     texture = mainColor;
 }
 void ImageBufferData::AttachDepthBuffer() {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this replaces a deferred one
     if (_owner->Width() <= 0 || _owner->Height() <= 0) {
         auto dev = Video::Device::_singleton;
         _owner->_width = dev->backBufferWidth;
@@ -1445,11 +1457,12 @@ void ImageBufferData::AttachDepthBuffer() {
 }
 // One sampler per image from its flags; `point` is the sharp_ui variant (D3D11_FILTER_MIN_MAG_MIP_POINT: no filtering,
 // no anisotropy).
-static id<MTLSamplerState> MakeSampler(const Video::ImageBuffer* image, id<MTLTexture> texture, bool point) {
+// `mipCount` is the texture's (a deferred texture's descriptor's: the sampler is made before it).
+static id<MTLSamplerState> MakeSampler(const Video::ImageBuffer* image, NSUInteger mipCount, bool point) {
     auto sd = [MTLSamplerDescriptor new];
     sd.supportArgumentBuffers = YES;
     sd.compareFunction = (!point && (image->_flags & 0x40)) ? MTLCompareFunctionLess : MTLCompareFunctionNever;
-    sd.lodMaxClamp = (image->_flags & 1) ? float(texture.mipmapLevelCount - 1) : 0;
+    sd.lodMaxClamp = (image->_flags & 1) ? float(mipCount - 1) : 0;
     sd.minFilter = sd.magFilter =
         (point || int(image->_filter) == 0) ? MTLSamplerMinMagFilterNearest : MTLSamplerMinMagFilterLinear;
     sd.mipFilter = (!point && int(image->_filter) == 2) ? MTLSamplerMipFilterLinear : MTLSamplerMipFilterNearest;
@@ -1469,7 +1482,94 @@ static id<MTLSamplerState> MakeSampler(const Video::ImageBuffer* image, id<MTLTe
     sd.rAddressMode = modes[std::clamp(int(image->_addressW), 0, 3)];
     return [gpu newSamplerStateWithDescriptor:sd];
 }
+// The seeded creates (seeded_create.h): the load's, and ext.create_on_demand's at first use.
+void PlanUploads(const TextureShape& shape, MTLTextureDescriptor* d, const SourceLevel* levels, int count,
+                 UploadPlan* plan) {
+    const int w = shape.width;
+    const int h = shape.height;
+    const int f = shape.format;
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/COMPRESSAO.md): ext.compress_ao -- a 2D R8 texture
+    // seeded from a resource file (the baked AO maps), every level of the chain present and the top level
+    // a multiple of 4 each way, is created as BC4 from its levels encoded (or found in the derived cache).
+    // ImageBuffer keeps format 4; only the pixel format and the pitches change.
+    std::vector<size_t> bc4Offsets;
+    bool asBc4 = false;
+    if (CompressAo::Requested() && count > 0 && shape.kind == 2 && f == 4 && shape.faces == 1 && (w & 3) == 0 &&
+        (h & 3) == 0 && count == int(d.mipmapLevelCount) && count == shape.levelCount) {
+        std::vector<::CompressAo::Level> in(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            in[i].data = static_cast<const uint8_t*>(levels[i].data);
+            in[i].size = static_cast<int64_t>(levels[i].size);
+        }
+        asBc4 = ::CompressAo::Encode(in.data(), count, w, h, uint32_t(f), &plan->bc4, &bc4Offsets);
+        if (asBc4) d.pixelFormat = MTLPixelFormatBC4_RUnorm;
+    }
+    // The levels as they are uploaded: R8 rows, a retail format's blocks, or the BC4 blocks above (8 bytes
+    // per 4x4 block, a level under 4 pixels wide or high still one block).
+    const int bytes[] = { 8, 16, 16, 1, 1, 4, 4, 4 };
+    const bool blocks = f < 3 || asBc4;
+    const int unitBytes = asBc4 ? 8 : bytes[f];
+    for (int i = 0; i < count; ++i) {
+        unsigned mip = i % d.mipmapLevelCount, face = i / d.mipmapLevelCount;
+        if (face >= shape.faces) break;
+        int mw = std::max(1, w >> mip), mh = std::max(1, h >> mip);
+        size_t row = (blocks ? std::max(1, (mw + 3) / 4) : mw) * unitBytes;
+        size_t total = row * (blocks ? std::max(1, (mh + 3) / 4) : mh);
+        const void* data = levels[i].data;
+        size_t size = levels[i].size;
+        if (asBc4) {
+            data = plan->bc4.data() + bc4Offsets[i];
+            size = bc4Offsets[i + 1] - bc4Offsets[i];
+        }
+        if (size < total) {
+            plan->shortLevel = true;
+            break;
+        }
+        plan->uploads.push_back(LevelUpload{ mip, face, mw, mh, ShareGpuData::LevelBytes{ data, row, total } });
+    }
+    plan->complete = !plan->shortLevel && plan->uploads.size() == size_t(d.mipmapLevelCount) * shape.faces;
+}
+id<MTLTexture> MakeTexture(MTLTextureDescriptor* d, const UploadPlan& plan, bool seeded, bool* shared) {
+    *shared = false;
+    const std::vector<LevelUpload>* uploads = &plan.uploads;
+    id<MTLTexture> (^make)(void) = ^id<MTLTexture>(void) {
+      id<MTLTexture> made = NewTextureResource(d);
+      if (!made) return nil;
+      for (const auto& u : *uploads)
+          [made replaceRegion:MTLRegionMake2D(0, 0, u.mw, u.mh)
+                  mipmapLevel:u.mip
+                        slice:u.face
+                    withBytes:u.bytes.data
+                  bytesPerRow:u.bytes.row
+                bytesPerImage:u.bytes.size];
+      return made;
+    };
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/SHAREGPUDATA.md): ext.share_gpu_data -- a texture
+    // seeded from a resource file (kind 2: shader read only, never a render target) with every mip of
+    // every face uploaded is made through the create-or-share.
+    if (!ShareGpuData::Requested() || !seeded) {
+        return make();
+    }
+    std::vector<ShareGpuData::LevelBytes> keyLevels;
+    keyLevels.reserve(plan.uploads.size());
+    for (const auto& u : plan.uploads) {
+        keyLevels.push_back(u.bytes);
+    }
+    return ShareGpuData::CreateTexture(gpu, d, keyLevels.data(), int(keyLevels.size()), plan.complete, make, shared);
+}
+id<MTLBuffer> MakeBuffer(bool index, bool dynamic, const void* data, uint32_t size, bool* shared) {
+    const char* kind = index ? "index" : "vertex";
+    id<MTLBuffer> (^make)(void) = ^id<MTLBuffer>(void) {
+      id<MTLBuffer> made = NewBuffer(std::max(1u, size), kind);
+      if (data && size && made) memcpy(made.contents, data, size);
+      return made;
+    };
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/SHAREGPUDATA.md): ext.share_gpu_data -- a static seeded
+    // buffer equal to one already made shares it; anything else, and the row off, is the block above.
+    return ShareGpuData::CreateBuffer(gpu, index, dynamic, data, size, make, shared);
+}
 bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>* levels) {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     @autoreleasepool {
         int w = _owner->Width(), h = _owner->Height();
         if (w <= 0 || h <= 0) return true;
@@ -1504,104 +1604,59 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
             if (_owner->_dimension != 0) d.textureType = MTLTextureTypeCube;
             d.storageMode = MTLStorageModeShared;
             d.usage = MTLTextureUsageShaderRead;
-            const int kind = int(_owner->_kind);
-            if (f >= 3 && kind != 2) d.usage |= MTLTextureUsageRenderTarget;
-            const unsigned faces = _owner->_dimension != 0 ? 6u : 1u;
+            TextureShape shape;
+            shape.width = w;
+            shape.height = h;
+            shape.format = f;
+            shape.kind = int(_owner->_kind);
+            shape.faces = _owner->_dimension != 0 ? 6u : 1u;
+            shape.levelCount = _owner->GetLevelCount();
+            if (f >= 3 && shape.kind != 2) d.usage |= MTLTextureUsageRenderTarget;
 
-            // EXT SEAM (NOT RETAIL, docs/extensions/handins/COMPRESSAO.md): ext.compress_ao -- a 2D R8
-            // texture seeded from a resource file (the baked AO maps), every level of the chain present and
-            // the top level a multiple of 4 each way, is created as BC4 from its levels encoded (or found in
-            // the derived cache). ImageBuffer keeps format 4; only the pixel format and the pitches change.
-            std::vector<uint8_t> bc4;
-            std::vector<size_t> bc4Offsets;
-            bool asBc4 = false;
-            if (CompressAo::Requested() && levels && kind == 2 && f == 4 && _owner->_dimension == 0 &&
-                (w & 3) == 0 && (h & 3) == 0 && levels->GetSize() == int(d.mipmapLevelCount) &&
-                levels->GetSize() == _owner->GetLevelCount()) {
-                std::vector<::CompressAo::Level> in(static_cast<size_t>(levels->GetSize()));
-                for (int i = 0; i < levels->GetSize(); ++i) {
-                    in[i].data = (*levels)[i].GetData();
-                    in[i].size = static_cast<int64_t>((*levels)[i].GetSize());
-                }
-                asBc4 = ::CompressAo::Encode(in.data(), levels->GetSize(), w, h, uint32_t(f), &bc4, &bc4Offsets);
-                if (asBc4) d.pixelFormat = MTLPixelFormatBC4_RUnorm;
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- the
+            // engine's level reader skipped this image's level bytes (Video::ImageBuffer::_extLevelSource):
+            // the descriptor and the sampler are made as for any texture; the texture (after compress_ao's
+            // conversion, through share_gpu_data's create-or-share) waits for the first use. The level
+            // arrays are empty: nothing here reads them.
+            if (levels && shape.kind == 2 && CreateOnDemand::HasPendingLevels(_owner)) {
+                texture = nil;   // a re-create's old texture goes now, as the eager path replaces it
+                CreateOnDemand::DeferTexture(this, shape, d, &texture, &shared);
+                pointSampler = nil;
+                sampler = MakeSampler(_owner, d.mipmapLevelCount, false);
+                return true;
             }
 
-            // The levels as they are uploaded: R8 rows, a retail format's blocks, or the BC4 blocks above
-            // (8 bytes per 4x4 block, a level under 4 pixels wide or high still one block).
-            struct LevelUpload {
-                unsigned mip, face;
-                int mw, mh;
-                ShareGpuData::LevelBytes bytes;
-            };
-            std::vector<LevelUpload> uploads;
-            bool shortLevel = false;
-            const int bytes[] = { 8, 16, 16, 1, 1, 4, 4, 4 };
-            const bool blocks = f < 3 || asBc4;
-            const int unitBytes = asBc4 ? 8 : bytes[f];
-            if (levels)
+            // The load's create (seeded_create.h): ext.compress_ao's BC4 conversion, then
+            // ext.share_gpu_data's create-or-share for a texture seeded from a resource file (kind 2), else
+            // the plain create. A short level still leaves the texture made with the levels before it, and
+            // Create answers false.
+            std::vector<SourceLevel> source;
+            if (levels) {
+                source.reserve(static_cast<size_t>(levels->GetSize()));
                 for (int i = 0; i < levels->GetSize(); ++i) {
-                    unsigned mip = i % d.mipmapLevelCount, face = i / d.mipmapLevelCount;
-                    if (face >= faces) break;
-                    int mw = std::max(1, w >> mip), mh = std::max(1, h >> mip);
-                    size_t row = (blocks ? std::max(1, (mw + 3) / 4) : mw) * unitBytes;
-                    size_t total = row * (blocks ? std::max(1, (mh + 3) / 4) : mh);
-                    const void* data = (*levels)[i].GetData();
-                    size_t size = size_t((*levels)[i].GetSize());
-                    if (asBc4) {
-                        data = bc4.data() + bc4Offsets[i];
-                        size = bc4Offsets[i + 1] - bc4Offsets[i];
-                    }
-                    if (size < total) {
-                        shortLevel = true;
-                        break;
-                    }
-                    uploads.push_back(LevelUpload{ mip, face, mw, mh, ShareGpuData::LevelBytes{ data, row, total } });
+                    source.push_back(SourceLevel{ (*levels)[i].GetData(), size_t((*levels)[i].GetSize()) });
                 }
-            // The create and its uploads, as before the extensions: a short level still leaves the texture
-            // made with the levels before it, and Create answers false below.
-            id<MTLTexture> (^make)(void) = ^id<MTLTexture>(void) {
-              id<MTLTexture> made = NewTextureResource(d);
-              if (!made) return nil;
-              for (const auto& u : uploads)
-                  [made replaceRegion:MTLRegionMake2D(0, 0, u.mw, u.mh)
-                          mipmapLevel:u.mip
-                                slice:u.face
-                            withBytes:u.bytes.data
-                          bytesPerRow:u.bytes.row
-                        bytesPerImage:u.bytes.size];
-              return made;
-            };
-
-            // EXT SEAM (NOT RETAIL, docs/extensions/handins/SHAREGPUDATA.md): ext.share_gpu_data -- a
-            // texture seeded from a resource file (kind 2: shader read only, never a render target) with
-            // every mip of every face uploaded is made through the create-or-share; the sampler as below.
-            if (ShareGpuData::Requested() && levels && kind == 2) {
-                const bool complete = !shortLevel && uploads.size() == size_t(d.mipmapLevelCount) * faces;
-                std::vector<ShareGpuData::LevelBytes> keyLevels;
-                keyLevels.reserve(uploads.size());
-                for (const auto& u : uploads) {
-                    keyLevels.push_back(u.bytes);
-                }
-                bool isShared = false;
-                texture = ShareGpuData::CreateTexture(gpu, d, keyLevels.data(), int(keyLevels.size()), complete,
-                                                      make, &isShared);
-                shared = isShared;
-            } else {
-                texture = make();
             }
+            UploadPlan plan;
+            PlanUploads(shape, d, source.data(), int(source.size()), &plan);
+            bool isShared = false;
+            texture = MakeTexture(d, plan, levels != nullptr && shape.kind == 2, &isShared);
+            shared = isShared;
             if (!texture) return false;
-            if (shortLevel) return false;
+            if (plan.shortLevel) return false;
         }
         if (Opt().metalStats && (_owner->_flags & 0x40))
             fprintf(stderr, "[MetalShadow] create %dx%d flags=%x samples=%lu format=%lu\n", w, h,
                     _owner->_flags, (unsigned long)texture.sampleCount, (unsigned long)texture.pixelFormat);
         pointSampler = nil;
-        sampler = MakeSampler(_owner, texture, false);
+        sampler = MakeSampler(_owner, texture.mipmapLevelCount, false);
         return true;
     }
 }
 void ImageBufferData::Bind(void* context, unsigned slot) {
+    // NOT RETAIL (ext.create_on_demand): the first bind of a deferred texture makes it; a made one pays the
+    // nil test.
+    if (!texture) CreateOnDemand::Ensure(this);
     if (slot >= 31) return;
     bound.images[slot] = texture;
     bound.samplers[slot] = sampler;
@@ -1609,11 +1664,12 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
     // pass
     // drawn at an integer ratio >= 2 (SharpUI::Draw); a comparison (shadow) image keeps its own sampler.
     if (Video::ImageBufferData::_extPointSampling && ((_owner->_flags >> 6) & 1) == 0 && texture) {
-        if (!pointSampler) pointSampler = MakeSampler(_owner, texture, true);
+        if (!pointSampler) pointSampler = MakeSampler(_owner, texture.mipmapLevelCount, true);
         if (pointSampler) bound.samplers[slot] = pointSampler;
     }
 }
 bool ImageBufferData::Update(void* data, int width, int height) {
+    if (!texture) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (!texture || !data || width <= 0 || height <= 0 || width > int(texture.width) ||
         height > int(texture.height))
         return false;
@@ -1641,6 +1697,7 @@ struct DeviceLockScope {
     }
 };
 bool ImageBufferData::Read(void* dst, int width, int height) {
+    if (!texture) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand), before the device lock
     // Main thread with the render thread on: the lock keeps this whole body (it ends and commits the frame's
     // current segment and starts the next one) out of the render thread's encoding.
     DeviceLockScope deviceLock;
@@ -1717,27 +1774,52 @@ bool ImageBufferData::Read(void* dst, int width, int height) {
     }
     return true;
 }
+// The Serialize body of both buffer kinds. Load: the payload is read and handed to Create as its seed (the
+// DX11 load arm's order; before ext.share_gpu_data the Metal arm created an unseeded buffer and read the
+// payload into it, the same bytes); a buffer of size 0 keeps the old order. Save: the contents are written.
+template <class Data>
+static void SerializeBuffer(Data* self, IO::Serializer* serializer, bool index) {
+    auto* owner = self->_owner;
+    const bool loading = static_cast<int>(serializer->GetDirection()) == 0;
+    // NOT RETAIL (ext.create_on_demand): the save arm reads the contents; a deferred buffer is made first.
+    if (!loading && !self->buffer) CreateOnDemand::Ensure(self);
+    serializer->Serialize(owner->dynamic, nullptr);
+    serializer->Serialize(owner->size, nullptr);
+    if (loading && owner->size > 0) {
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- a static
+        // buffer read from a packed resource file is not read: its create waits for its first use, and the
+        // stream skips the payload. The owner already holds the size / dynamic Create would store.
+        if (CreateOnDemand::Requested() && owner->dynamic == 0 && !self->buffer) {
+            self->cursor = 0;
+            if (CreateOnDemand::DeferBuffer(self, serializer->_stream, index, uint32_t(owner->size), &self->buffer,
+                                            &self->shared))
+                return;
+        }
+        std::vector<uint8_t> payload(static_cast<size_t>(owner->size));
+        serializer->SerializeBytes(owner->size, payload.data(), nullptr);
+        self->Create(owner->size, owner->dynamic, payload.data());
+        return;
+    }
+    if (loading) self->Create(owner->size, owner->dynamic, nullptr);
+    if (self->buffer) serializer->SerializeBytes(owner->size, self->buffer.contents, nullptr);
+}
 IndexBufferData::~IndexBufferData() {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): no first-use create after this
     if (shared) {
         ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less
     }
 }
 bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* data) {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     _owner->size = sizeBytes;
     _owner->dynamic = dynamic;
     // NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): a re-create lets go of a
-    // shared buffer (this user drops first), and a static seeded buffer equal to one already made shares
-    // it; anything else, and the row off, is the NewBuffer + copy in the block.
+    // shared buffer (this user drops first); MakeBuffer shares a static seeded buffer equal to one made.
     if (shared) {
         ShareGpuData::DropBuffer(buffer);
     }
     bool isShared = false;
-    id<MTLBuffer> (^make)(void) = ^id<MTLBuffer>(void) {
-      id<MTLBuffer> made = NewBuffer(std::max(1u, sizeBytes), "index");
-      if (data && sizeBytes && made) memcpy(made.contents, data, sizeBytes);
-      return made;
-    };
-    auto fresh = ShareGpuData::CreateBuffer(gpu, true, dynamic != 0, data, sizeBytes, make, &isShared);
+    auto fresh = MakeBuffer(true, dynamic != 0, data, sizeBytes, &isShared);
     {
         StateGuard guard(stateMutex);
         buffer = fresh;
@@ -1747,6 +1829,7 @@ bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* da
     return buffer != nil;
 }
 bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (sizeBytes < 0 || offsetBytes < 0 || !buffer || size_t(offsetBytes) + sizeBytes > buffer.length ||
         (!src && sizeBytes))
         return false;
@@ -1764,6 +1847,7 @@ bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void
     return true;
 }
 void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
+    if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (!buffer || sizeBytes < 0 || size_t(sizeBytes) > buffer.length) return nullptr;
     // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's Map fails on its
     // IMMUTABLE buffer and Lock returns null.
@@ -1788,38 +1872,32 @@ void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
 }
 void IndexBufferData::Unlock() {}
 void IndexBufferData::Bind(void* context) {
+    if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand): before the state lock
     StateGuard guard(stateMutex);
     bound.index = buffer;
 }
 void IndexBufferData::Serialize(IO::Serializer* serializer) {
-    serializer->Serialize(_owner->dynamic, nullptr);
-    serializer->Serialize(_owner->size, nullptr);
-    if (static_cast<int>(serializer->GetDirection()) == 0) Create(_owner->size, _owner->dynamic, nullptr);
-    if (buffer) serializer->SerializeBytes(_owner->size, buffer.contents, nullptr);
+    SerializeBuffer(this, serializer, true);
 }
 VertexBufferData::~VertexBufferData() {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): no first-use create after this
     InvalidateExpanded(buffer);
     if (shared) {
         ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less
     }
 }
 bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* data) {
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     InvalidateExpanded(buffer);
     _owner->size = sizeBytes;
     _owner->dynamic = dynamic;
     // NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): a re-create lets go of a
-    // shared buffer (this user drops first), and a static seeded buffer equal to one already made shares
-    // it; anything else, and the row off, is the NewBuffer + copy in the block.
+    // shared buffer (this user drops first); MakeBuffer shares a static seeded buffer equal to one made.
     if (shared) {
         ShareGpuData::DropBuffer(buffer);
     }
     bool isShared = false;
-    id<MTLBuffer> (^make)(void) = ^id<MTLBuffer>(void) {
-      id<MTLBuffer> made = NewBuffer(std::max(1u, sizeBytes), "vertex");
-      if (data && sizeBytes && made) memcpy(made.contents, data, sizeBytes);
-      return made;
-    };
-    auto fresh = ShareGpuData::CreateBuffer(gpu, false, dynamic != 0, data, sizeBytes, make, &isShared);
+    auto fresh = MakeBuffer(false, dynamic != 0, data, sizeBytes, &isShared);
     {
         StateGuard guard(stateMutex);
         buffer = fresh;
@@ -1829,6 +1907,7 @@ bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* d
     return buffer != nil;
 }
 bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (sizeBytes < 0 || offsetBytes < 0 || !buffer || size_t(offsetBytes) + sizeBytes > buffer.length ||
         (!src && sizeBytes))
         return false;
@@ -1846,6 +1925,7 @@ bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const voi
     return true;
 }
 void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
+    if (!buffer) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     if (!buffer || sizeBytes < 0 || size_t(sizeBytes) > buffer.length) return nullptr;
     // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's Map fails on its
     // IMMUTABLE buffer and Lock returns null.
@@ -1870,6 +1950,9 @@ void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
 }
 void VertexBufferData::Unlock() {}
 void VertexBufferData::Bind(void* context, uint32_t startSlot, uint32_t offsetBytes, uint32_t strideBytes) {
+    // NOT RETAIL (ext.create_on_demand): the first bind of a deferred buffer makes it (before the state lock);
+    // a made one pays the nil test.
+    if (!buffer) CreateOnDemand::Ensure(this);
     if (startSlot < 31) {
         StateGuard guard(stateMutex);
         bound.vertex[startSlot] = buffer;
@@ -1879,10 +1962,7 @@ void VertexBufferData::Bind(void* context, uint32_t startSlot, uint32_t offsetBy
     }
 }
 void VertexBufferData::Serialize(IO::Serializer* serializer) {
-    serializer->Serialize(_owner->dynamic, nullptr);
-    serializer->Serialize(_owner->size, nullptr);
-    if (static_cast<int>(serializer->GetDirection()) == 0) Create(_owner->size, _owner->dynamic, nullptr);
-    if (buffer) serializer->SerializeBytes(_owner->size, buffer.contents, nullptr);
+    SerializeBuffer(this, serializer, false);
 }
 bool ConstantBufferData::Create() {
     int offset = 0;
