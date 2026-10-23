@@ -93,7 +93,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
         CHECK(pos && pos->tokens[0].text == "TextBottom");
     }
     const Object* table = e.Find("enhancedOptions");
-    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 10);
+    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 12);   // six rows x two columns (COMPRESSAO: the cache row)
     const Object* opt = e.Find("textAoOption");
     CHECK(opt && opt->body.Find("_color") && opt->body.Find("_color")->tokens[0].text == "0xFFC0C0C0");
 
