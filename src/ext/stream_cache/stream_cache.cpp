@@ -13,6 +13,10 @@
 // after which the bundles are dropped (150 MB on a MegaMod boot) and no later bracket is served or
 // recorded -- a new game's or a save's bracket loads a few hundred resources, far below the cost of
 // reading the chunks back, and the resources a device restart reloads are the same few.
+//
+// GENERATIONS. Before the bundles are dropped, a package whose bundle carries superseded records
+// (widened ones) is rewritten as one chunk of its live records plus a marker naming it as the first
+// chunk to read (stream_record.h, GENERATIONS): the next start reads only that generation.
 // ============================================================================
 #include "ext/stream_cache/stream_cache.h"
 
@@ -54,7 +58,8 @@ struct Package {
     uint64_t identity  = 0;
     uint32_t crc       = 0;
     uint32_t fileCount = 0;
-    uint32_t chunks    = 0;   // stored chunks: loaded at first use + put this run
+    uint32_t chunks    = 0;   // the next chunk ordinal: past the chunks read back + put this run
+    uint32_t markers   = 0;   // the next generation-marker ordinal
     Bundle   bundle;
     std::vector<uint8_t> pending;        // the chunk under construction (this bracket's records)
     uint32_t pendingCount = 0;
@@ -71,6 +76,8 @@ struct Stats {
     uint64_t tooBig = 0, mismatch = 0, readFailed = 0, loadFailed = 0;
     uint64_t servedFailed = 0;    // the fallback could not open retail's stream
     uint64_t chunksPut = 0, chunkBytesPut = 0;
+    uint64_t chunksRead = 0, chunksSkipped = 0;          // read back; below a marker's start, not read
+    uint64_t consolidated = 0, consolidatedBytes = 0;    // live-record chunks put at the boot's end
     double   chunkLoadMs = 0;     // reading the stored chunks back (Find + parse)
 };
 
@@ -92,17 +99,26 @@ struct Active {
 
 thread_local std::vector<Active> t_stack;
 
-DerivedCache::Key ChunkKey(const Package& p, uint32_t chunk) {
+// shape[2] is the entry's kind: 0 a chunk of records, 1 a generation marker (stream_record.h).
+DerivedCache::Key PackageKey(const Package& p, uint32_t kind, uint32_t ordinal) {
     DerivedCache::Key k;
     k.producer   = kProducer;
     k.version    = kVersion;
     k.shape[0]   = p.crc;
     k.shape[1]   = g_payloadsSkipped ? 1u : 0u;
-    k.shape[2]   = 0;
-    k.shape[3]   = chunk;
+    k.shape[2]   = kind;
+    k.shape[3]   = ordinal;
     k.sourceSize = p.fileCount;
     k.sourceHash = p.identity;
     return k;
+}
+
+DerivedCache::Key ChunkKey(const Package& p, uint32_t chunk) {
+    return PackageKey(p, 0, chunk);
+}
+
+DerivedCache::Key MarkerKey(const Package& p, uint32_t marker) {
+    return PackageKey(p, 1, marker);
 }
 
 // The package's identity: its header fields, its name and its whole entry table (offset and size of
@@ -143,14 +159,21 @@ Package* PackageAt(uint32_t index) {
         p->crc       = pkg->_crc;
         p->fileCount = static_cast<uint32_t>(pkg->_entries._size);
         const auto t0 = std::chrono::steady_clock::now();
-        std::vector<uint8_t> chunk;
-        while (g_store->Find(ChunkKey(*p, p->chunks), chunk)) {
-            if (!p->bundle.AddChunk(std::move(chunk))) {
-                std::fprintf(stderr, "[StreamCache] package %08x chunk %u malformed: ignored\n", p->crc, p->chunks);
-            }
-            chunk.clear();
-            ++p->chunks;
+        Package* const q = p.get();
+        const ReadBackResult r = ReadBack(
+            q->bundle, [q](uint32_t i, std::vector<uint8_t>& out) { return g_store->Find(ChunkKey(*q, i), out); },
+            [q](uint32_t i, std::vector<uint8_t>& out) { return g_store->Find(MarkerKey(*q, i), out); });
+        for (const uint32_t bad : r.malformed) {
+            std::fprintf(stderr, "[StreamCache] package %08x chunk %u malformed: ignored\n", p->crc, bad);
         }
+        if (r.startMissing) {
+            std::fprintf(stderr, "[StreamCache] package %08x: the newest generation's first chunk is not stored; "
+                         "read from chunk %u\n", p->crc, r.start);
+        }
+        p->chunks  = r.next;
+        p->markers = r.markers;
+        g_stats.chunksRead += r.read;
+        g_stats.chunksSkipped += r.start;
         g_stats.chunkLoadMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
     slot.pkg     = pkg;
@@ -295,8 +318,30 @@ void LoadEnd(IO::CompressedFileStream& cfs, IO::Stream* alt, const Object::Exter
     }
 }
 
+// Under g_mu, at the boot's last bracket. A bundle carrying superseded records (or too many chunks)
+// goes out as one chunk of its live records at the next ordinal, then a marker naming that ordinal:
+// the next start reads from it and never asks for the chunks below. The chunk is queued before the
+// marker (the writer stores in queue order), and ReadBack checks the chunk is there anyway.
+void Consolidate(Package& p) {
+    if (!ShouldConsolidate(p.bundle)) return;
+    std::vector<uint8_t> merged = p.bundle.Consolidate();
+    if (merged.empty()) return;
+    const size_t bytes = merged.size();
+    const uint32_t start = p.chunks;
+    std::fprintf(stderr, "[StreamCache] package %08x: %zu live records of %zu chunks (%.1f MB) rewritten as chunk "
+                 "%u (%.1f MB), marker %u\n", p.crc, p.bundle.Records(), p.bundle.Chunks(),
+                 p.bundle.Bytes() / 1048576.0, start, bytes / 1048576.0, p.markers);
+    g_store->Put(ChunkKey(p, start), std::move(merged));
+    g_store->Put(MarkerKey(p, p.markers), EncodeMarker(start));
+    ++p.chunks;
+    ++p.markers;
+    ++g_stats.consolidated;
+    g_stats.consolidatedBytes += bytes;
+}
+
 void LoadDone(const std::type_info& loop) {
     std::lock_guard<std::mutex> lk(g_mu);
+    const bool bootEnds = !g_bootDone && loop == typeid(MenuDialogLoopT);
     size_t bundleBytes = 0;
     size_t records = 0;
     for (auto& kv : g_packages) {
@@ -316,12 +361,14 @@ void LoadDone(const std::type_info& loop) {
         }
         bundleBytes += p.bundle.Bytes();
         records += p.bundle.Records();
+        if (bootEnds) Consolidate(p);
     }
     g_store->RequestFlush();
     std::fprintf(stderr, "[StreamCache] load end (run total): hits %llu (whole %llu, elided %llu), extended %llu, misses "
                  "%llu, not packed %llu, after boot %llu; recorded %llu (%.1f MB; too big %llu, overlap mismatch %llu, read "
                  "failed %llu, load failed %llu); fallback failed %llu; packages %zu, records %zu (%.1f MB in memory, "
-                 "read back in %.0f ms), chunks put %llu (%.1f MB)\n",
+                 "read back in %.0f ms), chunks put %llu (%.1f MB); chunks read %llu, superseded skipped %llu, "
+                 "consolidated %llu (%.1f MB)\n",
                  (unsigned long long)(g_stats.hitsWhole + g_stats.hitsElided), (unsigned long long)g_stats.hitsWhole,
                  (unsigned long long)g_stats.hitsElided, (unsigned long long)g_stats.extended,
                  (unsigned long long)g_stats.misses, (unsigned long long)g_stats.loose,
@@ -330,8 +377,10 @@ void LoadDone(const std::type_info& loop) {
                  (unsigned long long)g_stats.mismatch, (unsigned long long)g_stats.readFailed,
                  (unsigned long long)g_stats.loadFailed, (unsigned long long)g_stats.servedFailed, g_packages.size(),
                  records, bundleBytes / 1048576.0, g_stats.chunkLoadMs, (unsigned long long)g_stats.chunksPut,
-                 g_stats.chunkBytesPut / 1048576.0);
-    if (!g_bootDone && loop == typeid(MenuDialogLoopT)) {
+                 g_stats.chunkBytesPut / 1048576.0, (unsigned long long)g_stats.chunksRead,
+                 (unsigned long long)g_stats.chunksSkipped, (unsigned long long)g_stats.consolidated,
+                 g_stats.consolidatedBytes / 1048576.0);
+    if (bootEnds) {
         // The boot's last bracket: the records have done their work for this run.
         for (auto& kv : g_packages) kv.second->bundle.Clear();
         g_bootDone = true;
