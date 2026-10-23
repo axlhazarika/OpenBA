@@ -298,6 +298,15 @@ const Entry kEntries[] = {
       "Keeps the small part of every resource file the game reads at start-up decoded on disk "
       "(in the cache folder), so the next start skips the decompression. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.stream_cache; } },
+    // PKGCACHE (docs/extensions/handins/PKGCACHE.md, issue #13): the merged directory of the mounted
+    // packages, built at every mount by one search and one insert per package entry, is kept in the
+    // derived-data cache and built back node for node at the next mount of the same packages. Read
+    // at each mount (live).
+    { "package_cache", Tier::Extension, Class::A, true,
+      "Remembered mod file lists",
+      "Keeps the combined file list of the mounted mods in the cache folder, so starting the game or "
+      "reloading mods skips rebuilding it. Same game data.",
+      0, [](State& s) -> bool& { return s.ext.package_cache; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

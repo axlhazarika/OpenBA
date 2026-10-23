@@ -585,6 +585,14 @@ public:
     static const ExtWidePackage* _extWidePackages;
     static int32_t               _extWideCount;
 
+    // ---- ext.package_cache (NOT RETAIL, docs/extensions/handins/PKGCACHE.md) -------
+    // Engine-side seams (DESIGN.md hook rule 5), null by default and under the faithful profile.
+    // _extIndexRestore: run by LoadPackages once _packfiles is final, before the loop that builds
+    // _packfileIndex. true = the extension built the identical tree (and its fold index) from the
+    // derived cache, and the loop does not run. _extIndexBuilt: run after the loop built the tree.
+    static bool (*_extIndexRestore)(FileSystem& fs);
+    static void (*_extIndexBuilt)(FileSystem& fs);
+
     // ---- ext.create_on_demand (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md) ----------
     // Engine-side seam (DESIGN.md hook rule 5), null by default and under the faithful profile:
     // run by PlatformCloseFile (through PackedMapRelease) for every handle it is about to close,

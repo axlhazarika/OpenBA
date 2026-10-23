@@ -20,6 +20,7 @@
 #include "ext/better_trees/better_trees.h"   // ext.better_trees: the render-side seams follow the toggle
 #include "ext/seamless_loops/seamless_loops.h"   // ext.seamless_loops: the SoundBuffer decode seam
 #include "ext/large_packages/large_packages.h"   // fix.large_packages: the FileSystem mount seam
+#include "ext/package_cache/package_cache.h"       // ext.package_cache: the FileSystem index seams
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
@@ -127,6 +128,9 @@ void InitFromSettings() {
     // fix.large_packages: the IO::FileSystem::_extPackagesMounted seam (null under the faithful
     // profile). The boot's .pkg mount ran inside Engine::Startup, before this; every mods mount runs it.
     LargePackages::Sync();
+    // ext.package_cache: the IO::FileSystem::_extIndexRestore / _extIndexBuilt seams (null under the
+    // faithful profile); the hooks read the row at each mount.
+    PackageCache::Sync();
     // The save's pseudo-mods (EXT SEAM, Save::SaveLoad::_extExtraMods). Installed
     // ONCE here: the profile is fixed for the run (settings key or /profile at
     // boot; nothing changes it later), so SaveModsProvider() is final now --
