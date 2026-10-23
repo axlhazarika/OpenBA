@@ -192,6 +192,20 @@ UNIT_TEST(ext_share_gpu_data_raced_insert_keeps_its_own) {
     CHECK(!t.Drop(&second, out));   // the loser's object is not shared: its Drop finds nothing
     Release(&second);
     CHECK_EQ(second.refs, 0);
+    // A third raced create swaps to the winner's object before anyone saw its own (share_create.cpp).
+    Obj third;
+    void* h3[GpuShare::kHandles] = { &third, nullptr };
+    AddRef(&third);
+    CHECK(!t.Insert(key, h3));
+    Release(&third);
+    void* winner[GpuShare::kHandles] = {};
+    CHECK(t.Acquire(key, winner));
+    CHECK(winner[0] == &first);
+    AddRef(winner[0]);
+    Release(&third);   // its own object goes
+    CHECK_EQ(third.refs, 0);
+    CHECK_EQ(first.refs, 3);   // the creator, the swapped user, the table
+    UserRelease(t, winner[0]);
     UserRelease(t, &first);
     CHECK_EQ(first.refs, 0);
 }

@@ -119,7 +119,17 @@ HRESULT CreateBuffer(ID3D11Device* dev, const D3D11_BUFFER_DESC& desc, const D3D
     if (hr != S_OK || *out == nullptr) return hr;
     (*out)->AddRef();   // the table's reference
     handles[0] = *out;
-    if (!Table().Insert(key, handles)) (*out)->Release();
+    if (Table().Insert(key, handles)) return hr;
+    // Two creates of an equal buffer raced (the two async workers) and the other one's is in the
+    // table: nobody has seen ours yet (its user waits for this job), so it goes and the winner's is
+    // handed out instead.
+    (*out)->Release();
+    if (Table().Acquire(key, handles)) {
+        ID3D11Buffer* const shared = static_cast<ID3D11Buffer*>(handles[0]);
+        shared->AddRef();
+        (*out)->Release();
+        *out = shared;
+    }
     return hr;
 }
 
@@ -177,9 +187,19 @@ HRESULT CreateTexture(ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& desc, const
     (*outSrv)->AddRef();
     handles[0] = *outTexture;
     handles[1] = *outSrv;
-    if (!Table().Insert(key, handles)) {
+    if (Table().Insert(key, handles)) return hr;
+    // A raced equal create is in the table: ours goes, the winner's is handed out (as CreateBuffer).
+    (*outSrv)->Release();
+    (*outTexture)->Release();
+    if (Table().Acquire(key, handles)) {
+        ID3D11Texture2D* const texture = static_cast<ID3D11Texture2D*>(handles[0]);
+        ID3D11ShaderResourceView* const srv = static_cast<ID3D11ShaderResourceView*>(handles[1]);
+        texture->AddRef();
+        srv->AddRef();
         (*outSrv)->Release();
         (*outTexture)->Release();
+        *outTexture = texture;
+        *outSrv     = srv;
     }
     return hr;
 }

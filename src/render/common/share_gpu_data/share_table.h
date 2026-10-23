@@ -71,8 +71,9 @@ public:
 
     // After a miss and a successful create: the entry starts with one user (the creator). The
     // caller has already taken the table's reference on each non-null handle. False: an equal key
-    // was inserted meanwhile (two creates raced) or `handles[0]` is already an entry; the caller's
-    // object stays its own, and the caller drops the table's references it took.
+    // was inserted meanwhile (two creates raced) or `handles[0]` is already an entry: the caller drops
+    // the table's references it took, and either keeps its object unshared or, while no user has
+    // seen it yet, Acquires the winner's and drops its own (the DX11 backend does).
     bool Insert(const Key& key, void* const handles[kHandles]);
 
     // Before a user drops its reference on `resource` (an entry's handles[0]): one user less. When it
