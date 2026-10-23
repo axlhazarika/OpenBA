@@ -50,6 +50,10 @@ ID3D11Device* AcquireDevice() {
     return dev;
 }
 
+bool Lost(ID3D11Device* dev) {
+    return dev->GetDeviceRemovedReason() != S_OK;
+}
+
 ::CreateOnDemand::Outcome Result(bool ok) {
     return ok ? ::CreateOnDemand::Outcome::Made : ::CreateOnDemand::Outcome::Failed;
 }
@@ -81,6 +85,17 @@ public:
             ok = _made != nullptr;
         } else {
             NoteDecodeFailure(_loc);
+        }
+        // The device was lost while this ran: what it made (or failed to make) belongs to a dead
+        // device. Nothing is published; the record waits for the recovered device.
+        if (Lost(dev)) {
+            if (_made != nullptr) {
+                ShareGpuData::DropBuffer(_made);
+                _made->Release();
+                _made = nullptr;
+            }
+            dev->Release();
+            return ::CreateOnDemand::Outcome::Retry;
         }
         dev->Release();
         MaybePrint();
@@ -144,6 +159,15 @@ public:
             ShareGpuData::CreateTexture(dev, desc, count > 0 ? subres.data() : nullptr, count, sizes.data(),
                                         _hasSrvDesc ? &_srvDesc : nullptr, &_madeTexture, &_madeSrv);
             ok = _madeTexture != nullptr && _madeSrv != nullptr;
+        }
+        if (Lost(dev)) {   // as BufferRecord: nothing made on a dead device is published
+            ShareGpuData::DropTexture(_madeTexture);
+            if (_madeSrv != nullptr) _madeSrv->Release();
+            if (_madeTexture != nullptr) _madeTexture->Release();
+            _madeSrv     = nullptr;
+            _madeTexture = nullptr;
+            dev->Release();
+            return ::CreateOnDemand::Outcome::Retry;
         }
         dev->Release();
         MaybePrint();
