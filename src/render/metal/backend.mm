@@ -10,6 +10,9 @@
 #include "display_geometry.h"
 #include "passes/tree_passes.h"
 #include "passes/assao_pass.h"
+#include "compress_ao/bc4_create.h"
+#include "compress_ao/bc4_chain.h"
+#include "share_gpu_data/share_create.h"
 #include "video/Device.h"
 #include "platform/common/cursor_image.h"
 #include "video/Buffers.h"
@@ -996,6 +999,9 @@ void DeviceData::Shutdown() {
         bufferUses.clear();
         retiredBuffers.Clear();
     }
+    // NOT RETAIL (ext.share_gpu_data): nothing made on this device is handed out again; the table's
+    // references go (exit and a device rebuild come through here). Users keep their objects.
+    ShareGpuData::Clear();
     zeroConstants = nil;
     if (inFlight) {
         for (unsigned i = 0; i < kFramesInFlight; ++i) {
@@ -1024,7 +1030,15 @@ void DeviceData::Shutdown() {
     queue = nil;
     gpu = nil;
 }
-void DeviceData::Slot4(bool loading) {}
+// NOT RETAIL (ext.compress_ao, ext.share_gpu_data): the loader bracket's close prints the load's BC4
+// summary and asks the derived cache to persist its keep list and release its mapping, then the run's
+// sharing summary -- DX11's Slot4(false) (devicedata_stubs.cpp). Retail's body is empty here.
+void DeviceData::Slot4(bool loading) {
+    if (!loading) {
+        ::CompressAo::LoadEnd();
+        ShareGpuData::LoadEnd();
+    }
+}
 float DeviceData::Slot5() { return 0; }
 bool DeviceData::Slot6() {
     return false;
@@ -1377,6 +1391,9 @@ void ContextData::EndInstancedIndexedVertices(int primitiveType) {
     DrawIndexed(primitiveType, 0, c->_unknown2104, 0, c->_unknown2124, c->_instanceCount);
 }
 ImageBufferData::~ImageBufferData() {
+    if (shared) {
+        ShareGpuData::DropTexture(texture);   // NOT RETAIL (ext.share_gpu_data): one user less
+    }
     StateGuard guard(stateMutex);
     colorAliases.erase(this);
     depthAliases.erase(this);
@@ -1397,6 +1414,10 @@ void ImageBufferData::AttachColorBuffer() {
         StateGuard guard(stateMutex);
         colorAliases.insert(this);
     }
+    if (shared) {
+        ShareGpuData::DropTexture(texture);   // NOT RETAIL (ext.share_gpu_data): one user less
+        shared = false;
+    }
     texture = mainColor;
 }
 void ImageBufferData::AttachDepthBuffer() {
@@ -1415,6 +1436,10 @@ void ImageBufferData::AttachDepthBuffer() {
     {
         StateGuard guard(stateMutex);
         depthAliases.insert(this);
+    }
+    if (shared) {
+        ShareGpuData::DropTexture(texture);   // NOT RETAIL (ext.share_gpu_data): one user less
+        shared = false;
     }
     texture = mainDepth;
 }
@@ -1456,6 +1481,11 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
         };
         int f = int(_owner->_format);
         if (f < 0 || f >= 8) return false;
+        // NOT RETAIL (ext.share_gpu_data): a re-create lets go of a shared texture; this user drops first.
+        if (shared) {
+            ShareGpuData::DropTexture(texture);
+            shared = false;
+        }
         // Format 7 (retail D24S8) is D32F+S8 here; see NewMainDepth and docs/known_port_issues.md "Depth precision".
         if (f == 7) {
             auto depth =
@@ -1474,26 +1504,94 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
             if (_owner->_dimension != 0) d.textureType = MTLTextureTypeCube;
             d.storageMode = MTLStorageModeShared;
             d.usage = MTLTextureUsageShaderRead;
-            if (f >= 3 && int(_owner->_kind) != 2) d.usage |= MTLTextureUsageRenderTarget;
-            texture = NewTextureResource(d);
-            if (!texture) return false;
+            const int kind = int(_owner->_kind);
+            if (f >= 3 && kind != 2) d.usage |= MTLTextureUsageRenderTarget;
+            const unsigned faces = _owner->_dimension != 0 ? 6u : 1u;
+
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/COMPRESSAO.md): ext.compress_ao -- a 2D R8
+            // texture seeded from a resource file (the baked AO maps), every level of the chain present and
+            // the top level a multiple of 4 each way, is created as BC4 from its levels encoded (or found in
+            // the derived cache). ImageBuffer keeps format 4; only the pixel format and the pitches change.
+            std::vector<uint8_t> bc4;
+            std::vector<size_t> bc4Offsets;
+            bool asBc4 = false;
+            if (CompressAo::Requested() && levels && kind == 2 && f == 4 && _owner->_dimension == 0 &&
+                (w & 3) == 0 && (h & 3) == 0 && levels->GetSize() == int(d.mipmapLevelCount) &&
+                levels->GetSize() == _owner->GetLevelCount()) {
+                std::vector<::CompressAo::Level> in(static_cast<size_t>(levels->GetSize()));
+                for (int i = 0; i < levels->GetSize(); ++i) {
+                    in[i].data = (*levels)[i].GetData();
+                    in[i].size = static_cast<int64_t>((*levels)[i].GetSize());
+                }
+                asBc4 = ::CompressAo::Encode(in.data(), levels->GetSize(), w, h, uint32_t(f), &bc4, &bc4Offsets);
+                if (asBc4) d.pixelFormat = MTLPixelFormatBC4_RUnorm;
+            }
+
+            // The levels as they are uploaded: R8 rows, a retail format's blocks, or the BC4 blocks above
+            // (8 bytes per 4x4 block, a level under 4 pixels wide or high still one block).
+            struct LevelUpload {
+                unsigned mip, face;
+                int mw, mh;
+                ShareGpuData::LevelBytes bytes;
+            };
+            std::vector<LevelUpload> uploads;
+            bool shortLevel = false;
             const int bytes[] = { 8, 16, 16, 1, 1, 4, 4, 4 };
+            const bool blocks = f < 3 || asBc4;
+            const int unitBytes = asBc4 ? 8 : bytes[f];
             if (levels)
                 for (int i = 0; i < levels->GetSize(); ++i) {
                     unsigned mip = i % d.mipmapLevelCount, face = i / d.mipmapLevelCount;
-                    if (face >= (_owner->_dimension != 0 ? 6u : 1u)) break;
+                    if (face >= faces) break;
                     int mw = std::max(1, w >> mip), mh = std::max(1, h >> mip);
-                    size_t row = (f < 3 ? std::max(1, (mw + 3) / 4) : mw) * bytes[f];
-                    size_t total = row * (f < 3 ? std::max(1, (mh + 3) / 4) : mh);
-                    auto& b = (*levels)[i];
-                    if (size_t(b.GetSize()) < total) return false;
-                    [texture replaceRegion:MTLRegionMake2D(0, 0, mw, mh)
-                               mipmapLevel:mip
-                                     slice:face
-                                 withBytes:b.GetData()
-                               bytesPerRow:row
-                             bytesPerImage:total];
+                    size_t row = (blocks ? std::max(1, (mw + 3) / 4) : mw) * unitBytes;
+                    size_t total = row * (blocks ? std::max(1, (mh + 3) / 4) : mh);
+                    const void* data = (*levels)[i].GetData();
+                    size_t size = size_t((*levels)[i].GetSize());
+                    if (asBc4) {
+                        data = bc4.data() + bc4Offsets[i];
+                        size = bc4Offsets[i + 1] - bc4Offsets[i];
+                    }
+                    if (size < total) {
+                        shortLevel = true;
+                        break;
+                    }
+                    uploads.push_back(LevelUpload{ mip, face, mw, mh, ShareGpuData::LevelBytes{ data, row, total } });
                 }
+            // The create and its uploads, as before the extensions: a short level still leaves the texture
+            // made with the levels before it, and Create answers false below.
+            id<MTLTexture> (^make)(void) = ^id<MTLTexture>(void) {
+              id<MTLTexture> made = NewTextureResource(d);
+              if (!made) return nil;
+              for (const auto& u : uploads)
+                  [made replaceRegion:MTLRegionMake2D(0, 0, u.mw, u.mh)
+                          mipmapLevel:u.mip
+                                slice:u.face
+                            withBytes:u.bytes.data
+                          bytesPerRow:u.bytes.row
+                        bytesPerImage:u.bytes.size];
+              return made;
+            };
+
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/SHAREGPUDATA.md): ext.share_gpu_data -- a
+            // texture seeded from a resource file (kind 2: shader read only, never a render target) with
+            // every mip of every face uploaded is made through the create-or-share; the sampler as below.
+            if (ShareGpuData::Requested() && levels && kind == 2) {
+                const bool complete = !shortLevel && uploads.size() == size_t(d.mipmapLevelCount) * faces;
+                std::vector<ShareGpuData::LevelBytes> keyLevels;
+                keyLevels.reserve(uploads.size());
+                for (const auto& u : uploads) {
+                    keyLevels.push_back(u.bytes);
+                }
+                bool isShared = false;
+                texture = ShareGpuData::CreateTexture(gpu, d, keyLevels.data(), int(keyLevels.size()), complete,
+                                                      make, &isShared);
+                shared = isShared;
+            } else {
+                texture = make();
+            }
+            if (!texture) return false;
+            if (shortLevel) return false;
         }
         if (Opt().metalStats && (_owner->_flags & 0x40))
             fprintf(stderr, "[MetalShadow] create %dx%d flags=%x samples=%lu format=%lu\n", w, h,
@@ -1521,6 +1619,9 @@ bool ImageBufferData::Update(void* data, int width, int height) {
         return false;
     int f = int(_owner->_format);
     if (f < 3 || f == 7) return false;
+    // NOT RETAIL (ext.share_gpu_data, ext.compress_ao): a shared texture is never written (D3D11 refuses its
+    // IMMUTABLE one), and a BC4 texture does not hold the R8 rows the engine would write.
+    if (shared || texture.pixelFormat == MTLPixelFormatBC4_RUnorm) return false;
     size_t row = width * (f == 3 || f == 4 ? 1 : 4);
     [texture replaceRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0 withBytes:data bytesPerRow:row];
     return true;
@@ -1548,6 +1649,10 @@ bool ImageBufferData::Read(void* dst, int width, int height) {
     }
     int f = int(_owner->_format);
     if (f < 3 || f == 7) {
+        return false;
+    }
+    // NOT RETAIL (ext.compress_ao): a BC4 texture holds blocks, not the R8 rows the caller expects.
+    if (texture.pixelFormat == MTLPixelFormatBC4_RUnorm) {
         return false;
     }
     size_t row = width * (f == 3 || f == 4 ? 1 : 4);
@@ -1612,22 +1717,42 @@ bool ImageBufferData::Read(void* dst, int width, int height) {
     }
     return true;
 }
+IndexBufferData::~IndexBufferData() {
+    if (shared) {
+        ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less
+    }
+}
 bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* data) {
     _owner->size = sizeBytes;
     _owner->dynamic = dynamic;
-    auto fresh = NewBuffer(std::max(1u, sizeBytes), "index");
+    // NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): a re-create lets go of a
+    // shared buffer (this user drops first), and a static seeded buffer equal to one already made shares
+    // it; anything else, and the row off, is the NewBuffer + copy in the block.
+    if (shared) {
+        ShareGpuData::DropBuffer(buffer);
+    }
+    bool isShared = false;
+    id<MTLBuffer> (^make)(void) = ^id<MTLBuffer>(void) {
+      id<MTLBuffer> made = NewBuffer(std::max(1u, sizeBytes), "index");
+      if (data && sizeBytes && made) memcpy(made.contents, data, sizeBytes);
+      return made;
+    };
+    auto fresh = ShareGpuData::CreateBuffer(gpu, true, dynamic != 0, data, sizeBytes, make, &isShared);
     {
         StateGuard guard(stateMutex);
         buffer = fresh;
+        shared = isShared;
     }
     cursor = 0;
-    if (data && sizeBytes && buffer) memcpy(buffer.contents, data, sizeBytes);
     return buffer != nil;
 }
 bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
     if (sizeBytes < 0 || offsetBytes < 0 || !buffer || size_t(offsetBytes) + sizeBytes > buffer.length ||
         (!src && sizeBytes))
         return false;
+    // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's UpdateSubresource on its
+    // IMMUTABLE buffer does nothing and SetData still answers true.
+    if (shared) return true;
     if (sizeBytes) {
         InvalidateExpanded(buffer);
         // Hold the state lock across the rename and the write: when the in-place path is taken (the GPU is done with
@@ -1640,6 +1765,9 @@ bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void
 }
 void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
     if (!buffer || sizeBytes < 0 || size_t(sizeBytes) > buffer.length) return nullptr;
+    // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's Map fails on its
+    // IMMUTABLE buffer and Lock returns null.
+    if (shared) return nullptr;
     // Rewind on the first write of a frame or wrap (DISCARD); rename only
     // while encoded/in-flight draws read the allocation. Appends are NO_OVERWRITE.
     if (generation != frameGeneration || cursor + sizeBytes > buffer.length) {
@@ -1671,24 +1799,42 @@ void IndexBufferData::Serialize(IO::Serializer* serializer) {
 }
 VertexBufferData::~VertexBufferData() {
     InvalidateExpanded(buffer);
+    if (shared) {
+        ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less
+    }
 }
 bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamic, const void* data) {
     InvalidateExpanded(buffer);
     _owner->size = sizeBytes;
     _owner->dynamic = dynamic;
-    auto fresh = NewBuffer(std::max(1u, sizeBytes), "vertex");
+    // NOT RETAIL (ext.share_gpu_data, docs/extensions/handins/SHAREGPUDATA.md): a re-create lets go of a
+    // shared buffer (this user drops first), and a static seeded buffer equal to one already made shares
+    // it; anything else, and the row off, is the NewBuffer + copy in the block.
+    if (shared) {
+        ShareGpuData::DropBuffer(buffer);
+    }
+    bool isShared = false;
+    id<MTLBuffer> (^make)(void) = ^id<MTLBuffer>(void) {
+      id<MTLBuffer> made = NewBuffer(std::max(1u, sizeBytes), "vertex");
+      if (data && sizeBytes && made) memcpy(made.contents, data, sizeBytes);
+      return made;
+    };
+    auto fresh = ShareGpuData::CreateBuffer(gpu, false, dynamic != 0, data, sizeBytes, make, &isShared);
     {
         StateGuard guard(stateMutex);
         buffer = fresh;
+        shared = isShared;
     }
     cursor = 0;
-    if (data && sizeBytes && buffer) memcpy(buffer.contents, data, sizeBytes);
     return buffer != nil;
 }
 bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
     if (sizeBytes < 0 || offsetBytes < 0 || !buffer || size_t(offsetBytes) + sizeBytes > buffer.length ||
         (!src && sizeBytes))
         return false;
+    // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's UpdateSubresource on its
+    // IMMUTABLE buffer does nothing and SetData still answers true.
+    if (shared) return true;
     if (sizeBytes) {
         InvalidateExpanded(buffer);
         // Hold the state lock across the rename and the write: when the in-place path is taken (the GPU is done with
@@ -1701,6 +1847,9 @@ bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const voi
 }
 void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
     if (!buffer || sizeBytes < 0 || size_t(sizeBytes) > buffer.length) return nullptr;
+    // NOT RETAIL (ext.share_gpu_data): a shared buffer is never written; D3D11's Map fails on its
+    // IMMUTABLE buffer and Lock returns null.
+    if (shared) return nullptr;
     // Rewind on the first write of a frame or wrap (DISCARD); rename only
     // while encoded/in-flight draws read the allocation. Appends are NO_OVERWRITE.
     if (generation != frameGeneration || cursor + sizeBytes > buffer.length) {
