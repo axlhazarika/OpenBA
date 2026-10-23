@@ -1,7 +1,7 @@
 // ============================================================================
 // src/render/metal/integration.mm -- the Metal backend's side of the backend-neutral seams
 // ============================================================================
-// NOT RETAIL. The bodies of the interface headers in src/render/common (AoBackend::), the
+// NOT RETAIL. The bodies of the interface headers in src/render/common (AoBackend::, SmokeVsBackend::), the
 // finish seam (Ext::RenderPipe::) and the AO-after-opaque seam (Graphics::ExtAoAfterOpaque),
 // plus the Objective-C++ constructor the plain C++ entry points call
 // (render_backend_metal.cpp). Nothing here names another backend's namespace.
@@ -15,6 +15,7 @@
 #include "better_trees/foliage_aa_backend.h"
 #include "better_trees/billboard_shadow_backend.h"
 #include "async_gpu_create/async_gpu_create_backend.h"
+#include "draw_batch/smoke_vs_backend.h"
 #include "ext/render_pipe/finish_split.h"
 #include "graphics/renderer_ext_ao.h"
 #include "passes/assao_pass.h"
@@ -81,6 +82,23 @@ bool Supported() {
 }
 
 }  // namespace AsyncGpuCreateBackend
+
+// ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader
+// that writes an emitter slot into each vertex. Metal has no such rewrite, so it answers "not
+// supported" through the interface: the stage stays off, Rewritten() is false for every program,
+// and the extension draws the faithful path.
+namespace SmokeVsBackend {
+
+void Request(bool on) {
+    (void)on;
+}
+
+bool Rewritten(const Video::VertexProgram* vp) {
+    (void)vp;
+    return false;
+}
+
+}  // namespace SmokeVsBackend
 
 namespace Ext {
 namespace RenderPipe {

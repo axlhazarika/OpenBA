@@ -780,6 +780,7 @@ int DeviceData_Resize(DeviceData* self) {
     // died. Deliberate deviation from the shipped DLL; see the note above
     // Dx11InvalidateConstantBufferBindings in buffers.cpp.
     Dx11InvalidateConstantBufferBindings();
+    Dx11NoteClearState();   // topology cache in ContextData, same reason
 
     dev->ReleaseDynamic();
 

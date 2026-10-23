@@ -51,8 +51,12 @@ dependency adds a row there, pins a version or commit, and ships its licence tex
 LGPL code is linked so the user can replace it (a separate dynamic library, or the relink offer).
 
 ## 7. What a PR says
-- Which platforms you built and ran, and which you could not. The maintainer runs the Windows gate
-  (`tools/build.sh run`) and the serializer check (`tools/resave_gate/resave_gate.sh Gate`).
+- CI (`.github/workflows/ci.yml`) builds and runs `unit` on Windows, Linux and macOS, plus
+  `tools/acceptance/acceptance.sh`, on every PR. All four checks must pass before a merge; a break
+  on a platform the PR did not touch is fixed in the PR (a seam it missed), not waived.
+- Which platforms you built and ran, and which you could not. CI has no game data, so it never
+  runs the game: the maintainer runs the Windows gate (`tools/build.sh run`) and the serializer
+  check (`tools/resave_gate/resave_gate.sh Gate`).
 - Which commit the branch is based on. Rebase onto `main` before asking for review so the diff
   shows only your change.
 - Tests for new pure logic (`tests/unit/`, `tools/build.sh unit`). A test that only runs on one

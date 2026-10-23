@@ -263,6 +263,13 @@ const Entry kEntries[] = {
       "Creates the graphics resources of loading content on other cores, so large mods load faster. "
       "Same game data. Takes effect at the next load.",
       0, [](State& s) -> bool& { return s.ext.async_gpu_create; } },
+    // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
+    // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
+    // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).
+    { "no_fog", Tier::Extension, Class::A, false,
+      "No fog",
+      "Removes the fog that hazes the far map when the camera is zoomed far out.",
+      0, [](State& s) -> bool& { return s.ext.no_fog; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.

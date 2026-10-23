@@ -26,6 +26,7 @@
 | Ext A | Parallel graphics loading | While content loads, its GPU buffers and textures are created on other cores. Same resources, all made before the load ends; faster loading of large mods. Takes effect at the next load. |
 | Ext A | Mod loading screen | While mods load at start-up, shows the loading screen and which mod is loading instead of a black window. |
 | Ext A | Background saving | Writes the save on a worker thread while the town holds still for a moment; the screen and camera keep moving. Identical save files. |
+| Ext A | No fog | Removes the fog that hazes the far map when the camera is zoomed far out. Off by default; live. |
 | Ext B | Faster pathfinding | Looks for same length routes to save pathfinding work. |
 | Ext B | Parallel pathfinding | Spread pathfinding to multiple cores. |
 | Ext B | Batched animation | Batch animations together above 1x speed. |
