@@ -255,6 +255,7 @@ void OptionsInit() {
     o.forceSnow              = Raw("BANISHED_FORCE_SNOW");
     o.forceDeviceLost        = Raw("BANISHED_FORCE_DEVICE_LOST");
     o.screenshotAt           = Raw("BANISHED_SCREENSHOT_AT");
+    o.showroom               = Raw("BANISHED_SHOWROOM");
     o.captureIngame          = Raw("BANISHED_CAPTURE_INGAME");
     o.achIgnoreMods          = Raw("BANISHED_ACH_IGNORE_MODS");
     o.fastTrig               = Raw("BANISHED_FAST_TRIG");
