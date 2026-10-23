@@ -162,6 +162,7 @@
 #include "compress_ao/bc4_chain.h"           // NOT RETAIL: ext.compress_ao (the encode / the cache)
 #include "bc4/bc4.h"                         // NOT RETAIL: ext.compress_ao (the BC4 block-row pitch)
 #include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data
+#include "create_on_demand/lazy_create.h"    // NOT RETAIL: ext.create_on_demand
 
 // The real `Video::ImageBufferData` abstract base. B5 RES: `VideoDX11::
 // ImageBufferData` derives from it in C++, so the compiler chains its destructor
@@ -406,6 +407,7 @@ void ImageBufferData::CreateSamplerState() {
 // ============================================================
 ImageBufferData::~ImageBufferData() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): nor a first-use create after this
     ::Video::ImageBuffer* const ib = _owner;
 
     // Untrack. Note bits 4|5|6 = 0x70 here, unlike slot 3 which only tests bit 6.
@@ -425,6 +427,7 @@ ImageBufferData::~ImageBufferData() {
 // ============================================================
 void ImageBufferData::AttachColorBuffer() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this replaces a deferred one
     ::Video::Device* const device = ::Video::Device::_singleton;
     DeviceData* const dd = Dx11DeviceData();
     ::Video::ImageBuffer* const ib = _owner;
@@ -458,6 +461,7 @@ void ImageBufferData::AttachColorBuffer() {
 // ============================================================
 void ImageBufferData::AttachDepthBuffer() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this replaces a deferred one
     ::Video::Device* const device = ::Video::Device::_singleton;
     DeviceData* const dd = Dx11DeviceData();
     ::Video::ImageBuffer* const ib = _owner;
@@ -559,6 +563,7 @@ static void CreateTextureDeferred(ImageBufferData* self,
 
 bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> >* levels) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     ::Video::ImageBuffer* const ib = _owner;
     const int width  = ib->Width();
     const int height = ib->Height();
@@ -643,6 +648,33 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
                               ib->_dimension == 0 && (width & 3) == 0 && (height & 3) == 0 &&
                               levels->GetSize() == ib->GetLevelCount();
     const bool deferred = AsyncCreate::Deferring() && levels != nullptr && kind == 2;
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- the
+    // engine's level reader skipped this image's level bytes (Video::ImageBuffer::_extLevelSource):
+    // everything above ran as for any texture, and the sampler is made below as retail makes it; the
+    // texture and its SRV (after compress_ao's conversion, through share_gpu_data's create-or-share)
+    // wait for the first use. The level arrays are empty: nothing here reads them.
+    if (levels != nullptr && kind == 2 && CreateOnDemand::HasPendingLevels(ib)) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDescPtr = nullptr;
+        if (ib->_dimension == 1) {   // slot 3's cube arm (a usage-2 texture is never a depth buffer)
+            srvDesc.Format                      = static_cast<DXGI_FORMAT>(kFormatToDxgi[ib->_format]);
+            srvDesc.ViewDimension               = D3D11_SRV_DIMENSION_TEXTURECUBE;
+            srvDesc.TextureCube.MipLevels       = static_cast<UINT>(ib->GetLevelCount());
+            srvDesc.TextureCube.MostDetailedMip = 0;
+            srvDescPtr = &srvDesc;
+        }
+        std::vector<UINT> pitches(static_cast<size_t>(subres.count));
+        for (int i = 0; i < subres.count; ++i)
+            pitches[static_cast<size_t>(i)] = subres.data[i].SysMemPitch;
+        CreateOnDemand::DeferTexture(this, ib, desc, pitches.data(), subres.count, srvDescPtr,
+                                     bc4Candidate ? static_cast<uint32_t>(ib->_format) : 0, &texture,
+                                     &shaderResourceView);
+        CreateSamplerState();
+        System::MemoryAllocator::MemFree(subres.data);
+        return true;
+    }
+
     if (bc4Candidate && !deferred) {
         std::vector<::CompressAo::Level> in(static_cast<size_t>(levels->GetSize()));
         for (int i = 0; i < levels->GetSize(); ++i) {
@@ -787,6 +819,9 @@ static ID3D11SamplerState* AcquirePointSampler(const ::Video::ImageBuffer* ib) {
 
 void ImageBufferData::Bind(void* context, unsigned slot) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    // NOT RETAIL (ext.create_on_demand): the first bind of a deferred texture makes it; a made one
+    // pays the null test.
+    if (shaderResourceView == nullptr) CreateOnDemand::Ensure(this);
     (void)context;   // never read by the original either
 
     ID3D11DeviceContext* const ctx = Dx11Context();
@@ -816,6 +851,7 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
 // ============================================================
 bool ImageBufferData::Update(void* data, int width, int height) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    if (texture == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     // NOT RETAIL: the Present lock (dx11_backend_access.h). Callers hold the
     // device lock and may be off the presenting thread (the loader's image
     // uploads, the save-info thumbnails).
@@ -847,6 +883,7 @@ bool ImageBufferData::Update(void* data, int width, int height) {
 // ============================================================
 bool ImageBufferData::Read(void* dst, int width, int height) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    if (texture == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     D3D11_TEXTURE2D_DESC desc;
     desc.Width              = static_cast<UINT>(width);
     desc.Height             = static_cast<UINT>(height);

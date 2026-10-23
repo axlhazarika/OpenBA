@@ -86,8 +86,8 @@ bool Supported() {
 
 }  // namespace AsyncGpuCreateBackend
 
-// ext.compress_ao and ext.share_gpu_data: their bodies are compress_ao/bc4_create.mm and
-// share_gpu_data/share_create.mm (the DX11 layout).
+// ext.compress_ao, ext.share_gpu_data and ext.create_on_demand: their bodies are compress_ao/bc4_create.mm,
+// share_gpu_data/share_create.mm and create_on_demand/lazy_create.mm (the DX11 layout).
 
 // ext.draw_batch, Idea B (merged smoke runs): the extension needs a rewritten particle vertex shader
 // that writes an emitter slot into each vertex. Metal has no such rewrite, so it answers "not

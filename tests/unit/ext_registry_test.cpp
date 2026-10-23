@@ -65,9 +65,10 @@ UNIT_TEST(ext_registry_table_shape) {
         // The unit_* test rows keep OFF: the lock tests below start from nothing on.
         // eye_camera is class A but changes how the game is played: the player's call, OFF.
         // no_fog is class A but changes how the map looks: the player's call, OFF.
+        // create_on_demand is class A, OFF until the user rules on it (CREATEONDEMAND.md).
         if (e.tier == Ext::Tier::Extension && std::strncmp(e.id, "unit_", 5) != 0)
             CHECK(e.defaultOn == (e.cls == Ext::Class::A && std::strcmp(e.id, "eye_camera") != 0 &&
-                                  std::strcmp(e.id, "no_fog") != 0));
+                                  std::strcmp(e.id, "no_fog") != 0 && std::strcmp(e.id, "create_on_demand") != 0));
     }
     CHECK(!Ext::ValidId("a.b"));
     CHECK(!Ext::ValidId("Abc"));

@@ -2042,7 +2042,13 @@ void MeshInstance::SetMesh(Object::ExternalPtr<GraphicsMesh> mesh) {
         _localBounds.max.z = m->_aabb.max.z;
         _dirtyFlags |= 2u;
     }
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand queues
+    // the creates this instance's first draw needs (Mesh.h). Null: nothing.
+    if (_extMeshAssigned != nullptr) _extMeshAssigned(*this);
 }
+
+void (*MeshInstance::_extMeshAssigned)(const MeshInstance& instance) = nullptr;
 
 // ---------------------------------------------------------------------------
 // ?PlayAnimation@MeshInstance@Graphics@@QEAAXV?$ExternalPtr@…HAEBVTime@…1M@Z

@@ -93,6 +93,7 @@
 #include "dx11_backend_access.h"
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
 #include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data
+#include "create_on_demand/lazy_create.h"    // NOT RETAIL: ext.create_on_demand
 // ENDGAME B.3.5 block D2, RULE B5-3: the three real Runtime abstract bases (B5 BUF:
 // now the C++ bases of the three classes below).
 #include "video/CompanionData.h"
@@ -434,6 +435,8 @@ void GpuBuffer_Serialize(Data* self, ::IO::Serializer* serializer) {
 
     // NOT RETAIL (ext.async_gpu_create): the save arm reads `buffer`; a deferred create finishes first.
     AsyncCreate::Await(self);
+    // NOT RETAIL (ext.create_on_demand): and a buffer still waiting for its first use is made first.
+    if (self->buffer == nullptr && SerializerStreamMode(serializer) != 0) CreateOnDemand::Ensure(self);
 
     auto* owner = self->_owner;
 
@@ -445,6 +448,15 @@ void GpuBuffer_Serialize(Data* self, ::IO::Serializer* serializer) {
     if (sizeBytes == 0) return;
 
     if (SerializerStreamMode(serializer) == 0) {
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- a
+        // static buffer read from a packed resource file is not read: its create (the descriptor
+        // GpuBuffer_Create builds for seeded data) waits for its first use, and the stream skips the
+        // payload. The owner already holds the size / dynamic Create would store.
+        if (CreateOnDemand::Requested() && owner->dynamic == 0 && self->buffer == nullptr) {
+            const D3D11_BUFFER_DESC desc = GpuBuffer_Desc(static_cast<uint32_t>(owner->size), false,
+                                                          /*seeded: IMMUTABLE*/ owner, GpuBuffer_BindFlags<Data>());
+            if (CreateOnDemand::DeferBuffer(self, serializer->_stream, desc, &self->buffer)) return;
+        }
         // Load: read the payload into scratch memory and rebuild the buffer.
         void* scratch = System::MemoryAllocator::MemAlloc(static_cast<unsigned long long>(sizeBytes), 4);
         serializer->SerializeBytes(owner->size, scratch, nullptr);
@@ -558,6 +570,7 @@ bool GpuBuffer_SetData(const Owner* owner, ID3D11Buffer* buffer,
 // there is one, then clear the three fields.
 VertexBufferData::~VertexBufferData() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): nor under a materialization
     ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less, before the Release
     if (buffer) buffer->Release();
     buffer      = nullptr;
@@ -569,6 +582,7 @@ VertexBufferData::~VertexBufferData() {
 // BindFlags = D3D11_BIND_VERTEX_BUFFER (1).
 bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const void* data) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     return GpuBuffer_Create(_owner, &buffer,
                             sizeBytes, dynamicByte, data, D3D11_BIND_VERTEX_BUFFER);
 }
@@ -577,6 +591,7 @@ bool VertexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const voi
 // DstSubresource is a hard 0 here (contrast IndexBufferData slot 2).
 bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
+    if (buffer == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     return GpuBuffer_SetData(_owner, buffer,
                              sizeBytes, offsetBytes, src, /*dstSubresource=*/0);
 }
@@ -584,6 +599,7 @@ bool VertexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const voi
 // 0x180003290 — slot 3, SHARED with IndexBufferData slot 3 (one retail body).
 void* VertexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
+    if (buffer == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     return BufferData_Lock(this, sizeBytes, outByteOffset);
 }
 
@@ -600,6 +616,9 @@ void VertexBufferData::Unlock() {
 void VertexBufferData::Bind(void* /*context, unused*/, uint32_t startSlot,
                             uint32_t offsetBytes, uint32_t strideBytes) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): one relaxed load when idle
+    // NOT RETAIL (ext.create_on_demand): the first use of a deferred buffer makes it; a made one
+    // pays the null test.
+    if (buffer == nullptr) CreateOnDemand::Ensure(this);
     // The original passes the addresses of its own R9 home slot (offset) and of
     // stack argument 5 (stride); taking the address of our parameters is the
     // same observable call.
@@ -622,6 +641,7 @@ void VertexBufferData::Serialize(::IO::Serializer* serializer) {
 // compiler's).
 IndexBufferData::~IndexBufferData() {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): nor under a materialization
     ShareGpuData::DropBuffer(buffer);   // NOT RETAIL (ext.share_gpu_data): one user less, before the Release
     if (buffer) buffer->Release();
     buffer      = nullptr;
@@ -634,6 +654,7 @@ IndexBufferData::~IndexBufferData() {
 // VertexBufferData version.
 bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const void* data) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     return GpuBuffer_Create(_owner, &buffer,
                             sizeBytes, dynamicByte, data, D3D11_BIND_INDEX_BUFFER);
 }
@@ -644,6 +665,7 @@ bool IndexBufferData::Create(uint32_t sizeBytes, uint8_t dynamicByte, const void
 // the shipped DLL's behaviour, bug and all.
 bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
+    if (buffer == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     return GpuBuffer_SetData(_owner, buffer,
                              sizeBytes, offsetBytes, src,
                              /*dstSubresource=*/static_cast<UINT>(offsetBytes));
@@ -652,6 +674,7 @@ bool IndexBufferData::SetData(int32_t sizeBytes, int32_t offsetBytes, const void
 // 0x180003290 — slot 3, SHARED with VertexBufferData slot 3 (one retail body).
 void* IndexBufferData::Lock(int32_t sizeBytes, int32_t* outByteOffset) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
+    if (buffer == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     return BufferData_Lock(this, sizeBytes, outByteOffset);
 }
 
@@ -682,6 +705,7 @@ void IndexBufferData::Unlock() {
 // behaviour; not declaring it was this file's.
 void IndexBufferData::Bind(void* /*context, never read*/) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): one relaxed load when idle
+    if (buffer == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     Dx11Context()->IASetIndexBuffer(buffer, DXGI_FORMAT_R16_UINT, 0);
 }
 
