@@ -15,8 +15,6 @@
 #include "better_trees/foliage_aa_backend.h"
 #include "better_trees/billboard_shadow_backend.h"
 #include "async_gpu_create/async_gpu_create_backend.h"
-#include "compress_ao/compress_ao_backend.h"
-#include "share_gpu_data/share_gpu_data_backend.h"
 #include "create_on_demand/create_on_demand_backend.h"
 #include "draw_batch/smoke_vs_backend.h"
 #include "ext/render_pipe/finish_split.h"
@@ -73,7 +71,10 @@ void Request(bool on) {
 }  // namespace BbsBackend
 
 // ext.async_gpu_create: the Metal backend has no worker path (its resources are created where the
-// loader makes them), so the request is ignored and the answer is "not supported".
+// loader makes them), so the request is ignored and the answer is "not supported". MTLDevice's
+// resource creation is thread-safe, so a worker path would need no device lock: the open work is the
+// backend's own state (the buffer bookkeeping under stateMutex, ImageBufferData's members) and the
+// await before a deferred object's first use, as src/render/dx11/async_gpu_create/ does.
 namespace AsyncGpuCreateBackend {
 
 void Request(bool on) {
@@ -86,35 +87,8 @@ bool Supported() {
 
 }  // namespace AsyncGpuCreateBackend
 
-// ext.compress_ao: the Metal backend does not create BC4 textures from encoded levels yet (its
-// texture create takes the R8 levels as they are), so the request is ignored, the AO maps stay R8,
-// the derived cache is never asked, and the answer is "not supported".
-namespace CompressAoBackend {
-
-void Request(bool on, Ext::DerivedCache::Store* cache) {
-    (void)on;
-    (void)cache;
-}
-
-bool Supported() {
-    return false;
-}
-
-}  // namespace CompressAoBackend
-
-// ext.share_gpu_data: the Metal backend has no create-or-share path yet (its buffer and texture
-// creates make one object each), so the request is ignored and the answer is "not supported".
-namespace ShareGpuDataBackend {
-
-void Request(bool on) {
-    (void)on;
-}
-
-bool Supported() {
-    return false;
-}
-
-}  // namespace ShareGpuDataBackend
+// ext.compress_ao and ext.share_gpu_data: their bodies are compress_ao/bc4_create.mm and
+// share_gpu_data/share_create.mm (the DX11 layout).
 
 // ext.create_on_demand: the Metal backend has no deferred create yet (its buffer and texture creates
 // read their bytes at load), so the request is ignored, nothing is ever recorded or prefetched, and

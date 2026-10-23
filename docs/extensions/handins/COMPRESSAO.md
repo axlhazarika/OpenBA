@@ -2,7 +2,8 @@
 
 > Branch `issue13/bc4`, based on `issue13/integrate` (`11dee1e9b`). Windows only (debug build, unit,
 > the gate, the resave gate, the MegaMod runs below). Not built: Linux (dxvk-native: the same DX11
-> code), macOS (Metal: a "not supported" body, see section 5).
+> code), macOS (Metal: a "not supported" body at the time; the Metal body followed on
+> `issue13/metal`, section 5).
 
 ## 1. The cost
 
@@ -83,8 +84,15 @@ sampled every 2 s, "in game" = the median of the last 30 s of in-game + 60 s):
 
 ## 5. Not done / open
 
-- Metal: `CompressAoBackend::Supported()` is false; its texture create takes R8 levels as they are.
-  A BC4 path there is `MTLPixelFormatBC4_RUnormalized` from the same `bc4_chain` output.
+- Metal (branch `issue13/metal`, built by CI on macOS arm64, **never run on a Mac**):
+  `src/render/metal/compress_ao/bc4_create.*` and the EXT SEAM in `ImageBufferData::Create`
+  (`backend.mm`). The same candidates as DX11 (kind 2, format 4, 2D, the whole chain, top level a
+  multiple of 4) are created as `MTLPixelFormatBC4_RUnorm` from `bc4_chain`'s output, each level
+  uploaded with `replaceRegion` at the block-row pitch (the retail BC1 / BC3 path's arithmetic with
+  8-byte blocks). `Supported()` needs a live device with `supportsBCTextureCompression` (Apple
+  silicon on macOS 11+, every Intel Mac) and logs the reason for a "no" once. `Update` / `Read` refuse
+  a BC4 texture. `Slot4(false)` prints the summary and releases the cache's mapping, as on DX11.
+  There is no create worker on Metal, so the conversion runs on the loader.
 - Full-disk behaviour is covered by code review only (no test fills a disk).
 - Done on `issue13/dedupe` (SHAREGPUDATA.md section 4): inside the async loader bracket the
   conversion runs on the create worker; a cold start's big load went 16.8 -> 12.8 s, level with a
