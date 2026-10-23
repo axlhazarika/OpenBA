@@ -1,7 +1,7 @@
 // ============================================================================
 // tests/unit/ext_create_on_demand_test.cpp -- ext.create_on_demand (block CREATEONDEMAND)
 // ============================================================================
-// The registry row (class A, default OFF until ruled, off under /profile:faithful, never a
+// The registry row (class A, default ON (ruled 2026-10-23), off under /profile:faithful, never a
 // pseudo-mod); the backend-neutral parts the DX11 backend drives (src/render/common/create_on_demand/):
 //   - payload.h: RedecodeRange over a compressed entry built by the real encoder (compressed,
 //     stored and short blocks, ranges across block edges, malformed entries), the package mappings
@@ -173,12 +173,12 @@ UNIT_TEST(ext_create_on_demand_row) {
     if (e == nullptr) return;
     CHECK(e->tier == Ext::Tier::Extension);
     CHECK(e->cls == Ext::Class::A);
-    CHECK(!e->defaultOn);   // OFF until the user rules (CREATEONDEMAND.md)
+    CHECK(e->defaultOn);   // class A ships ON (the user ruled 2026-10-23)
     CHECK(e->formatVersion == 0);
     CHECK(Ext::SettingsKey(*e) == "ext.create_on_demand");
 
-    CHECK(!Resolved("").ext.create_on_demand);
-    CHECK(Resolved("ext.create_on_demand=1\n").ext.create_on_demand);
+    CHECK(Resolved("").ext.create_on_demand);
+    CHECK(!Resolved("ext.create_on_demand=0\n").ext.create_on_demand);
     CHECK(!Resolved("ext.create_on_demand=1\nprofile=faithful\n").ext.create_on_demand);
     CHECK(!Resolved("ext.create_on_demand=1\n", "faithful").ext.create_on_demand);   // the gate's /profile:faithful
 

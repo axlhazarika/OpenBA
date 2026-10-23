@@ -282,8 +282,8 @@ const Entry kEntries[] = {
     // CREATEONDEMAND (docs/extensions/handins/CREATEONDEMAND.md, issue #13): static vertex / index
     // buffers and file-seeded textures are created at their first use (or when the world places a
     // mesh that uses them) instead of at load; their bytes are read again from the mapped package.
-    // Read once at boot (next start). OFF by default until ruled.
-    { "create_on_demand", Tier::Extension, Class::A, false,
+    // Read once at boot (next start). ON by default (the user ruled 2026-10-23).
+    { "create_on_demand", Tier::Extension, Class::A, true,
       "Load graphics on demand",
       "Prepares a model's graphics when the game first shows it instead of at start-up: much less "
       "memory with large mods. Takes effect at the next start.",

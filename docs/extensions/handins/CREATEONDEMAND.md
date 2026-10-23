@@ -3,7 +3,7 @@
 > Branch `issue13/lazy`, based on `issue13/next` (`2ceb8a3bd`: bc4 cache + compress_ao + share_gpu_data
 > + pathindex). Windows only (perf + debug builds, unit, the gate, the resave gate, the MegaMod runs
 > below). Not built: Linux (dxvk-native: the same DX11 code), macOS (Metal: a "not supported" body).
-> **The row ships OFF until the user rules.**
+> **The row ships ON: the user ruled 2026-10-23.**
 
 ## 1. The cost
 
@@ -13,7 +13,7 @@ private and ~7.4 GB of dedicated GPU memory. Under 1 % of it is bound after the 
 new game. The spike (branch `issue13/redecode-spike`, `ee5628886`) proved that one payload can be
 re-produced alone from the mapped package: 12,532 re-decodes, 0 mismatches, ~0.9 ms per decoded MB.
 
-## 2. The change: `ext.create_on_demand` (class A, next start, default OFF)
+## 2. The change: `ext.create_on_demand` (class A, next start, default ON)
 
 **Locator.** A compiled resource in a package is one compressed stream: block count, a directory of
 {sourceOffset, compressedSize, uncompressedSize}, then 32 KB blocks of the decompressed stream. A GPU
@@ -74,7 +74,7 @@ copy costs nothing anyway. async_gpu_create: a deferred object never reaches its
 deferred keeps its path.
 
 Wiring (DESIGN.md section 3): registry row `create_on_demand` ("Load graphics on demand", class A,
-default OFF), `Ext::CreateOnDemand::Boot` (registry_boot.cpp), seam `CreateOnDemandBackend::Request /
+default ON), `Ext::CreateOnDemand::Boot` (registry_boot.cpp), seam `CreateOnDemandBackend::Request /
 Supported / Prefetch`, DX11 body `src/render/dx11/create_on_demand/`, Metal "not supported"
 (`integration.mm`), `Entry_create_on_demand.png` (`tools/ext_icons/createondemand.py`, baked), the
 Names-table row "first-use GPU creates", LIST.MD row. Summary lines `[CreateOnDemand] load end` at each
@@ -136,7 +136,7 @@ retry / failed, four threads over 2,000 records; and 4,000 MegaMod payloads read
 
 Class A: the same objects with the same contents and the same creates, made later (at first use, or
 earlier by the prefetch), never seen half-made. Off under the faithful profile; one null test per site
-otherwise. Default OFF until the user rules: it changes when every static object exists, and a
+otherwise. Ships ON: the user ruled 2026-10-23. It changes when every static object exists, and a
 first-use create costs up to ~8 ms on the using thread when the prefetch has not run.
 
 ## 5. Files
