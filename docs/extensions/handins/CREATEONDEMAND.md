@@ -2,7 +2,8 @@
 
 > Branch `issue13/lazy`, based on `issue13/next` (`2ceb8a3bd`: bc4 cache + compress_ao + share_gpu_data
 > + pathindex). Windows only (perf + debug builds, unit, the gate, the resave gate, the MegaMod runs
-> below). Not built: Linux (dxvk-native: the same DX11 code), macOS (Metal: a "not supported" body).
+> below). Not built: Linux (dxvk-native: the same DX11 code), macOS (Metal: a "not supported" body
+> at the time; the Metal body followed on `issue13/lazy-metal`, section 6).
 > **The row ships OFF until the user rules.**
 
 ## 1. The cost
@@ -142,16 +143,51 @@ first-use create costs up to ~8 ms on the using thread when the prefetch has not
 ## 5. Files
 
 `src/render/common/create_on_demand/{payload,lazy_table,stream_locate}.{h,cpp}`, `pending_levels.h`,
-`create_on_demand_backend.h`; `src/render/dx11/create_on_demand/lazy_create.{h,cpp}`; `src/ext/
+`create_on_demand_backend.h`; `src/render/dx11/create_on_demand/lazy_create.{h,cpp}`;
+`src/render/metal/create_on_demand/lazy_create.{h,mm}`, `src/render/metal/seeded_create.h`; `src/ext/
 create_on_demand/{create_on_demand,level_source,prefetch}.{h,cpp}`; seams in `io/FileSystem.h` /
 `filesystem_openfile.cpp`, `video/ImageBuffer.h` / `imagebuffer_platform_serialize.cpp`,
 `graphics/Mesh.h` / `mesh.cpp`; `src/render/dx11/{buffers,imagebufferdata,devicedata,devicedata_stubs}.cpp`;
 `src/render/metal/integration.mm`; registry, sprite, tests, LIST.MD, DESIGN.md.
 
-## 6. Open
+## 6. Metal
 
-- Not run: a forced device-lost round trip with the row on (`BANISHED_FORCE_DEVICE_LOST`), and
-  Linux / macOS builds.
+Branch `issue13/lazy-metal` (this branch + `issue13/metal`, the Metal compress_ao / share_gpu_data
+bodies). Built by CI on macOS arm64 (and the three other checks); **never run on a Mac**.
+
+- **Body** `src/render/metal/create_on_demand/lazy_create.{h,mm}`: the same table, Locator, Redecode
+  and pending levels; a `BufferRecord` and a `TextureRecord` over `MTLBuffer` / `MTLTexture`.
+  `CreateOnDemandBackend::Supported()` is true (the "not supported" stub left `integration.mm`).
+- **One create chain.** `src/render/metal/seeded_create.h` (bodies in `backend.mm`): `PlanUploads`
+  (ext.compress_ao's BC4 conversion and the level uploads), `MakeTexture` / `MakeBuffer`
+  (ext.share_gpu_data's create-or-share, else the plain create). The load and the materialization
+  both call them, in that order.
+- **Buffers.** The buffer `Serialize` load arm (both kinds, one `SerializeBuffer` template): a static
+  buffer (not dynamic, size > 0, no buffer yet) whose payload locates is recorded and skipped. The
+  eager arm now reads the payload and hands it to `Create` as its seed (DX11's order). Before, Metal
+  created an unseeded buffer and read the payload into it: the same bytes, but ext.share_gpu_data
+  never saw a loaded buffer, so on Metal it shared nothing from resource files until this commit.
+- **Textures.** `ImageBufferData::Create` builds the descriptor and, when the level reader left
+  pending Locators for the image, records the texture and makes the sampler. The sampler now takes
+  a mip count instead of the texture (`MakeSampler`), so a deferred texture's sampler equals the
+  eager one's.
+- **Ensure / Forget** at the DX11 slots: `Ensure` in Bind (before the state lock), Lock, SetData,
+  Update, Read (before the device lock) and the save arm; `Forget` in Create, AttachColor/
+  DepthBuffer and the destructors. Publish writes the companion's strong member (ARC retains it)
+  and its `shared` flag, under the table's mutex.
+- **Device.** `DeviceData::Shutdown` (exit, a device rebuild) calls `Pause` first; a successful
+  `CreateDevice` calls `Resume`. A materialization with no live device returns Retry.
+- **Threads.** The prefetch workers are plain threads: each `Materialize` runs in an
+  `@autoreleasepool`. The device's creates are thread-safe; the allocation bookkeeping takes the
+  backend's state lock.
+- **Not tested at run time:** everything above. In particular a deferred texture drawn on first
+  bind, the prefetch on Apple silicon, Publish racing a using thread's nil test (the same unlocked
+  read as DX11's), a device rebuild with records pending, and the memory figures.
+
+## 7. Open
+
+- Not run: a forced device-lost round trip with the row on (`BANISHED_FORCE_DEVICE_LOST`); the game
+  on Linux or on a Mac (both build in CI; the Metal body is section 6).
 - The prefetch knows only `MeshInstance::SetMesh`; edge meshes, particles and UI images are made at
   first use (the menu's ~120 objects, up to ~8 ms each).
 - Objects are never released back to "deferred": a long session that views everything grows toward
