@@ -175,6 +175,47 @@ struct AddCounters {
 AddCounters g_ac{};
 
 // ============================================================================
+// Add's HIT arm, 1800be68b..1800be6c7, on the node the descent landed on:
+// OR the clean bit in, and when it was not already set run the reference-visit
+// pass over the object. Its own function because the visit pass's shortcut
+// (block VISITPASS, external_visit.cpp) reaches this arm with the node it
+// already holds, skipping the descent and nothing else.
+// ============================================================================
+void RtObject_ExternalFactory_AddHit(ExternalFactory* self, rtresset::Node* node, ::Object::External* external) {
+    // The clean-generation bit for THIS generation (the same expression as the
+    // body's below: `_cleanBitIndex` masked with `& 0x1f`, as retail's SHL does).
+    const uint32_t bit = 1u << (static_cast<uint32_t>(self->_cleanBitIndex) & 31u);
+
+    ResourceEntry* const entry = rtresset::Elem(node);
+    const uint32_t before = entry->usageMask;
+    entry->usageMask = before | bit;                            // 1800be694
+
+    if ((bit & before) == 0) {
+        // First time this resource has been touched in this clean
+        // generation. Run the reference-visit pass.
+        ++g_ac.hitVisited;
+
+        // ---- the stack-constructed IO::VisitorStream --------------------
+        // 0x18 bytes of stack, built by the REAL constructor (ENDGAME
+        // B.3.9 IO: retail's ??0VisitorStream 0x1800bb090 -- vptr,
+        // direction 1, the Visitor encoding). `Stream::pad0c` is not
+        // written, as in retail.
+        alignas(8) unsigned char vsMem[sizeof(IO::VisitorStream)];
+        IO::VisitorStream* vs = ::new (vsMem) IO::VisitorStream();
+
+        ExternalSerialize(external, *vs);                       // 1800be6a9
+
+        // ---- the INLINED ~VisitorStream (1800be673..) --------------------
+        // Retail's two table stores and the encoding free are
+        // ~VisitorStream -> ~Stream; slot 0 with flags 0 runs exactly that
+        // (called non-virtually, as retail's inlined copy is).
+        vs->IO::VisitorStream::~VisitorStream();
+    } else {
+        ++g_ac.hitSkipped;
+    }
+}
+
+// ============================================================================
 // Object::ExternalFactory::Add — the body.               retail 0x1800be570
 // ============================================================================
 extern "C" void RtObject_ExternalFactory_Add(ExternalFactory* self, ::Object::External* external) {
@@ -245,33 +286,7 @@ extern "C" void RtObject_ExternalFactory_Add(ExternalFactory* self, ::Object::Ex
     if (node != nullptr) {
         // ---- HIT: 1800be68b..1800be6c7 ----------------------------------
         ++g_ac.hit;
-        ResourceEntry* const entry = rtresset::Elem(node);
-        const uint32_t before = entry->usageMask;
-        entry->usageMask = before | bit;                        // 1800be694
-
-        if ((bit & before) == 0) {
-            // First time this resource has been touched in this clean
-            // generation. Run the reference-visit pass.
-            ++g_ac.hitVisited;
-
-            // ---- the stack-constructed IO::VisitorStream ----------------
-            // 0x18 bytes of stack, built by the REAL constructor (ENDGAME
-            // B.3.9 IO: retail's ??0VisitorStream 0x1800bb090 -- vptr,
-            // direction 1, the Visitor encoding). `Stream::pad0c` is not
-            // written, as in retail.
-            alignas(8) unsigned char vsMem[sizeof(IO::VisitorStream)];
-            IO::VisitorStream* vs = ::new (vsMem) IO::VisitorStream();
-
-            ExternalSerialize(external, *vs);                   // 1800be6a9
-
-            // ---- the INLINED ~VisitorStream (1800be673..) ----------------
-            // Retail's two table stores and the encoding free are
-            // ~VisitorStream -> ~Stream; slot 0 with flags 0 runs exactly that
-            // (called non-virtually, as retail's inlined copy is).
-            vs->IO::VisitorStream::~VisitorStream();
-        } else {
-            ++g_ac.hitSkipped;
-        }
+        RtObject_ExternalFactory_AddHit(self, node, external);
     } else {
         // ---- MISS: 1800be699..1800be6c2 ---------------------------------
         ++g_ac.inserted;
