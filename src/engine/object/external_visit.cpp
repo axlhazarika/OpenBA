@@ -227,8 +227,10 @@ void DumpVisitCounters() {
     uint64_t duplicates = 0;
     bool broken = false;
     rtresset::VisitIndexStats(&size, &broken, &duplicates);
-    printf("[VisitPass] visits=%llu shortcuts=%llu walks=%llu verified=%llu checked=%llu mismatches=%llu "
-           "index: rows=%llu broken=%d duplicates=%llu\n",
+    // stderr: the perf exe strips printf (src/app/log_strip.h) and this line is the
+    // gate's reading of the shortcut (standalone_error.log).
+    fprintf(stderr, "[VisitPass] visits=%llu shortcuts=%llu walks=%llu verified=%llu checked=%llu mismatches=%llu "
+            "index: rows=%llu broken=%d duplicates=%llu\n",
            (unsigned long long)g_vc.visits, (unsigned long long)g_vc.shortcuts, (unsigned long long)g_vc.walks,
            (unsigned long long)g_vc.verified, (unsigned long long)g_vc.checked,
            (unsigned long long)g_vc.mismatches, (unsigned long long)size, broken ? 1 : 0,
