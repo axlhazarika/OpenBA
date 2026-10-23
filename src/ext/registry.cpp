@@ -342,8 +342,9 @@ const ValueKey kValueKeys[] = {
     { "derived_cache_mb", "compress_ao", 256, 65536, 4096,
       [](State& s) -> int32_t& { return s.val.derived_cache_mb; }, nullptr, 0 },
     // CREATEONDEMAND section 7: minutes a made object may go unused before it is given back (released,
-    // re-made from its package at the next use); 0 = never. Read once at boot.
-    { "create_on_demand_idle_min", "create_on_demand", 0, 120, 5,
+    // re-made from its package at the next use); 0 = never. Read once at boot. Default 0 until re-makes
+    // are prefetched: a re-made object is otherwise created on the render thread in the frame that draws it.
+    { "create_on_demand_idle_min", "create_on_demand", 0, 120, 0,
       [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
 };
 

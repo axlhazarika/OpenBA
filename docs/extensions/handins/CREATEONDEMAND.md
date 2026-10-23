@@ -155,16 +155,21 @@ create_on_demand/{create_on_demand,level_source,prefetch}.{h,cpp}`; seams in `io
 - The prefetch knows only `MeshInstance::SetMesh`; edge meshes, particles and UI images are made at
   first use (the menu's ~120 objects, up to ~8 ms each).
 - An object given back (section 7) is re-made at its next use on the using thread: no prefetch tells
-  it is about to be seen again (SetMesh is not called again), so a building framed after 5 idle
-  minutes costs its first-use creates in that frame.
+  it is about to be seen again (SetMesh is not called again), so a building framed after the idle
+  limit costs its first-use creates in that frame. Hence the idle limit defaults to 0 (never) until
+  re-makes are prefetched.
+- Pre-existing, not this extension's: with the row OFF a forced device loss grows the process from
+  9.6 to 17.6 GB private and the GPU from 7.4 to 13.7 GB (section 8); with the row on 2.4 -> 3.2 GB.
 - A cold derived cache encodes an AO map at its first use (~5 ms each), not at load.
 - Mapped package pages count in the working set while touched (WS within the noise of off here).
 
 ## 7. Objects given back after an idle time (2026-10-23)
 
 A made object unused for more than `ext.create_on_demand_idle_min` minutes (value key, owner
-create_on_demand, 0..120, default 5, 0 = never; read at boot) gives its GPU memory back and is re-made
-from its Locator at its next use. Closes the former open item "objects never return to deferred".
+create_on_demand, 0..120, 0 = never; read at boot) gives its GPU memory back and is re-made from its
+Locator at its next use. **Default 0 (never) until re-makes are prefetched** (coordinator ruling
+2026-10-23, pending the user): a re-made object is otherwise created on the render thread in the frame
+that draws it, up to ~8 ms, the class of hitch section 9 removes. Closes the former open item "objects never return to deferred".
 
 - **Records kept.** A materialized record stays in the table (state MADE) with its Locator instead of
   being dropped; Forget drops it as before.
@@ -225,3 +230,5 @@ A forced reset does not remove the device; for a real removal a record now check
 publishes nothing and stays recorded (Retry) for the recovered device (`6d5bb9f43`). Injecting at
 Present #3000 lands inside the boot load and crashes in `MaterialInstance::Serialize` on the loader
 while OnVideoError runs on the main thread: the known retail window (deferred), not this extension.
+The run above used the idle limit's former default (5); the default is now 0 until re-makes are
+prefetched (section 7).

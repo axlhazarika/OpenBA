@@ -202,7 +202,7 @@ UNIT_TEST(ext_create_on_demand_idle_key) {
     CHECK(std::string(k->owner) == "create_on_demand");
     CHECK_EQ(k->minValue, 0);   // 0 = never give an object back
     CHECK_EQ(k->maxValue, 120);
-    CHECK_EQ(k->defaultValue, 5);
+    CHECK_EQ(k->defaultValue, 0);   // never, until re-makes are prefetched
     CHECK(Ext::SettingsKey(*k) == "ext.create_on_demand_idle_min");
 }
 
