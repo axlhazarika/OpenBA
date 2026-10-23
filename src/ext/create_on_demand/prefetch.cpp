@@ -99,9 +99,10 @@ void PrefetchGathered(const Graphics::MeshInstance& instance, int32_t level) {
 }
 
 // Graphics::ParticleInstance::_extParticleAssigned: an emitter gets its particle when its entity is
-// placed or loaded, well before it first emits (a chimney's smoke).
+// placed or loaded, well before it first emits (a chimney's smoke). KEPT: particles are drawn with no
+// gather to re-queue one the idle eviction gave back (small textures, shared by every emitter).
 void PrefetchParticle(const Graphics::Particle& particle) {
-    PrefetchMaterial(particle._material);
+    KeepMaterial(particle._material);
 }
 
 // UI::SpriteSheet::_extLoaded. A window draws its sprite sheets all in the frame it opens: a
