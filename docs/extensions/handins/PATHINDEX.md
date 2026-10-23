@@ -94,4 +94,4 @@ load 1 2.55 -> 1.50 s (20.7% -> 13.5%), loads 2-4 3.81 -> 1.84 s, remount 2 1.17
 - What remains in loads 2-4 is the Filename copies of `Find` / `Add` / `GetPath` (each copy constructor
   normalises twice), the memo's own hashing and the index hashing.
 - The remount's `SnapshotFind` (a case-SENSITIVE signed-strcmp tree local to `SetupFileSystem`) is not
-  indexed.
+  indexed. (Done by block PKGCACHE: `SnapshotTable`, handins/PKGCACHE.md.)
