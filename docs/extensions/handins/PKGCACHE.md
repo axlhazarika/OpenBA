@@ -91,7 +91,9 @@ close (act 2) 300 -> 300 ms, LoadPackages 370-410 -> 240 ms (third loop 270 -> 1
 `tools/build.sh unit`: 1359 tests, 0 failures (1 skipped, not this block's). `tools/build.sh run` (debug
 exe, which builds retail's snapshot tree and runs `GetCompiledPath` behind every reuse; faithful
 profile, mods parked): in game, crash log 0 bytes, 0 `MISMATCH` lines. `tools/resave_gate/resave_gate.sh
-Gate`: **PASS** (md5 971aaec2cf95f5f730bb1cd1a4fa8428, the golden).
+Gate`: **PASS** against the real golden (issue13-next's `golden/Gate.resaved.bin`, md5
+971aaec2cf95f5f730bb1cd1a4fa8428, byte-identical to the file in this worktree), on bb4340aba and on the
+merge f5210e06d.
 
 ## 6. Open
 
