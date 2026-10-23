@@ -57,8 +57,9 @@ AttachColor/DepthBuffer and the destructors `Forget` first (drop unrun, wait for
 
 **Prefetch.** `Graphics::MeshInstance::_extMeshAssigned` (EXT SEAM at the end of `SetMesh`): an entity
 placed, loaded from a save or changing model gets its mesh before it is drawn; the extension queues
-every detail level's four buffers and every material's textures for the table's workers (two, one
-below eight hardware threads). A use that meets a queued record runs it itself.
+every detail level's four buffers and image and every material's textures for the table's workers
+(two, one below eight hardware threads). A use that meets a queued record runs it itself. Section 9
+lists the other seams (the draw gather, sprite sheets, particles, the terrain's materials).
 
 **Threading.** One table mutex, nothing heavy under it; the loader only locates and skips.
 
@@ -146,18 +147,20 @@ first-use create costs up to ~8 ms on the using thread when the prefetch has not
 `create_on_demand_backend.h`; `src/render/dx11/create_on_demand/lazy_create.{h,cpp}`; `src/ext/
 create_on_demand/{create_on_demand,level_source,prefetch}.{h,cpp}`; seams in `io/FileSystem.h` /
 `filesystem_openfile.cpp`, `video/ImageBuffer.h` / `imagebuffer_platform_serialize.cpp`,
-`graphics/Mesh.h` / `mesh.cpp`; `src/render/dx11/{buffers,imagebufferdata,devicedata,devicedata_stubs}.cpp`;
+`graphics/Mesh.h` / `mesh.cpp`, `graphics/ParticleInstance.h` / `wave27_lane_gfxpart.cpp`,
+`ui/SpriteSheet.h` / `spritesheet_vtable.cpp`, `Game/WorldGeometry.h` / `worldgen.cpp` /
+`geometry_serialize.cpp`, `Player/tool_base_highlight.cpp` / `roadtool_calcpath.cpp`;
+`src/render/dx11/{buffers,imagebufferdata,devicedata,devicedata_stubs}.cpp`;
 `src/render/metal/integration.mm`; registry, sprite, tests, LIST.MD, DESIGN.md.
 
 ## 6. Open
 
 - Not built: Linux / macOS. (The forced device-lost round trip ran: section 8.)
-- The prefetch knows only `MeshInstance::SetMesh`; edge meshes, particles and UI images are made at
-  first use (the menu's ~120 objects, up to ~8 ms each).
-- An object given back (section 7) is re-made at its next use on the using thread: no prefetch tells
-  it is about to be seen again (SetMesh is not called again), so a building framed after the idle
-  limit costs its first-use creates in that frame. Hence the idle limit defaults to 0 (never) until
-  re-makes are prefetched.
+- Two textures are still made on use (section 9): the weather's 16x16 rain texture and the tool
+  selection texture (0.04 / 0.2 ms). Not seen by the instrument, so not covered: edge meshes.
+- With an idle limit set (section 7), a camera JUMP onto many given-back buildings still makes some
+  of them on use: the draw gather queues them only a frame ahead (section 9: 28 objects, 24 ms in
+  one frame). The idle limit stays 0 by default (proposal in section 9).
 - Pre-existing, not this extension's: with the row OFF a forced device loss grows the process from
   9.6 to 17.6 GB private and the GPU from 7.4 to 13.7 GB (section 8); with the row on 2.4 -> 3.2 GB.
 - A cold derived cache encodes an AO map at its first use (~5 ms each), not at load.
@@ -232,3 +235,74 @@ Present #3000 lands inside the boot load and crashes in `MaterialInstance::Seria
 while OnVideoError runs on the main thread: the known retail window (deferred), not this extension.
 The run above used the idle limit's former default (5); the default is now 0 until re-makes are
 prefetched (section 7).
+
+## 9. On-use hitch coverage (2026-10-23)
+
+Goal: no first-use create on the render or main thread in normal play. A TEMP instrument on
+`issue13/lazy-sr-tmp` (never merged) logged every on-use materialization: the resource path (the
+loader's External path stack), the thread, the duration, the record's state (idle / queued / prefetched
+before) and the frame. Runs: perf, MegaMod 7-part, a new game with a TEMP toolbar tour (every main
+toolbar button, every sub-toolbar item selected, every utility window opened, ~2.5 min), and the
+showroom. **Machine load BUSY**: other agents compiled through most runs; frame times are indicative.
+
+**What reached a bind without a prefetch, and the seam each got** (each a null-by-default static data
+pointer, `// EXT SEAM` at the site):
+
+| Category (before) | Seam | Rule |
+|---|---|---|
+| a placed building's AO map: the detail level's own image, bound to slot 3 apart from the materials | `PrefetchMesh` takes `DetailLevel::_image` | prefetch |
+| UI sprite sheets: a sub-toolbar draws ~80 at once (27 ms in one frame) | `UI::SpriteSheet::_extLoaded` (end of a reading Serialize; fonts and cursors too) | queued at load, **kept** |
+| the main menu's terrain, water, decal and road textures (~16, ~30 ms in its first frame) | `WorldGeometry::_extMaterialTaken`: BuildTerrain, the end of a loading Serialize / SerializeLegacyBatches, AddDecal, StoreBatchMaterial | queued, **kept** |
+| particles (chimney smoke) | `Graphics::ParticleInstance::_extParticleAssigned` (end of SetParticle) | queued, **kept** |
+| a skin chosen after SetMesh, a building's charred set | `MeshInstance::_extMaterialAssigned` (SetMaterialInstance) | prefetch |
+| a first sight with no placement prefetch; a re-make after the idle eviction | `MeshInstance::_extLevelGathered` (AddDrawItems, after the detail level is chosen) | prefetch when not made |
+
+Kept objects never leave by the idle eviction (`LazyTable::Keep`): the terrain, particles and the UI
+are drawn with no gather to re-queue one given back. They are made at load by the workers (the boot
+does not wait): +~200 MB held, the UI's sheets most of it (UI 187 MB + Dialog 22 MB deferred).
+
+**The gather seam.** Every gathered instance (the view's draw groups and a shadow pass's, a frame or
+more before the render thread binds) costs one indirect call and two loads: the drawn level's vertex
+buffer handle and its image's view (`CreateOnDemandBackend::VertexBufferMade` / `ImageMade`; the image
+because a shadow pass binds the buffers alone, keeping them while the image goes). Only an instance
+not made queues its creates. Not measured on a clean machine (stress A/B open).
+
+**On-use creates, before / after** (TEMP instrument; the tour run, row on):
+
+| | boot + menu | in game | worst on-use time in one frame |
+|---|---|---|---|
+| before (HC_tour1) | 94 | 223 | 27.3 ms (77 sheets, a sub-toolbar opening) |
+| after (FT_on3) | 1 (rain 16x16, 0.04 ms) | 1 (tool selection texture, 0.2 ms) | 0.2 ms |
+
+The showroom (48 MegaMod buildings) after: 0 on use in pass A (1,490 prefetched).
+
+**Frame times, tour, in game after the first frame** (presented frame periods; uncapped):
+
+| Run | p99 (ms) | worst (ms) | frames > 33 ms |
+|---|---|---|---|
+| off (FT_off1) | 2.89 | 39.5 | 15 |
+| on (FT_on2) | 2.78 | 36.5 | 14 |
+| on, final (FT_on3) | 4.26 | 39.1 | 10 |
+
+The > 33 ms frames on both sides are the sub-toolbar openings (retail's dialog build, not creates).
+FT_on1 had one 5.2 s frame with no on-use create anywhere near it, which FT_on2 / FT_on3 did not repeat
+(machine). FT_on3 ran with a linker of another agent busy (its p50 / p99 are not comparable).
+
+**Re-makes after the idle eviction** (the showroom's away pass: 96 shots, 200 s on an empty corner,
+the 96 again, `idle_min=1`; pass-B shots all match the reference run within 0.01 % of pixels; the
+harness's camera stopped following when the window lost focus, fixed in the TEMP harness):
+
+| Run | re-made | made on use | on-use time | pass B p99 / worst frame |
+|---|---|---|---|---|
+| row off (EV_off) | | | | 18.38 / 51.1 ms |
+| on, no gather prefetch (EV_on2) | 456 | 673 | 529 ms | 18.50 / 89.5 ms |
+| on, gather prefetch (EV9_on) | 388 | 57 (53 queued, the worker not done yet) | 69 ms | 17.85 / 30.4 ms |
+
+The remaining re-makes on use come from one camera JUMP (the pass's first framing): 28 objects, 24 ms
+in that frame, queued by the gather one frame earlier. A pan reaches the gather a frame or more ahead
+and is covered.
+
+**Proposal: the idle limit stays 0 by default.** It saves ~150-250 MB on this town (held 436 -> 280
+MB), against a hitch of up to ~24 ms on a camera jump (a camera view key, "focus entity") onto
+buildings unseen for the limit. The jump case needs a lead longer than one frame (a gather over a wider
+frustum, or prefetching a camera view's target when it is chosen) before 5 is the right default.
