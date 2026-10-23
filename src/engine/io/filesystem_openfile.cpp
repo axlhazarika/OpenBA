@@ -145,6 +145,7 @@
 #include "system/Filename.h"
 #include "system/WideString.h"
 #include "system/string_internal.h"
+#include "io/packfile_fold_index.h"   // block PATHINDEX: the hash index beside _packfileIndex
 
 #include <new>        // placement new into a raw FileInfo Filename slot
 #include <atomic>     // MAPREAD: the emulated file pointer
@@ -546,6 +547,14 @@ RtIO::FileInfo FileSystem::OpenFile(const System::Filename& name) {
             // retail's release point at 0x1800ac991, before the node is used.
             System::Filename key(name._data + dirLen);       // 1800ac91a..932
 
+            // NOT RETAIL (block PATHINDEX): the hash index answers when it can
+            // (it declines while any node key is null, the arm this walk treats
+            // differently from the others).
+            RtIO::PackfileIndexNode* indexed = nullptr;
+            const bool answered = ::IO::PackIndexFind(&_packfileIndex, key._data, &indexed);
+            if (answered && !OPENBA_PATHINDEX_CHECK)
+                node = nullptr;
+
             while (node != nullptr) {                        // 1800ac98c
                 const char* const nk = node->element.key._data;            // 1800ac945
                 if (nk != nullptr && key._data != nullptr &&
@@ -560,6 +569,9 @@ RtIO::FileInfo FileSystem::OpenFile(const System::Filename& name) {
                 }
                 break;                                       // found
             }
+            ::IO::PackIndexCheck(answered, key._data, indexed, node);
+            if (answered && !OPENBA_PATHINDEX_CHECK)
+                node = indexed;
         }                                                    // ~key  1800ac991
 
         if (node != nullptr && _existsInPackfileGate != 0) {  // 1800ac9bf

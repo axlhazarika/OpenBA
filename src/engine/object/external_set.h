@@ -154,6 +154,15 @@ void   FreeEntryNode(void* ignored, Node* node);                          // 0x1
 void   Erase        (Set* set, Node* z);                                  // 0x18002cf60
 Node*  Find         (const Set* set, const System::Filename* key);        // 0x18002dd70
 
+// ---- NOT RETAIL (block PATHINDEX): the hash index beside the tree ----------
+// src/engine/collection/fold_index.h has the exactness argument. InsertCore and
+// Erase keep it in step; `IndexedFind` answers for `set` when it can (true, and
+// `*out` is what `Find`'s descent returns for `key`) and declines otherwise
+// (false: the caller walks). `IndexClear` is for a set whose nodes were freed
+// wholesale (~ExternalFactory).
+bool   IndexedFind (const void* set, int32_t count, const char* key, Node** out);
+void   IndexClear  (const void* set);
+
 void   ArrayDestroyRange(void* ignored, System::Filename* first, int count); // 0x18002e3d0
 void   ArrayResize      (FilenameArray* self, int newSize,
                          const System::Filename* fill);                       // 0x18002dff0
