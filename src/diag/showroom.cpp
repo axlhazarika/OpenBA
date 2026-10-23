@@ -2,6 +2,7 @@
 // BANISHED_SHOWROOM — the building showroom (see showroom.h). Harness only, not retail.
 #include "showroom.h"
 #include "options.h"
+#include "pausemenu_harness.h"   // PauseMenuHarness_QuitGame: the run ends after the last shot
 #include "io/FileSystem.h"
 #include "system/Filename.h"
 
@@ -204,6 +205,10 @@ void Finish() {
     std::fprintf(stderr, "[Showroom] DONE placed=%d of %zu, shots=%d\n", placed, s.entries.size(), s.shots);
     std::fflush(stderr);
     Enter(Phase::Done);
+    // The camera is released with the last shot; without this the exe sits on a live world showing
+    // whatever the free camera lands on until the script kills it. Quit Game through the pause menu
+    // instead, so the settings round-trip and the normal shutdown run.
+    PauseMenuHarness_QuitGame();
 }
 
 // Frame the current entry from the current heading, or finish when none is left.

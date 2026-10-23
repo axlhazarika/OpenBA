@@ -370,7 +370,7 @@ extern "C" int GameUpdateLoop_CurrentFrame() { return s_frameNum; }
 // In-game tool-injection harness (src/diag/tool_harness.cpp), env-gated by
 // BANISHED_TOOL_HARNESS. No-op unless that env var is set.
 extern "C" void ToolHarness_Tick(PlayerToolManager* entityUI, int frameNum);
-extern "C" void PauseMenuHarness_Tick(PlayerToolManager* entityUI, int frameNum);  // src/diag/pausemenu_harness.cpp
+#include "pausemenu_harness.h"   // PauseMenuHarness_Tick (src/diag)
 extern "C" void FoodPanel_Tick(PlayerToolManager* entityUI, int frameNum);  // src/diag/food_panel_harness.cpp
 extern "C" void FoodPlace_Tick(int frameNum);                  // src/diag/food_placement_harness.cpp
 extern "C" void StartTown_DeferredSpawn_Tick(int frameNum);    // src/game/Game/starttown.cpp
