@@ -112,6 +112,7 @@ extern "C" void MapComponent_ReportDc20Evictions(const char* tag);  // keystone_
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <string>
 #include <vector>
 #include <algorithm>
 #include <functional>
@@ -1271,6 +1272,7 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
     std::vector<Tally> tally;
     int placed = 0, failed = 0, houses = 0;
     int lastX = 0, lastY = 0, lastW = 0, lastH = 0;   // the footprint the last place() picked
+    ComponentEntity* lastEnt = nullptr;               // and the entity it placed there
 
     auto place = [&](const StressBuilding& b) -> bool {
         ComponentDescription* tmpl = ResolveTemplateByPath(b.path);
@@ -1312,6 +1314,7 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
         ComponentEntity* ent = g_stPlaceStructure(tmpl, bestX, bestY, 0, w, h, /*isDemoFoundation=*/false, -1);
         g_stOccupied.push_back({ bestX, bestY, w, h });
         mark(bestX, bestY, w, h);
+        lastEnt = ent;
         if (!ent) { ++failed; return false; }
         ++placed;
         reachCount = floodTown(reach, 0, 0, 0, 0, -1, -1);
@@ -1406,24 +1409,46 @@ static int StartTown_StressSpawnStructures(Map* game, int cx, int cy) {
     // Only templates with a CreatePlacedDescription (a footprint the placement tool
     // stamps) are placed; drag areas and non-building templates are reported and skipped.
     if (showroom) {
+        // Sited a quarter map east of the town, so the founding town and its citizens stay
+        // out of the shots (the spread layout's anchor rule).
+        anchorX = std::max(12, std::min(mapW - 12, cx + mapW / 4));
+        anchorY = cy;
+        const uint32_t tidModel = ModelComponent::TypeId();
         for (int i = 0; i < Showroom_Count(); ++i) {
             const char* path = Showroom_Path(i);
             ComponentDescription* tmpl = ResolveTemplateByPath(path);
             if (!tmpl) {
-                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, "template did not resolve");
+                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, nullptr, "template did not resolve");
                 continue;
             }
             const CreatePlacedDescription* cpd = FindDescriptionOnTemplate<CreatePlacedDescription>(tmpl, tidCPD);
             if (!cpd || cpd->_i44 <= 0 || cpd->_i48 <= 0) {
-                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, "no CreatePlacedDescription footprint");
+                // Say what the template carries instead, so the reason can be read off the log.
+                char cpdText[160] = "none";
+                if (cpd) {
+                    std::snprintf(cpdText, sizeof(cpdText), "category=%u i40=%d i44=%d i48=%d placeArray=%d",
+                                  cpd->_category, cpd->_i40, cpd->_i44, cpd->_i48, cpd->_placeArray._size);
+                }
+                std::string why = std::string("no CreatePlacedDescription footprint (") + cpdText + "); descriptions:";
+                for (int d = 0; d < tmpl->_subDescCount; ++d) {
+                    const Description* desc = tmpl->_subDescs[d];
+                    why += ' ';
+                    why += desc ? desc->TypeName() : "(null)";
+                }
+                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, nullptr, why.c_str());
                 continue;
             }
             const StressBuilding b = { path, Showroom_Name(i), 0, 0 };
             if (!place(b)) {
-                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, "no free footprint, or placement returned null");
+                Showroom_NotePlaced(i, false, 0, 0, 0, 0, mapW, nullptr,
+                                    "no free footprint, or placement returned null");
                 continue;
             }
-            Showroom_NotePlaced(i, true, lastX, lastY, lastW, lastH, mapW, nullptr);
+            // The model's world bounds frame the camera; Scene::Clean fills them in later
+            // frames, so the showroom keeps the address and reads it at shot time.
+            const ModelComponent* model = FindComponentOnEntity<ModelComponent>(lastEnt, tidModel);
+            const float* bounds = model ? &model->meshInstance._worldBounds.min.x : nullptr;
+            Showroom_NotePlaced(i, true, lastX, lastY, lastW, lastH, mapW, bounds, nullptr);
         }
     }
 
@@ -4793,6 +4818,9 @@ static int StartTown_SpawnResources(MapGenerator* startConfig, GameUpdateLoop* w
 
                 const int idx = dim * y + x;
                 if (cells[idx].occupant) continue;  // occupied
+                // HARNESS, not retail: BANISHED_SHOWROOM keeps its rectangle bare, so the
+                // buildings stand on open ground with nothing in front of the camera.
+                if (Showroom_InArea(x, y)) continue;
                 // ...and skip cells claimed in the ZONE raster (cell+0) even when the
                 // ENTITY raster (cell+8) is free. This pass runs AFTER the structures are
                 // placed (measured: dock at log line 381, scatter at 482), so it can drop

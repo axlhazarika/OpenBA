@@ -285,6 +285,7 @@ void PlayerToolManager::UpdateCamera(int inputFlag, int64_t timeTicks) {
     // camera that never stops, for the save-while-moving checks.
     static int s_pin = -1;
     static float s_pinX = 0, s_pinY = 0, s_pinDist = 40.0f;
+    static float s_pinZ = 0.0f;   // focus height; only the showroom sets it
     static bool s_pinHasYaw = false;
     static float s_pinYaw = 0.0f;
     static bool s_sweep = false;
@@ -329,12 +330,14 @@ void PlayerToolManager::UpdateCamera(int inputFlag, int64_t timeTicks) {
     {
         float focusX = 0.0f;
         float focusY = 0.0f;
+        float focusZ = 0.0f;
         float focusDist = 0.0f;
         float focusYaw = 0.0f;
-        if (Showroom_CameraFocus(&focusX, &focusY, &focusDist, &focusYaw)) {
+        if (Showroom_CameraFocus(&focusX, &focusY, &focusZ, &focusDist, &focusYaw)) {
             s_pin = 1;
             s_pinX = focusX;
             s_pinY = focusY;
+            s_pinZ = focusZ;
             s_pinDist = focusDist;
             s_pinYaw = focusYaw;
             s_pinHasYaw = true;
@@ -343,7 +346,7 @@ void PlayerToolManager::UpdateCamera(int inputFlag, int64_t timeTicks) {
     if (s_pin) {
         pc->target.x = s_pinX;
         pc->target.y = s_pinY;
-        pc->target.z = 0.0f;
+        pc->target.z = s_pinZ;
         if (s_sweep) {
             s_sweepT += dt;
             pc->yaw = s_pinYaw + 40.0f * s_sweepT;

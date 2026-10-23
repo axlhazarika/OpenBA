@@ -5,6 +5,7 @@
 #include "io/FileSystem.h"
 #include "system/Filename.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -23,16 +24,33 @@ constexpr int kFrameFrames = 60;
 constexpr int kShotTimeoutFrames = 300;
 // Frames between the .bmp appearing and moving it (lets the writer finish).
 constexpr int kMoveDelayFrames = 5;
-// Fixed heading for every shot, degrees.
-constexpr float kYaw = 45.0f;
+// Two headings per building, degrees, so the walls under the eaves on both sides are seen.
+constexpr float kYaws[2] = {45.0f, 225.0f};
+constexpr int kViews = 2;
+// Camera distance per unit of the model's largest extent, and its clamp. The pin writes the
+// distance directly, so it may go closer than retail's 20-unit zoom floor.
+constexpr float kFit = 1.1f;
+constexpr float kDistMin = 10.0f;
+constexpr float kDistMax = 130.0f;
+// Bare ground kept around the bounding box of the placed buildings, in tiles.
+constexpr int kAreaMargin = 8;
 constexpr const char* kOutDir = "showroom";
 
 struct Entry {
     std::string path;   // "Template\X.rsc"
     std::string name;   // "X"
     bool placed = false;
-    float worldX = 0.0f;
+    float worldX = 0.0f;             // footprint centre, the fallback focus
     float worldY = 0.0f;
+    float footprint = 0.0f;          // larger footprint side, in tiles
+    const float* bounds = nullptr;   // the model's world box: min xyz, max xyz
+};
+
+// One framed shot: where the camera looks and from how far.
+struct Focus {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
     float dist = 40.0f;
 };
 
@@ -45,9 +63,16 @@ struct State {
     int frame = 0;          // Tick calls so far
     int phaseStart = 0;     // frame the current phase began
     int current = -1;       // entry being framed / shot
+    int view = 0;           // index into kYaws
+    Focus focus;            // the current shot's framing
     int shots = 0;
     int fileSeenAt = -1;
     std::string pendingShot;   // the ScreenshotN.bmp the retail grab is about to write
+    bool hasArea = false;      // the bare rectangle, in tiles (inclusive)
+    int areaX0 = 0;
+    int areaY0 = 0;
+    int areaX1 = 0;
+    int areaY1 = 0;
 };
 
 State& S() {
@@ -116,16 +141,44 @@ std::string NextScreenshotPath() {
     return std::string();
 }
 
-void MoveShot(const std::string& from, int index) {
-    const Entry& e = S().entries[index];
+void MoveShot(const std::string& from) {
+    const State& s = S();
+    const Entry& e = s.entries[s.current];
     std::error_code ec;
     std::filesystem::create_directories(kOutDir, ec);
     char to[512];
-    std::snprintf(to, sizeof(to), "%s\\%02d_%s.bmp", kOutDir, index, e.name.c_str());
+    std::snprintf(to, sizeof(to), "%s\\%02d_%s_y%03d.bmp", kOutDir, s.current, e.name.c_str(),
+                  (int)kYaws[s.view]);
     std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
     if (!ec) std::filesystem::remove(from, ec);
-    std::fprintf(stderr, "[Showroom] shot %d %s -> %s%s\n", index, e.name.c_str(), to,
+    std::fprintf(stderr, "[Showroom] shot %d %s -> %s%s\n", s.current, e.name.c_str(), to,
                  ec ? " (MOVE FAILED)" : "");
+}
+
+// Frame the building on its model's world box (Scene::Clean has filled it in by the end
+// of the settle); a box that is still empty or absurd falls back to the footprint.
+Focus FrameFor(const Entry& e) {
+    Focus f;
+    f.x = e.worldX;
+    f.y = e.worldY;
+    float size = e.footprint;
+    if (e.bounds) {
+        const float* b = e.bounds;
+        const float dx = b[3] - b[0];
+        const float dy = b[4] - b[1];
+        const float dz = b[5] - b[2];
+        if (dx > 0.0f && dy > 0.0f && dz >= 0.0f && dx < 1000.0f && dy < 1000.0f && dz < 1000.0f) {
+            f.x = (b[0] + b[3]) * 0.5f;
+            f.y = (b[1] + b[4]) * 0.5f;
+            f.z = (b[2] + b[5]) * 0.5f;
+            const float across = std::sqrt(dx * dx + dy * dy);
+            size = across > dz ? across : dz;
+        }
+    }
+    f.dist = kFit * size;
+    if (f.dist < kDistMin) f.dist = kDistMin;
+    if (f.dist > kDistMax) f.dist = kDistMax;
+    return f;
 }
 
 int NextPlaced(int after) {
@@ -153,6 +206,25 @@ void Finish() {
     Enter(Phase::Done);
 }
 
+// Frame the current entry from the current heading, or finish when none is left.
+void BeginShot() {
+    State& s = S();
+    if (s.current < 0) {
+        Finish();
+        return;
+    }
+    const Entry& e = s.entries[s.current];
+    s.focus = FrameFor(e);
+    std::fprintf(stderr, "[Showroom] framing %d %s yaw=%.0f focus=(%.1f,%.1f,%.1f) dist=%.1f", s.current,
+                 e.name.c_str(), kYaws[s.view], s.focus.x, s.focus.y, s.focus.z, s.focus.dist);
+    if (e.bounds) {
+        const float* b = e.bounds;
+        std::fprintf(stderr, " bounds=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)", b[0], b[1], b[2], b[3], b[4], b[5]);
+    }
+    std::fprintf(stderr, "\n");
+    Enter(Phase::Frame);
+}
+
 }  // namespace
 
 extern "C" bool Showroom_Enabled() {
@@ -174,8 +246,9 @@ extern "C" const char* Showroom_Name(int index) {
 }
 
 extern "C" void Showroom_NotePlaced(int index, bool placed, int tileX, int tileY, int w, int h, int mapDim,
-                                    const char* why) {
-    Entry& e = S().entries[index];
+                                    const float* worldBounds, const char* why) {
+    State& s = S();
+    Entry& e = s.entries[index];
     e.placed = placed;
     if (!placed) {
         std::fprintf(stderr, "[Showroom] NOT placed %d %s: %s\n", index, e.path.c_str(), why ? why : "?");
@@ -185,12 +258,31 @@ extern "C" void Showroom_NotePlaced(int index, bool placed, int tileX, int tileY
     const float half = (float)(mapDim >> 1);
     e.worldX = (float)tileX + (float)w * 0.5f - half;
     e.worldY = (float)tileY + (float)h * 0.5f - half;
-    const int size = w > h ? w : h;
-    e.dist = 14.0f + 2.5f * (float)size;
-    if (e.dist < 28.0f) e.dist = 28.0f;
-    if (e.dist > 90.0f) e.dist = 90.0f;
-    std::fprintf(stderr, "[Showroom] placed %d %s tile=(%d,%d) fp=%dx%d world=(%.1f,%.1f) dist=%.0f\n", index,
-                 e.path.c_str(), tileX, tileY, w, h, e.worldX, e.worldY, e.dist);
+    e.footprint = (float)(w > h ? w : h);
+    e.bounds = worldBounds;
+    const int x0 = tileX - kAreaMargin;
+    const int y0 = tileY - kAreaMargin;
+    const int x1 = tileX + w - 1 + kAreaMargin;
+    const int y1 = tileY + h - 1 + kAreaMargin;
+    if (!s.hasArea) {
+        s.hasArea = true;
+        s.areaX0 = x0;
+        s.areaY0 = y0;
+        s.areaX1 = x1;
+        s.areaY1 = y1;
+    } else {
+        s.areaX0 = x0 < s.areaX0 ? x0 : s.areaX0;
+        s.areaY0 = y0 < s.areaY0 ? y0 : s.areaY0;
+        s.areaX1 = x1 > s.areaX1 ? x1 : s.areaX1;
+        s.areaY1 = y1 > s.areaY1 ? y1 : s.areaY1;
+    }
+    std::fprintf(stderr, "[Showroom] placed %d %s tile=(%d,%d) fp=%dx%d world=(%.1f,%.1f)\n", index,
+                 e.path.c_str(), tileX, tileY, w, h, e.worldX, e.worldY);
+}
+
+extern "C" bool Showroom_InArea(int x, int y) {
+    const State& s = S();
+    return s.hasArea && x >= s.areaX0 && x <= s.areaX1 && y >= s.areaY0 && y <= s.areaY1;
 }
 
 extern "C" bool Showroom_WantsPause() {
@@ -205,12 +297,11 @@ extern "C" bool Showroom_Tick() {
     switch (s.phase) {
     case Phase::Settle:
         if (inPhase < kSettleFrames) return false;
+        std::fprintf(stderr, "[Showroom] bare area tiles (%d,%d)-(%d,%d)\n", s.areaX0, s.areaY0, s.areaX1,
+                     s.areaY1);
         s.current = NextPlaced(-1);
-        if (s.current < 0) {
-            Finish();
-            return false;
-        }
-        Enter(Phase::Frame);
+        s.view = 0;
+        BeginShot();
         return false;
     case Phase::Frame:
         if (inPhase < kFrameFrames) return false;
@@ -222,7 +313,7 @@ extern "C" bool Showroom_Tick() {
         std::error_code ec;
         if (s.fileSeenAt < 0 && std::filesystem::exists(s.pendingShot, ec)) s.fileSeenAt = s.frame;
         if (s.fileSeenAt >= 0 && s.frame - s.fileSeenAt >= kMoveDelayFrames) {
-            MoveShot(s.pendingShot, s.current);
+            MoveShot(s.pendingShot);
             ++s.shots;
         } else if (inPhase < kShotTimeoutFrames) {
             return false;
@@ -230,12 +321,13 @@ extern "C" bool Showroom_Tick() {
             std::fprintf(stderr, "[Showroom] shot %d %s: no %s after %d frames\n", s.current,
                          s.entries[s.current].name.c_str(), s.pendingShot.c_str(), kShotTimeoutFrames);
         }
-        s.current = NextPlaced(s.current);
-        if (s.current < 0) {
-            Finish();
-            return false;
+        if (s.view + 1 < kViews) {
+            ++s.view;
+        } else {
+            s.view = 0;
+            s.current = NextPlaced(s.current);
         }
-        Enter(Phase::Frame);
+        BeginShot();
         return false;
     }
     case Phase::Done:
@@ -244,14 +336,14 @@ extern "C" bool Showroom_Tick() {
     return false;
 }
 
-extern "C" bool Showroom_CameraFocus(float* x, float* y, float* dist, float* yaw) {
+extern "C" bool Showroom_CameraFocus(float* x, float* y, float* z, float* dist, float* yaw) {
     if (!Showroom_Enabled()) return false;
     const State& s = S();
     if (s.current < 0 || s.phase == Phase::Done) return false;
-    const Entry& e = s.entries[s.current];
-    *x = e.worldX;
-    *y = e.worldY;
-    *dist = e.dist;
-    *yaw = kYaw;
+    *x = s.focus.x;
+    *y = s.focus.y;
+    *z = s.focus.z;
+    *dist = s.focus.dist;
+    *yaw = kYaws[s.view];
     return true;
 }
