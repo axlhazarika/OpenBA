@@ -11,6 +11,8 @@
 #include "ext/create_on_demand/level_source.h"
 #include "ext/create_on_demand/prefetch.h"
 #include "graphics/Mesh.h"
+#include "graphics/ParticleInstance.h"
+#include "Game/WorldGeometry.h"
 #include "ext/registry.h"
 #include "io/FileSystem.h"
 #include "ui/SpriteSheet.h"
@@ -36,7 +38,9 @@ void Boot() {
     ::IO::FileSystem::_extHandleClosing = on ? &HandleClosing : nullptr;
     ::Video::ImageBuffer::_extLevelSource = on ? &ReadLevels : nullptr;
     ::Graphics::MeshInstance::_extMeshAssigned = on ? &PrefetchMesh : nullptr;
+    ::Graphics::ParticleInstance::_extParticleAssigned = on ? &PrefetchParticle : nullptr;
     ::UI::SpriteSheet::_extLoaded = on ? &KeepSpriteSheet : nullptr;
+    ::WorldGeometry::_extMaterialTaken = on ? &PrefetchMaterial : nullptr;
 }
 
 }}  // namespace Ext::CreateOnDemand

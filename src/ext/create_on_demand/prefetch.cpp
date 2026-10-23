@@ -19,11 +19,24 @@
 #include "graphics/GraphicsMesh.h"
 #include "graphics/Material.h"
 #include "graphics/Mesh.h"
+#include "graphics/Particle.h"
 #include "ui/SpriteSheet.h"
 #include "video/Buffers.h"
 #include "video/ImageBuffer.h"
 
 namespace Ext { namespace CreateOnDemand {
+
+// Every texture of one material. Also WorldGeometry::_extMaterialTaken: the terrain's ground and
+// water materials and its decals', taken while the world is built or loaded (the main menu's town
+// drew ~16 of them, ~30 ms, in its first frame).
+void PrefetchMaterial(const Graphics::MaterialInstance* material) {
+    if (material == nullptr) return;
+    const RtGraphics::MaterialTexture* const textures = material->_textures.GetData();
+    for (int32_t t = 0; t < material->_textures.GetSize(); ++t) {
+        const Video::ImageBuffer* const image = textures[t].image;
+        if (image != nullptr) CreateOnDemandBackend::Prefetch(image->_data);
+    }
+}
 
 void PrefetchMesh(const Graphics::MeshInstance& instance) {
     const Graphics::GraphicsMesh* const mesh = instance._mesh.Get();
@@ -43,14 +56,14 @@ void PrefetchMesh(const Graphics::MeshInstance& instance) {
     }
     const Object::ExternalPtr<Graphics::MaterialInstance>* const materials = instance._materials.GetData();
     for (int32_t m = 0; m < instance._materials.GetSize(); ++m) {
-        const Graphics::MaterialInstance* const material = materials[m].Get();
-        if (material == nullptr) continue;
-        const RtGraphics::MaterialTexture* const textures = material->_textures.GetData();
-        for (int32_t t = 0; t < material->_textures.GetSize(); ++t) {
-            const Video::ImageBuffer* const image = textures[t].image;
-            if (image != nullptr) CreateOnDemandBackend::Prefetch(image->_data);
-        }
+        PrefetchMaterial(materials[m].Get());
     }
+}
+
+// Graphics::ParticleInstance::_extParticleAssigned: an emitter gets its particle when its entity is
+// placed or loaded, well before it first emits (a chimney's smoke).
+void PrefetchParticle(const Graphics::Particle& particle) {
+    PrefetchMaterial(particle._material);
 }
 
 // UI::SpriteSheet::_extLoaded. A window draws its sprite sheets all in the frame it opens: a
