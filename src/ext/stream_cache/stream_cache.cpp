@@ -8,13 +8,20 @@
 // each thread keeps a stack of the loads it is inside, and the read tap attributes a read to the
 // stream on top of that stack. The package table, the bundles and the pending records are under one
 // mutex (a lookup per load; nothing heavy under it).
+//
+// LIFETIME. The records serve the BOOT: its brackets end with the menu's (the MenuDialogLoopT load),
+// after which the bundles are dropped (150 MB on a MegaMod boot) and no later bracket is served or
+// recorded -- a new game's or a save's bracket loads a few hundred resources, far below the cost of
+// reading the chunks back, and the resources a device restart reloads are the same few.
 // ============================================================================
 #include "ext/stream_cache/stream_cache.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
@@ -32,7 +39,7 @@
 #include "io/Stream.h"
 #include "object/External.h"
 #include "system/string_internal.h"   // RtSystem::RtMemAlloc: the stream's storage, freed by IO::Stream::operator delete
-#include "openba_build_info.h"   // OPENBA_GIT_HASH: a record is only as good as the serializer that made it
+#include "Game/MenuDialogLoopT.h"     // the boot's last load bracket
 
 namespace Ext {
 namespace StreamCache {
@@ -40,7 +47,7 @@ namespace StreamCache {
 namespace {
 
 constexpr uint32_t kProducer = DerivedCache::MakeProducer('S', 'T', 'R', 'M');
-constexpr uint32_t kVersion  = 1;   // the record / chunk format and what a load consumes
+constexpr uint32_t kVersion  = kChunkVersion;   // the record / chunk format
 
 // One package (one identity), across remounts.
 struct Package {
@@ -59,11 +66,12 @@ struct Slot {
 };
 
 struct Stats {
-    uint64_t hitsWhole = 0, hitsElided = 0, misses = 0, loose = 0;
-    uint64_t recorded = 0, recordedBytes = 0;
-    uint64_t tooBig = 0, backwards = 0, readFailed = 0, loadFailed = 0;
-    uint64_t servedFailed = 0;    // a read outside the record (a stale record): reported
+    uint64_t hitsWhole = 0, hitsElided = 0, misses = 0, loose = 0, afterBoot = 0;
+    uint64_t recorded = 0, recordedBytes = 0, extended = 0;
+    uint64_t tooBig = 0, mismatch = 0, readFailed = 0, loadFailed = 0;
+    uint64_t servedFailed = 0;    // the fallback could not open retail's stream
     uint64_t chunksPut = 0, chunkBytesPut = 0;
+    double   chunkLoadMs = 0;     // reading the stored chunks back (Find + parse)
 };
 
 DerivedCache::Store* g_store = nullptr;
@@ -71,15 +79,15 @@ std::mutex g_mu;
 std::unordered_map<uint64_t, std::unique_ptr<Package>> g_packages;   // by identity
 std::vector<Slot> g_slots;                                            // by pack index
 Stats g_stats;
-uint32_t g_buildHash = 0;
 bool g_payloadsSkipped = false;   // ext.create_on_demand on: what a load consumes depends on it
+bool g_bootDone = false;          // the menu's bracket has closed: nothing served or recorded after
 
 // A load this thread is inside.
 struct Active {
     IO::CompressedFileStream* cfs = nullptr;
     SegmentStream*            stream = nullptr;   // serving from a record
     Package*                  package = nullptr;
-    Recorder                  recorder;           // recording the retail read
+    Recorder                  recorder;           // recording the retail read (or the fallback's)
 };
 
 thread_local std::vector<Active> t_stack;
@@ -90,7 +98,7 @@ DerivedCache::Key ChunkKey(const Package& p, uint32_t chunk) {
     k.version    = kVersion;
     k.shape[0]   = p.crc;
     k.shape[1]   = g_payloadsSkipped ? 1u : 0u;
-    k.shape[2]   = g_buildHash;
+    k.shape[2]   = 0;
     k.shape[3]   = chunk;
     k.sourceSize = p.fileCount;
     k.sourceHash = p.identity;
@@ -134,6 +142,7 @@ Package* PackageAt(uint32_t index) {
         p->identity  = id;
         p->crc       = pkg->_crc;
         p->fileCount = static_cast<uint32_t>(pkg->_entries._size);
+        const auto t0 = std::chrono::steady_clock::now();
         std::vector<uint8_t> chunk;
         while (g_store->Find(ChunkKey(*p, p->chunks), chunk)) {
             if (!p->bundle.AddChunk(std::move(chunk))) {
@@ -142,16 +151,42 @@ Package* PackageAt(uint32_t index) {
             chunk.clear();
             ++p->chunks;
         }
+        g_stats.chunkLoadMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
     slot.pkg     = pkg;
     slot.package = p.get();
     return p.get();
 }
 
+// The record stream's fallback: retail's compressed stream, opened on the load's own
+// CompressedFileStream (its packed FileStream is open; this is the Open External::Load skipped).
+IO::CompressedStream* OpenFallback(SegmentStream& self, void* context) {
+    (void)context;
+    // The load this stream serves: on this thread's stack (the top, unless a nested load is inside
+    // a read of it, which the serializer never does; found by the stream to be sure).
+    Active* a = nullptr;
+    for (size_t i = t_stack.size(); i > 0; --i) {
+        if (t_stack[i - 1].stream == &self) {
+            a = &t_stack[i - 1];
+            break;
+        }
+    }
+    if (a == nullptr) return nullptr;
+    if (!a->cfs->IO::CompressedStream::Open(a->cfs->_file, 1)) return nullptr;
+    // What the rest of the load reads widens the record: seed the recorder with it and let the tap
+    // (the fallback's reads go through CompressedStream::Read) add the rest.
+    a->recorder.Seed(*a->stream->Record());
+    return a->cfs;
+}
+
 IO::Stream* LoadBegin(IO::CompressedFileStream& cfs) {
     t_stack.emplace_back();
     Active& a = t_stack.back();
     a.cfs = &cfs;
+    if (g_bootDone) {
+        ++g_stats.afterBoot;
+        return nullptr;
+    }
     const RtIO::FileInfo& fi = cfs._file._file;
     IO::FileSystem* const sys = IO::FileSystem::_singleton;
     Platform::FileHandle handle = nullptr;
@@ -199,7 +234,7 @@ IO::Stream* LoadBegin(IO::CompressedFileStream& cfs) {
         // From the engine allocator: IO::Stream's class operator delete frees there
         // (root_operator_delete.cpp), as every stream the engine makes.
         void* const mem = RtSystem::RtMemAlloc(sizeof(SegmentStream), 8);
-        a.stream = ::new (mem) SegmentStream(rec, handle, entry);
+        a.stream = ::new (mem) SegmentStream(rec, handle, entry, &OpenFallback, nullptr);
         return a.stream;
     }
     ++g_stats.misses;
@@ -219,31 +254,36 @@ void ReadTap(IO::CompressedStream& cs, int32_t pos, int32_t n, const void* dst, 
 }
 
 void LoadEnd(IO::CompressedFileStream& cfs, IO::Stream* alt, const Object::External* result) {
+    (void)alt;
     if (t_stack.empty() || t_stack.back().cfs != &cfs) return;   // not a pair this extension opened
     Active a = std::move(t_stack.back());
     t_stack.pop_back();
     if (a.stream != nullptr) {
-        if (a.stream->Failed() || result == nullptr) {
+        if (a.stream->Failed()) {
             std::lock_guard<std::mutex> lk(g_mu);
             if (g_stats.servedFailed == 0) {
-                std::fprintf(stderr, "[StreamCache] a record did not match what the load read (package %08x, "
-                             "entry %lld): the record is stale\n",
-                             a.package->crc, static_cast<long long>(a.stream->Entry()));
+                std::fprintf(stderr, "[StreamCache] a load read outside its record and retail's stream would not open "
+                             "(package %08x, entry %lld)\n", a.package->crc, static_cast<long long>(a.stream->Entry()));
             }
             ++g_stats.servedFailed;
         }
+        const bool extended = a.stream->Extended();
         delete a.stream;
-        (void)alt;
-        return;
+        a.stream = nullptr;
+        if (!extended) return;
+        std::lock_guard<std::mutex> lk(g_mu);
+        ++g_stats.extended;
+        // falls through to the recorder below: the widened record replaces the old one
     }
     if (!a.recorder.Active()) return;
     if (result == nullptr) a.recorder.Fail();
-    std::lock_guard<std::mutex> lk(g_mu);
+    std::unique_lock<std::mutex> lk(g_mu, std::defer_lock);
+    if (!lk.owns_lock()) lk.lock();
     if (a.recorder.Overflowed()) {
         ++g_stats.tooBig;
     } else if (a.recorder.Bad()) {
         if (result == nullptr) ++g_stats.loadFailed;
-        else ++g_stats.readFailed;
+        else ++g_stats.mismatch;
     }
     Package& p = *a.package;
     if (p.pendingCount == 0) BeginChunk(p.pending);
@@ -255,7 +295,7 @@ void LoadEnd(IO::CompressedFileStream& cfs, IO::Stream* alt, const Object::Exter
     }
 }
 
-void LoadDone() {
+void LoadDone(const std::type_info& loop) {
     std::lock_guard<std::mutex> lk(g_mu);
     size_t bundleBytes = 0;
     size_t records = 0;
@@ -278,18 +318,26 @@ void LoadDone() {
         records += p.bundle.Records();
     }
     g_store->RequestFlush();
-    std::fprintf(stderr, "[StreamCache] load end (run total): hits %llu (whole %llu, elided %llu), misses %llu, "
-                 "not packed %llu; recorded %llu (%.1f MB; too big %llu, backwards %llu, read failed %llu, "
-                 "load failed %llu); stale %llu; packages %zu, records %zu (%.1f MB in memory), chunks put %llu "
-                 "(%.1f MB)\n",
+    std::fprintf(stderr, "[StreamCache] load end (run total): hits %llu (whole %llu, elided %llu), extended %llu, misses "
+                 "%llu, not packed %llu, after boot %llu; recorded %llu (%.1f MB; too big %llu, overlap mismatch %llu, read "
+                 "failed %llu, load failed %llu); fallback failed %llu; packages %zu, records %zu (%.1f MB in memory, "
+                 "read back in %.0f ms), chunks put %llu (%.1f MB)\n",
                  (unsigned long long)(g_stats.hitsWhole + g_stats.hitsElided), (unsigned long long)g_stats.hitsWhole,
-                 (unsigned long long)g_stats.hitsElided, (unsigned long long)g_stats.misses,
-                 (unsigned long long)g_stats.loose, (unsigned long long)g_stats.recorded,
+                 (unsigned long long)g_stats.hitsElided, (unsigned long long)g_stats.extended,
+                 (unsigned long long)g_stats.misses, (unsigned long long)g_stats.loose,
+                 (unsigned long long)g_stats.afterBoot, (unsigned long long)g_stats.recorded,
                  g_stats.recordedBytes / 1048576.0, (unsigned long long)g_stats.tooBig,
-                 (unsigned long long)g_stats.backwards, (unsigned long long)g_stats.readFailed,
+                 (unsigned long long)g_stats.mismatch, (unsigned long long)g_stats.readFailed,
                  (unsigned long long)g_stats.loadFailed, (unsigned long long)g_stats.servedFailed, g_packages.size(),
-                 records, bundleBytes / 1048576.0, (unsigned long long)g_stats.chunksPut,
+                 records, bundleBytes / 1048576.0, g_stats.chunkLoadMs, (unsigned long long)g_stats.chunksPut,
                  g_stats.chunkBytesPut / 1048576.0);
+    if (!g_bootDone && loop == typeid(MenuDialogLoopT)) {
+        // The boot's last bracket: the records have done their work for this run.
+        for (auto& kv : g_packages) kv.second->bundle.Clear();
+        g_bootDone = true;
+        std::fprintf(stderr, "[StreamCache] boot over: %.1f MB of records dropped; later loads take retail's path\n",
+                     bundleBytes / 1048576.0);
+    }
 }
 
 // ext.create_on_demand's Locate / Skip over a record stream: the same Locator the compressed stream
@@ -330,7 +378,6 @@ void Boot() {
                      "instance holds it): off for this run\n");
         return;
     }
-    g_buildHash       = static_cast<uint32_t>(DerivedCache::Hash64(OPENBA_GIT_HASH, std::strlen(OPENBA_GIT_HASH)));
     g_payloadsSkipped = Ext().create_on_demand;
     ::Object::ExternalFactory::_extLoadBegin = &LoadBegin;
     ::Object::ExternalFactory::_extLoadEnd   = &LoadEnd;

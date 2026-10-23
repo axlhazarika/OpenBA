@@ -5,6 +5,7 @@
 // ============================================================================
 #include "ext/stream_cache/stream_record.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace Ext {
@@ -63,34 +64,93 @@ void Recorder::Begin(const EntryId& id, uint32_t total) {
     _id       = id;
     _total    = total;
     _consumed = 0;
-    _last     = 0;
     _active   = true;
     _bad      = false;
     _overflow = false;
     _segs.clear();
-    _bytes.clear();
+}
+
+void Recorder::Seed(const RecordView& view) {
+    Begin(view.id, view.total);
+    uint32_t at = 0;
+    for (uint32_t i = 0; i < view.segCount; ++i) {
+        const Segment s = view.segs[i];
+        Seg seg;
+        seg.pos = s.pos;
+        seg.bytes.assign(view.bytes + at, view.bytes + at + s.len);
+        _segs.push_back(std::move(seg));
+        _consumed += s.len;
+        at += s.len;
+    }
 }
 
 void Recorder::Note(uint32_t pos, uint32_t n, const uint8_t* bytes) {
     if (!_active || _bad || _overflow || n == 0) return;
-    if (pos < _last || pos + n < pos) {
-        _bad = true;   // a read behind the last one: the view's forward layout cannot hold it
+    if (pos + n < pos) {
+        _bad = true;
         return;
     }
-    if (_consumed + n > kRecordMax) {
+    const uint32_t end = pos + n;
+    // The first segment that ends at or after pos (adjacent counts: it merges).
+    size_t i = 0;
+    while (i < _segs.size() && _segs[i].pos + _segs[i].bytes.size() < pos) ++i;
+    if (i == _segs.size() || _segs[i].pos > end) {
+        // Between segments (or past the last): a new one.
+        if (_consumed + n > kRecordMax) {
+            _overflow = true;
+            _segs.clear();
+            return;
+        }
+        Seg seg;
+        seg.pos = pos;
+        seg.bytes.assign(bytes, bytes + n);
+        _segs.insert(_segs.begin() + static_cast<std::ptrdiff_t>(i), std::move(seg));
+        _consumed += n;
+        return;
+    }
+    // Overlapping or touching segment i: the overlap must agree, the rest extends it.
+    Seg& s = _segs[i];
+    const uint32_t sEnd = s.pos + static_cast<uint32_t>(s.bytes.size());
+    const uint32_t ovBegin = std::max(pos, s.pos);
+    const uint32_t ovEnd   = std::min(end, sEnd);
+    if (ovBegin < ovEnd &&
+        std::memcmp(s.bytes.data() + (ovBegin - s.pos), bytes + (ovBegin - pos), ovEnd - ovBegin) != 0) {
+        _bad = true;
+        return;
+    }
+    uint32_t added = 0;
+    if (pos < s.pos) added += s.pos - pos;
+    if (end > sEnd) added += end - sEnd;
+    if (_consumed + added > kRecordMax) {
         _overflow = true;
-        _bytes.clear();
         _segs.clear();
         return;
     }
-    if (!_segs.empty() && _segs.back().pos + _segs.back().len == pos) {
-        _segs.back().len += n;
-    } else {
-        _segs.push_back(Segment{pos, n});
+    if (pos < s.pos) {
+        s.bytes.insert(s.bytes.begin(), bytes, bytes + (s.pos - pos));
+        s.pos = pos;
     }
-    _bytes.insert(_bytes.end(), bytes, bytes + n);
-    _consumed += n;
-    _last = pos + n;
+    if (end > sEnd) {
+        s.bytes.insert(s.bytes.end(), bytes + (sEnd - pos), bytes + n);
+    }
+    _consumed += added;
+    // The widened segment may now reach the following ones: fold them in (their bytes agree by
+    // the same rule, checked over the overlap).
+    while (i + 1 < _segs.size() && _segs[i + 1].pos <= s.pos + s.bytes.size()) {
+        Seg& next = _segs[i + 1];
+        const uint32_t curEnd = s.pos + static_cast<uint32_t>(s.bytes.size());
+        const uint32_t nextEnd = next.pos + static_cast<uint32_t>(next.bytes.size());
+        const uint32_t ov = std::min(curEnd, nextEnd) - next.pos;
+        if (ov > 0 && std::memcmp(s.bytes.data() + (next.pos - s.pos), next.bytes.data(), ov) != 0) {
+            _bad = true;
+            return;
+        }
+        if (nextEnd > curEnd) {
+            s.bytes.insert(s.bytes.end(), next.bytes.begin() + ov, next.bytes.end());
+        }
+        _consumed -= ov;   // the overlap was counted twice
+        _segs.erase(_segs.begin() + static_cast<std::ptrdiff_t>(i) + 1);
+    }
 }
 
 void Recorder::Fail() {
@@ -106,16 +166,15 @@ bool Recorder::Finish(std::vector<uint8_t>& chunk) {
         PutU64(chunk, _id.dirHash);
         PutU32(chunk, _total);
         PutU32(chunk, static_cast<uint32_t>(_segs.size()));
-        for (const Segment& s : _segs) {
+        for (const Seg& s : _segs) {
             PutU32(chunk, s.pos);
-            PutU32(chunk, s.len);
+            PutU32(chunk, static_cast<uint32_t>(s.bytes.size()));
         }
-        chunk.insert(chunk.end(), _bytes.begin(), _bytes.end());
+        for (const Seg& s : _segs) chunk.insert(chunk.end(), s.bytes.begin(), s.bytes.end());
         while (chunk.size() % 8 != 0) chunk.push_back(0);
     }
     _active = false;
     _segs.clear();
-    _bytes.clear();
     return ok;
 }
 
@@ -195,6 +254,12 @@ const RecordView* Bundle::Find(const EntryId& id) const {
     if (it == _index.end()) return nullptr;
     if (!SameEntry(it->second.id, id)) return nullptr;
     return &it->second;
+}
+
+void Bundle::Clear() {
+    _index.clear();
+    _chunks.clear();
+    _bytes = 0;
 }
 
 }  // namespace StreamCache

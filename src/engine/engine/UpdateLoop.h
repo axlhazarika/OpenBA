@@ -48,6 +48,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <type_traits>
+#include <typeinfo>   // the ext.stream_cache load-done seam's loop type
 
 #include "../system/Thread.h"
 #include "../system/String.h"
@@ -363,9 +364,10 @@ public:
 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): ext.stream_cache -- null by
     // default. Loader::Run calls it on the loader thread once the loop's LoadResources and Load
-    // have returned (right after the `loader.done` stamp): the extension stores what the bracket
-    // recorded. It reads no engine state.
-    using ExtLoadDoneFn = void (*)();
+    // have returned (right after the `loader.done` stamp), with the loop's dynamic type: the
+    // extension stores what the bracket recorded, and drops its records after the menu's bracket.
+    // It reads no engine state.
+    using ExtLoadDoneFn = void (*)(const std::type_info& loop);
     static ExtLoadDoneFn _extLoadDone;   // defined in loops.cpp
 
 private:

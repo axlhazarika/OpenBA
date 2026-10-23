@@ -8,9 +8,12 @@
 // A compiled resource in a package is one compressed stream (payload.h has the layout). Loading it
 // consumes a few ranges of the DECOMPRESSED stream: all of it for a small description, the header
 // and the inter-level size fields for a texture or a mesh whose payloads ext.create_on_demand skips.
-// A Record is those ranges, in read order, with their bytes: the loader can read the same resource
-// again from it instead of opening the compressed stream (the 32 KB window, the block directory,
-// the LZF decode of the header block and of every block a skipped payload ends in).
+// A Record is those ranges with their bytes: the loader can read the same resource again from it
+// instead of opening the compressed stream (the 32 KB window, the block directory, the LZF decode of
+// the header block and of every block a skipped payload ends in). The bytes are a function of the
+// package alone; only WHICH ranges a load reads depends on the build, so a record is never wrong,
+// at most too narrow -- and a load that reads outside it continues on the compressed stream
+// (segment_stream.h) and the record is widened (Recorder::Seed).
 //
 // RECORD LAYOUT (little-endian, 8-byte aligned, as a Bundle chunk holds it):
 //   +0x00  u64  entry offset in the package      } the entry's identity (EntryId): the record is
@@ -19,18 +22,20 @@
 //   +0x10  u64  Hash64 of the block directory    }
 //   +0x18  u32  decompressed total (what CompressedStream::GetSize answers for the whole stream)
 //   +0x1c  u32  segment count
-//   +0x20  segment count x { u32 pos, u32 len }   in increasing pos, disjoint
+//   +0x20  segment count x { u32 pos, u32 len }   in increasing pos, disjoint, not adjacent
 //   then   the segments' bytes back to back, padded with zeros to a multiple of 8
 //
 // A CHUNK is a 16-byte header { 'STRC', version, record count, 0 } and that many records. A
-// package's bundle is one or more chunks (one per load bracket that recorded something).
+// package's bundle is one or more chunks (one per load bracket that recorded something); a later
+// chunk's record for an entry replaces an earlier one.
 //
-// WHAT IS RECORDED. Reads are noted in order; adjacent reads merge into one segment. A stream is
-// stored only when every read succeeded, the reads never went backwards and the bytes consumed are
-// at most kRecordMax: the per-type load table (STREAMCACHE.md section 1) puts the description-class
-// streams at 0.2..2 KB and the consumed part of a texture or mesh stream under 2 KB, while CPU
-// geometry (picking and edge meshes, 30..50 KB, fully read) and anything else large stays on the
-// compressed path. The limit is a constant, not a setting: it is a property of the content.
+// WHAT IS RECORDED. Every successful read is noted; overlapping and adjacent ranges merge (the bytes
+// of an overlap must agree, or the record is dropped). A stream is stored only when every read
+// succeeded and the bytes consumed are at most kRecordMax: the per-type load table (STREAMCACHE.md
+// section 1) puts the description-class streams at 0.2..2 KB and the consumed part of a texture or
+// mesh stream under 2 KB, while CPU geometry (picking and edge meshes, 30..50 KB, fully read) and
+// anything else large stays on the compressed path. The limit is a constant, not a setting: it is a
+// property of the content.
 // ============================================================================
 #include <cstddef>
 #include <cstdint>
@@ -42,7 +47,7 @@ namespace StreamCache {
 
 constexpr uint32_t kRecordMax     = 8192;        // bytes a record may hold (see above)
 constexpr uint32_t kChunkMagic    = 0x43525453;  // 'STRC'
-constexpr uint32_t kChunkVersion  = 1;
+constexpr uint32_t kChunkVersion  = 2;           // 2: records may be widened (segments merge)
 constexpr uint32_t kChunkHeader   = 16;
 constexpr uint32_t kRecordHeader  = 32;
 
@@ -74,11 +79,15 @@ struct RecordView {
     bool Read(uint32_t pos, uint32_t n, uint8_t* dst) const;
 };
 
-// One load's reads, in order.
+// One load's reads, merged into sorted disjoint segments.
 class Recorder {
 public:
     void Begin(const EntryId& id, uint32_t total);
-    // A successful read of n bytes at pos (n == 0 is ignored).
+    // Begin with a record's segments already in: the load that read outside `view` goes on, and
+    // the result replaces `view`.
+    void Seed(const RecordView& view);
+    // A successful read of n bytes at pos (n == 0 is ignored). Bytes over an already recorded
+    // range must agree with it.
     void Note(uint32_t pos, uint32_t n, const uint8_t* bytes);
     // A failed read, or a load that did not produce its object: the record is dropped.
     void Fail();
@@ -92,15 +101,17 @@ public:
     bool Finish(std::vector<uint8_t>& chunk);
 
 private:
+    struct Seg {
+        uint32_t pos;
+        std::vector<uint8_t> bytes;
+    };
     EntryId  _id;
     uint32_t _total    = 0;
-    uint32_t _consumed = 0;
-    uint32_t _last     = 0;   // end of the last noted read
+    uint32_t _consumed = 0;   // bytes held
     bool     _active   = false;
     bool     _bad      = false;
     bool     _overflow = false;
-    std::vector<Segment> _segs;
-    std::vector<uint8_t> _bytes;
+    std::vector<Seg> _segs;   // sorted by pos, disjoint, not adjacent
 };
 
 // Chunk framing.
@@ -111,11 +122,14 @@ uint32_t ChunkRecordCount(const std::vector<uint8_t>& chunk);  // 0 for a malfor
 // A package's records: the chunks' bytes and an index by entry offset.
 class Bundle {
 public:
-    // Parses `chunk` (taken by move) and indexes its records; false (nothing kept) when the chunk is
-    // malformed: a bad header or version, a record past the end, segments out of order.
+    // Parses `chunk` (taken by move) and indexes its records (a record for an entry already
+    // indexed replaces it); false (nothing kept) when the chunk is malformed: a bad header or
+    // version, a record past the end, segments out of order.
     bool AddChunk(std::vector<uint8_t> chunk);
     // The record for `id`, or null.
     const RecordView* Find(const EntryId& id) const;
+    // Frees every chunk.
+    void Clear();
     size_t Records() const { return _index.size(); }
     size_t Chunks() const { return _chunks.size(); }
     size_t Bytes() const { return _bytes; }

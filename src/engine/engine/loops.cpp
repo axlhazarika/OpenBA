@@ -1031,7 +1031,7 @@ void Engine::Loader::Run() {
     LoadTime::Stamp("loader.done");   // NOT RETAIL: print-only
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): ext.stream_cache stores the
     // bracket's records (UpdateLoop.h). Null by default.
-    if (LoaderLoop::_extLoadDone != nullptr) LoaderLoop::_extLoadDone();
+    if (LoaderLoop::_extLoadDone != nullptr) LoaderLoop::_extLoadDone(typeid(*_loop));
     mode2->Slot4(false);
 }
 
