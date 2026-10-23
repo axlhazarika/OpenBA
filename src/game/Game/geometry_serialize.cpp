@@ -142,6 +142,14 @@ void SerializeBatchMaterials(IO::Serializer& serializer, RawArray<Graphics::Mate
 
 } // namespace
 
+// NOT RETAIL (ext.create_on_demand, docs/extensions/handins/CREATEONDEMAND.md): each loaded
+// batch's material through WorldGeometry::_extMaterialTaken (the caller tests the seam).
+static void ExtTakeBatchMaterials(const GeometryBatchArray& batches) {
+    for (int32_t i = 0; i < batches._size; ++i) {
+        WorldGeometry::_extMaterialTaken(batches._data[i].material);
+    }
+}
+
 // ============================================================
 // 0x1400b04d0 — WorldGeometry::Serialize (version 6).
 // ============================================================
@@ -332,6 +340,7 @@ void WorldGeometry::Serialize(IO::Stream& stream) {
             _extMaterialTaken(_terrainMaterial);
             _extMaterialTaken(_waterMaterialA);
             _extMaterialTaken(_waterMaterialB);
+            ExtTakeBatchMaterials(_roadBatches);
             for (int32_t i = 0; i < _batchMaterials.size; ++i) {
                 _extMaterialTaken(_batchMaterials.data[i]);
             }
@@ -366,6 +375,13 @@ void WorldGeometry::SerializeLegacyBatches(IO::Stream& stream) {
     // Version 3+: the material table at +0x210.
     if (version >= 3) {
         SerializeBatchMaterials(serializer, _batchMaterials);
+    }
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): the loaded decals' and roads'
+    // materials are queued for their first-use creates (WorldGeometry.h has the contract).
+    if (IsLoading(serializer) && _extMaterialTaken != nullptr) {
+        ExtTakeBatchMaterials(_decals);
+        ExtTakeBatchMaterials(_roadBatches);
     }
 
     RZ_CHECK("geom f1a0 before dtor");

@@ -169,7 +169,8 @@ public:
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md, DESIGN.md hook rule 5):
     // ext.create_on_demand's prefetch. Null by default and under the faithful profile. Run with each
     // material the terrain draws with as it takes it (BuildTerrain's ground and water materials, the
-    // same and the road batches' at the end of a loading Serialize, AddDecal's, StoreBatchMaterial's):
+    // same and the batches' at the end of a loading Serialize / SerializeLegacyBatches, AddDecal's,
+    // StoreBatchMaterial's):
     // the extension queues the first-use creates of its textures, ahead of the first frame that draws
     // the terrain.
     static void (*_extMaterialTaken)(const Graphics::MaterialInstance* material);
