@@ -54,13 +54,36 @@ provider's Pin writes the same characters); ~ExternalFactory unbinds the index; 
 - Unit (`tests/unit/ptr_index_test.cpp`; 1353 tests, 0 failures): the index against a std::map under 60k random
   inserts / erases / probes / flag sets, the flag following its row, the decline rules.
 - Shadow runs (TEMP: the debug check forced on in the perf exe, removed before the final commit): every shortcut
-  the exe would take is walked instead and `found == cur` plus the row's mask after the walk is compared with what
-  the hit arm would have left. FILLED IN BELOW.
-- Gate (debug exe, which checks every shortcut): FILLED IN BELOW.
+  the exe would take is walked instead, and `found == cur` plus the row's mask after the walk are compared with
+  what the hit arm would have left. MegaMod 7-part boot + new game (pause-menu quit, so the exit line printed):
+  `visits=5034493 shortcuts=0 walks=5034493 verified=375504 checked=4658989 mismatches=0 index: rows=376420
+  broken=0 duplicates=0` -- **4,658,989 compared, 0 mismatches**, twice (a first run with the exit line lost to the
+  perf exe's printf strip showed `checked 4194304 shortcuts, 0 differ` as its last progress line). Mods parked,
+  boot + `Gate.sav` load: `visits=37867 ... verified=9932 checked=27935 mismatches=0 index: rows=5490`.
+- Gate (debug exe, which checks every shortcut): `tools/build.sh run` faithful, mods parked, in game (frame
+  49061), crash log 0 bytes, 0 `MISMATCH` lines of any kind. `tools/resave_gate/resave_gate.sh Gate` (debug exe,
+  mods parked): NEW-GOLDEN in a fresh worktree with md5 `971aaec2cf95f5f730bb1cd1a4fa8428`, the known golden, so
+  the save and its reference table are byte-identical; its run's exit line `visits=8290 ... verified=3397
+  checked=4893 mismatches=0 index: rows=3429`.
+- Unit (`tools/build.sh unit perf`): 1353 tests, 0 failures.
 
 ## 4. Timings
 
-FILLED IN BELOW.
+Perf exe, MegaMod 7-part, warm derived cache, new game autostarted, two runs each interleaved (before = the branch
+point 6d5bb9f43, after = this branch). **Machine load: NOT clean** -- other agents were compiling (ninja, cc1plus,
+ld) through every run; the big load ran 24 s against the quiet profile's 10 s, so the wall numbers are indicative
+and only the per-pass loader stamps (`[LoadTime] loader.resources` .. `loader.done`) are compared.
+
+| loader pass | before (2 runs) | after (2 runs) | |
+|---|---|---|---|
+| loads 2-4 to the menu, summed | 2.67 s / 2.35 s | 1.03 s / 0.91 s | -1.5 s |
+| new game: the loop's resource pass | 0.91 s / 0.87 s | 0.25 s / 0.25 s | -0.6 s |
+| new game: the following load pass | 1.45 s / 1.41 s | 0.84 s / 0.84 s | -0.6 s |
+| boot to the menu (wall) | 35.9 s / 34.5 s | 35.8 s / 34.6 s | the big load, under machine load |
+
+The after runs' exit line: `shortcuts=4658989 walks=375504` of 5,034,493 visits -- every visit after a row's first
+is the shortcut. The remaining ~0.25 s of a pass is the first-touch bookkeeping (Add's own descent for the loop's
+roots, the mesh / material visitor bodies, the allocator).
 
 ## 5. Open
 
