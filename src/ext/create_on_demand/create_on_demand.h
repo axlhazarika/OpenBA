@@ -16,6 +16,8 @@
 //     extension's own mapping again.
 //   - Video::ImageBuffer::_extLevelSource (level_source.h): a file-seeded texture's level sizes are
 //     read, its level bytes skipped; the backend's Create records the texture for its first use.
+//   - Graphics::MeshInstance::_extMeshAssigned (prefetch.h): when the world gives an instance its
+//     mesh, the first-use creates of its buffers and textures are queued for the backend's workers.
 // Never under the faithful profile.
 
 namespace Ext { namespace CreateOnDemand {

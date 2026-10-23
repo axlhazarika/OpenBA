@@ -464,6 +464,12 @@ public:
     // reader in this block is a free-function body (wave29_lane_slots.cpp).
     static bool _rootOnlyUpdates;
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md, DESIGN.md hook rule 5):
+    // ext.create_on_demand's prefetch. Null by default and under the faithful profile. Run at the end
+    // of SetMesh with the instance holding its new mesh and materials: the extension queues the
+    // first-use creates of their buffers and textures, ahead of the instance's first draw.
+    static void (*_extMeshAssigned)(const MeshInstance& instance);
+
     // `??2MeshInstance@Graphics@@SAPEAX_K@Z` (0x180016940),
     // `??2…@SAPEAX_KPEAX@Z` (0x1800169b0) and `??3…@SAXPEAX@Z` (0x1800169c0) are
     // the class's own `operator new` / `operator delete`. They are exported and
