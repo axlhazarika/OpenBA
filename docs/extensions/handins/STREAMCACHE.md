@@ -47,14 +47,37 @@ limit is a constant with its rationale in `stream_record.h`, not a setting.
 put in the derived cache (`src/ext/derived_cache/`, content-addressed, class A, never opened under the
 faithful profile) at each load bracket's end (`Engine::LoaderLoop::_extLoadDone`, after the
 `loader.done` stamp) by the cache's writer thread; one chunk per bracket that recorded something, chunk
-ordinals 0, 1, ... under the package's key. The key: producer `STRM`, format version, shape {package
-CRC, create_on_demand on/off (what a load consumes depends on it), the build's git hash (a record is
-only as good as the serializer that made it), chunk ordinal}, sourceSize = the package's entry count,
-sourceHash = the package IDENTITY: Hash64 over {CRC, version, user version, entry count}, the package
-name and its whole entry table (offset + size of every entry), so a rebuilt package at the same path is
-another identity. A package's chunks are loaded at its first load of the run (ordinals from 0 until the
-first miss) into a `Bundle` indexed by entry offset; identities survive the two remounts (the pack
-index -> PackageFile pointer is re-derived when the FileSystem's table changes).
+ordinals 0, 1, ... under the package's key. The key: producer `STRM`, the format version constant,
+shape {package CRC, create_on_demand on/off (what a load consumes depends on it), 0, chunk ordinal},
+sourceSize = the package's entry count, sourceHash = the package IDENTITY: Hash64 over {CRC, version,
+user version, entry count}, the package name and its whole entry table (offset + size of every entry),
+so a rebuilt package at the same path is another identity. The build is NOT in the key: the recorded
+bytes are a function of the package alone; only the read pattern depends on the build, and a record
+that is too narrow is widened (below). A package's chunks are read back at its first load of the run
+(ordinals from 0 until the first miss; 86-189 ms for 150-300 MB of chunks, Find + parse, counted in the
+load-end line as "read back in") into a `Bundle` indexed by entry offset, a later chunk's record for an
+entry replacing an earlier one; identities survive the two remounts (the pack index -> PackageFile
+pointer is re-derived when the FileSystem's table changes).
+
+**Lifetime: the boot only.** The bundles are dropped after the boot's last bracket -- the one whose loop
+is the `MenuDialogLoopT` (the seam passes the loop's type) -- and no later bracket is served or
+recorded (`[StreamCache] boot over: N MB of records dropped`). The later brackets are small: a new game
+loads ~220 resources (the boot's 376k), a save load or a device-restart reload the same few; reading
+150 MB of chunks back for them would cost more than the decode it replaces, and recording them would
+add a chunk per run. So the 150 MB (300 MB when a widened generation sits beside the first) is resident
+for the boot's ~16 s and not for the session.
+
+**Fallback (a record too narrow).** A read outside the record's segments does not fail the load: the
+`SegmentStream` asks its opener for retail's CompressedStream on the same entry (the load's own
+CompressedFileStream, whose packed FileStream is open: the `CompressedStream::Open` External::Load
+skipped), sets its `_position` to the current decompressed position (CompressedStream::Read starts
+every read with SetWindow(_position), so the block is decoded when retail would decode it) and forwards
+every call from then on (Read, SetCurrentPos, GetCurrentPos, GetSize, Skip). The bytes already served
+are the ones that stream holds (the record is those bytes), so the load is the same load. The rest of
+the load is recorded on top of the record (`Recorder::Seed`; overlapping ranges must agree byte for
+byte or the record is dropped) and the widened record goes out in the bracket's chunk, replacing the
+narrow one at the next start. Counted as "extended" in the load-end line; an opener that cannot open the
+stream (never seen) marks the stream Failed and is counted as "fallback failed".
 
 **Serving.** `Object::ExternalFactory::_extLoadBegin` runs in `External::Load` with the packed entry's
 FileStream open and before `CompressedStream::Open`: for a packed entry on a mapped package it reads
@@ -108,8 +131,15 @@ registry row (`registry.{h,cpp}`, `registry_boot.cpp`), `tests/unit/ext_stream_c
   (`[GUL::Load] EXIT`), 99 s in the town, crash log 0 bytes, the seams null (no `[StreamCache]` line). **Resave gate**
   `Gate`: NEW-GOLDEN with md5 `971aaec2cf95f5f730bb1cd1a4fa8428` -- the golden the brief names -- then
   **PASS**: the save and its reference table are byte-identical.
-- A stale record (a different serializer reading the same bytes) is keyed out by the build hash; a read
-  outside a record fails loudly and is counted ("stale") in the load-end line.
+- **Fallback proof** (the follow-up, commit `bcdaad91b`; TEMP probe + shadow, not committed): every
+  served record truncated by 16 bytes so that EVERY load read outside it and took the fallback, and
+  retail's stream (a second CompressedFileStream over the same path) read in step and compared on
+  every read, Skip and SetCurrentPos mirrored. MegaMod boot to a new game: **hits 362,106, extended
+  362,106 (every one), 83,646,961 shadow reads, 0 mismatches, 0 end-position differences**, 0 fallback
+  failures, 0 overlap mismatches, crash log 0; the widened records went out as 11 chunks (150.4 MB) and
+  served the next start whole (extended 0). The unit test `ext_stream_cache_segment_stream_serves_then_
+  falls_back` does the same on a synthetic three-block entry with the engine's CompressedMemoryStream
+  as the fallback; `..._seeded_recording_widens_a_record` the widening.
 
 ## 6. Timings
 
@@ -145,12 +175,16 @@ copy of every read, 132.7 MB in all) and the chunk writes (the cache's writer th
 150 MB stays in memory for the run (the bundles). Loads 2-4 and remount 2 are untouched (they are the
 clean-generation visit pass and the package directory work; bootprof report items 3-4).
 
+**After the follow-ups** (exe G = commits 1c3f6efc7 + 7aa41b610 + bcdaad91b), warm, 0 compilers at
+launch: menu.opened 16.82 s, hits 362,106, read back 189 ms (two chunk generations resident, 300.8 MB,
+the probe run's widened records beside the originals), dropped at the menu's bracket. Cache on disk for
+a fresh MegaMod boot: 11 chunks, 150.4 MB (derived.dat +150 MB); a widened generation adds another
+150 MB until the cap's compaction ages the superseded chunks out.
+
 ## 7. Open
 
-- The bundles (150 MB) are held for the run; they could be dropped after the boot's last bracket and
-  re-read from the cache on demand (a later load that misses records as today).
-- A record is keyed on the build's git hash: every new build records again (a cache churn of 150 MB
-  per build under the 4 GB cap). A release build could key on the serializer's version instead.
+- Superseded chunks (a widened generation) stay in derived.dat and are read back with the rest until
+  the cap compacts; a per-package "latest generation" marker would skip them.
 - kRecordMax = 8 KB leaves 14.3k streams (picking / edge meshes, sounds, a few large descriptions) on the
   compressed path; the per-type table says they are the CPU geometry the game needs whole.
 - Not built: Linux, macOS. The Metal backend's Locate reaches the same `g_altLocate` seam.
