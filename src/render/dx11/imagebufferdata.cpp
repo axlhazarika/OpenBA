@@ -820,7 +820,8 @@ static ID3D11SamplerState* AcquirePointSampler(const ::Video::ImageBuffer* ib) {
 void ImageBufferData::Bind(void* context, unsigned slot) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
     // NOT RETAIL (ext.create_on_demand): the first bind of a deferred texture makes it; a made one
-    // pays the null test.
+    // pays the null test. The scope stamps the use and keeps an eviction away until the bind is done.
+    CreateOnDemand::UseScope use(this);
     if (shaderResourceView == nullptr) CreateOnDemand::Ensure(this);
     (void)context;   // never read by the original either
 
@@ -851,6 +852,7 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
 // ============================================================
 bool ImageBufferData::Update(void* data, int width, int height) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::UseScope use(this);   // NOT RETAIL (ext.create_on_demand): stamp, no eviction meanwhile
     if (texture == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     // NOT RETAIL: the Present lock (dx11_backend_access.h). Callers hold the
     // device lock and may be off the presenting thread (the loader's image
@@ -883,6 +885,7 @@ bool ImageBufferData::Update(void* data, int width, int height) {
 // ============================================================
 bool ImageBufferData::Read(void* dst, int width, int height) {
     AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::UseScope use(this);   // NOT RETAIL (ext.create_on_demand): stamp, no eviction meanwhile
     if (texture == nullptr) CreateOnDemand::Ensure(this);   // NOT RETAIL (ext.create_on_demand)
     D3D11_TEXTURE2D_DESC desc;
     desc.Width              = static_cast<UINT>(width);

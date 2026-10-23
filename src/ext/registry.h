@@ -128,6 +128,7 @@ struct Values {
     int32_t foliage_aa_mode = 2; // ext.foliage_aa_mode 1..2 (owner better_trees): 1 smooth edges, 2 + distance fill (FOLIAGE_AA.md §1 ruling 4)
     int32_t max_shadow_size = 4096; // ext.max_shadow_size 4096 | 8192 (owner max_shadow_res): the sun map at High (FAA-SHADOW2)
     int32_t rock_seat_mode = 2; // ext.rock_seat_mode 1..2 (owner fix rock_seat): 1 sink to the lowest ground under the rock, 2 tilt to the slope (the default, ROCKSEAT.md)
+    int32_t create_on_demand_idle_min = 5; // ext.create_on_demand_idle_min 0..120 (owner create_on_demand): minutes unused before a made object is given back, 0 = never (CREATEONDEMAND.md section 7)
     int32_t derived_cache_mb = 4096; // ext.derived_cache_mb 256..65536 (owner compress_ao, the cache's first user): the derived-data cache's cap in MB (COMPRESSAO.md)
 };
 

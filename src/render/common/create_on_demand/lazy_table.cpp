@@ -7,8 +7,6 @@
 
 #include "create_on_demand/lazy_table.h"
 
-#include <chrono>
-
 namespace CreateOnDemand {
 
 namespace {
@@ -34,6 +32,11 @@ LazyTable::~LazyTable() {
     }
 }
 
+void LazyTable::Untrack(Entry& e, const void* obj) {
+    if (e.tracked) _stamps.Remove(obj);
+    e.tracked = false;
+}
+
 void LazyTable::Add(const void* obj, std::unique_ptr<Record> record) {
     std::unique_lock<std::mutex> lock(_mutex);
     // A running record is never replaced under its thread (the caller's Forget already waited).
@@ -44,15 +47,19 @@ void LazyTable::Add(const void* obj, std::unique_ptr<Record> record) {
     const uint64_t bytes = record->Bytes();
     Entry& e = _entries[obj];
     if (e.record != nullptr) {
-        // The caller Forgot obj first; a second record for a live one replaces it unrun.
-        _stats.pendingBytes -= e.record->Bytes();
-        --_stats.pending;
-        ++_stats.forgotten;
+        // The caller Forgot obj first; a second record for a live one replaces it.
+        if (e.state != State::Made) {
+            _stats.pendingBytes -= e.record->Bytes();
+            --_stats.pending;
+            ++_stats.forgotten;
+        }
+        Untrack(e, obj);
     } else {
         _count.fetch_add(1, std::memory_order_release);
     }
-    e.record = std::move(record);
-    e.state  = State::Idle;
+    e.record   = std::move(record);
+    e.state    = State::Idle;
+    e.madeOnce = false;
     ++_stats.recorded;
     _stats.recordedBytes += bytes;
     ++_stats.pending;
@@ -69,21 +76,19 @@ void LazyTable::RunClaimed(std::unique_lock<std::mutex>& lock, const void* obj, 
     lock.lock();
     --_running;
     _stats.materialNs += dt;
+    Entry& e = _entries.find(obj)->second;
     if (outcome == Outcome::Retry) {
         // Kept, unpublished: the next use (or prefetch) after the device is back makes it.
         ++_stats.retried;
-        _entries.find(obj)->second.state = State::Idle;
+        e.state = State::Idle;
         _doneCv.notify_all();
         return;
     }
     const bool ok = outcome == Outcome::Made;
     record->Publish();
     const uint64_t bytes = record->Bytes();
-    _entries.erase(obj);
-    _count.fetch_sub(1, std::memory_order_release);
     --_stats.pending;
     _stats.pendingBytes -= bytes;
-    if (!ok) ++_stats.failed;
     if (onUse) {
         ++_stats.onUse;
         _stats.onUseNs += dt;
@@ -91,7 +96,19 @@ void LazyTable::RunClaimed(std::unique_lock<std::mutex>& lock, const void* obj, 
     } else {
         ++_stats.prefetched;
     }
-    if (ok) _stats.materialBytes += bytes;
+    if (ok) {
+        // Kept, made: its Locator stays for a re-materialization after an eviction.
+        _stats.materialBytes += bytes;
+        if (e.madeOnce) ++_stats.remade;
+        e.madeOnce = true;
+        e.state    = State::Made;
+        e.tracked  = _stamps.Insert(obj, _epoch.load(std::memory_order_relaxed));
+    } else {
+        ++_stats.failed;
+        Untrack(e, obj);
+        _entries.erase(obj);
+        _count.fetch_sub(1, std::memory_order_release);
+    }
     _doneCv.notify_all();
 }
 
@@ -100,7 +117,7 @@ void LazyTable::EnsureSlow(const void* obj) {
     bool waited = false;
     for (;;) {
         auto it = _entries.find(obj);
-        if (it == _entries.end()) return;
+        if (it == _entries.end() || it->second.state == State::Made) return;
         if (it->second.state == State::Running) {
             if (!waited) ++_stats.waited;
             waited = true;
@@ -126,12 +143,21 @@ void LazyTable::ForgetSlow(const void* obj) {
             _doneCv.wait(lock);
             continue;
         }
-        _stats.pendingBytes -= it->second.record->Bytes();
-        --_stats.pending;
-        ++_stats.forgotten;
+        if (it->second.state != State::Made) {
+            _stats.pendingBytes -= it->second.record->Bytes();
+            --_stats.pending;
+            ++_stats.forgotten;
+        }
+        Untrack(it->second, obj);
         _entries.erase(it);   // a queued one is skipped by the worker that pops it
         _count.fetch_sub(1, std::memory_order_release);
         return;
+    }
+}
+
+void LazyTable::StartWorkers() {
+    for (int i = 0; i < _workers; ++i) {
+        _threads.emplace_back([this, i] { WorkerMain(i); });
     }
 }
 
@@ -142,18 +168,75 @@ void LazyTable::Prefetch(const void* obj) {
     if (it == _entries.end() || it->second.state != State::Idle || _stop) return;
     it->second.state = State::Queued;
     _queue.push_back(obj);
-    if (_threads.empty()) {
-        for (int i = 0; i < _workers; ++i) {
-            _threads.emplace_back([this] { WorkerMain(); });
-        }
-    }
+    if (_threads.empty()) StartWorkers();
     _workCv.notify_one();
 }
 
-void LazyTable::WorkerMain() {
+void LazyTable::SetIdleLimit(uint32_t epochs, std::chrono::milliseconds epochLength) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _idleEpochs  = epochs;
+    _epochLength = epochLength;
+    if (_threads.empty() && _workers > 0 && epochs != 0 && epochLength.count() > 0) StartWorkers();
+    _workCv.notify_all();
+}
+
+int64_t LazyTable::Sweep() {
+    std::lock_guard<std::mutex> one(_sweepMutex);
+    const uint32_t now = _epoch.fetch_add(1, std::memory_order_relaxed) + 1;
+    uint32_t idle = 0;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        ++_stats.sweeps;
+        idle = _paused ? 0 : _idleEpochs;
+    }
+    if (idle == 0) return 0;
+    // No use may be reading a handle while it is given back: close the gate first (no lock held),
+    // then take the table's mutex (no materialization publishes meanwhile).
+    const uint64_t t0 = NowNs();
+    _gate.Close();
+    int64_t evicted = 0;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (auto& kv : _entries) {
+            Entry& e = kv.second;
+            if (e.state != State::Made || !e.tracked) continue;
+            uint32_t last = 0;
+            if (!_stamps.LastUse(kv.first, &last) || now - last < idle) continue;
+            e.record->Evict();
+            Untrack(e, kv.first);
+            e.state = State::Idle;
+            const uint64_t bytes = e.record->Bytes();
+            ++_stats.pending;
+            _stats.pendingBytes += bytes;
+            ++_stats.evicted;
+            _stats.evictedBytes += bytes;
+            ++evicted;
+        }
+        _stats.evictNs += NowNs() - t0;
+    }
+    _gate.Open();
+    if (evicted != 0 && _sweepHook != nullptr) _sweepHook(evicted);
+    return evicted;
+}
+
+void LazyTable::WorkerMain(int index) {
     std::unique_lock<std::mutex> lock(_mutex);
+    auto nextSweep = std::chrono::steady_clock::now() + _epochLength;
     for (;;) {
-        _workCv.wait(lock, [this] { return _stop || (!_paused && !_queue.empty()); });
+        auto ready = [this] { return _stop || (!_paused && !_queue.empty()); };
+        // Worker 0 also runs the sweep, once per epoch, while an idle limit is set.
+        if (index == 0 && _idleEpochs != 0 && _epochLength.count() > 0) {
+            if (!_workCv.wait_until(lock, nextSweep, ready)) {
+                lock.unlock();
+                Sweep();
+                lock.lock();
+                nextSweep = std::chrono::steady_clock::now() + _epochLength;
+                continue;
+            }
+        } else {
+            _workCv.wait(lock, ready);
+            nextSweep = std::chrono::steady_clock::now() + _epochLength;
+        }
         if (_stop) return;
         const void* const obj = _queue.front();
         _queue.pop_front();

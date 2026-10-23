@@ -130,6 +130,7 @@ struct Counters {
     std::atomic<int> made{0};
     std::atomic<int> published{0};
     std::atomic<int> destroyed{0};
+    std::atomic<int> evicted{0};
 };
 
 class FakeRecord final : public Record {
@@ -149,6 +150,10 @@ public:
     void Publish() override {
         ++_c->published;
         *_field = _value;
+    }
+    void Evict() override {
+        ++_c->evicted;
+        *_field = 0;
     }
     uint64_t Bytes() const override { return 100; }
 
@@ -188,6 +193,17 @@ UNIT_TEST(ext_create_on_demand_row) {
     CHECK(Ext::Ext().create_on_demand);
     CHECK(Ext::PseudoModsForSave(nullptr, 0) == 0);   // class A: never in the save
     Ext::Install(Ext::State{}, Ext::Profile::PerEntry, false);
+}
+
+UNIT_TEST(ext_create_on_demand_idle_key) {
+    const Ext::ValueKey* k = Ext::FindValueKey("create_on_demand_idle_min");
+    CHECK(k != nullptr);
+    if (k == nullptr) return;
+    CHECK(std::string(k->owner) == "create_on_demand");
+    CHECK_EQ(k->minValue, 0);   // 0 = never give an object back
+    CHECK_EQ(k->maxValue, 120);
+    CHECK_EQ(k->defaultValue, 5);
+    CHECK(Ext::SettingsKey(*k) == "ext.create_on_demand_idle_min");
 }
 
 UNIT_TEST(ext_create_on_demand_redecode_matches_every_range) {
@@ -327,7 +343,7 @@ UNIT_TEST(ext_create_on_demand_table_materializes_once) {
     t.Ensure(&obj);
     CHECK_EQ(field, 7);
     CHECK_EQ(c.made.load(), 1);
-    CHECK_EQ(c.destroyed.load(), 1);
+    CHECK_EQ(c.destroyed.load(), 0);   // made: the record (its Locator) is kept for a re-make
     t.Ensure(&obj);
     t.Prefetch(&obj);
     t.Forget(&obj);
@@ -429,42 +445,44 @@ UNIT_TEST(ext_create_on_demand_table_pause_resume_and_retry) {
 
 UNIT_TEST(ext_create_on_demand_table_four_threads) {
     constexpr int kObjects = 2000;
-    LazyTable t(2);
     Counters c;
     std::vector<int> fields(kObjects, 0);
     std::vector<char> objs(kObjects);
-    for (int i = 0; i < kObjects; ++i) {
-        t.Add(&objs[i], Fake(&c, &fields[i], i + 1));
-    }
-    std::vector<std::thread> threads;
-    for (int k = 0; k < 4; ++k) {
-        threads.emplace_back([&, k] {
-            std::mt19937 rng(static_cast<uint32_t>(k + 1));
-            for (int n = 0; n < 6000; ++n) {
-                const int i = static_cast<int>(rng() % kObjects);
-                const uint32_t op = rng() % 10;
-                if (op < 5) {
-                    t.Ensure(&objs[i]);
-                } else if (op < 9) {
-                    t.Prefetch(&objs[i]);
-                } else if (i % 50 == 0) {
-                    t.Forget(&objs[i]);
+    {
+        LazyTable t(2);
+        for (int i = 0; i < kObjects; ++i) {
+            t.Add(&objs[i], Fake(&c, &fields[i], i + 1));
+        }
+        std::vector<std::thread> threads;
+        for (int k = 0; k < 4; ++k) {
+            threads.emplace_back([&, k] {
+                std::mt19937 rng(static_cast<uint32_t>(k + 1));
+                for (int n = 0; n < 6000; ++n) {
+                    const int i = static_cast<int>(rng() % kObjects);
+                    const uint32_t op = rng() % 10;
+                    if (op < 5) {
+                        t.Ensure(&objs[i]);
+                    } else if (op < 9) {
+                        t.Prefetch(&objs[i]);
+                    } else if (i % 50 == 0) {
+                        t.Forget(&objs[i]);
+                    }
                 }
-            }
-        });
+            });
+        }
+        for (std::thread& th : threads) {
+            th.join();
+        }
+        t.DrainQueue();
+        for (int i = 0; i < kObjects; ++i) {
+            t.Ensure(&objs[i]);
+        }
+        const LazyTable::Stats s = t.GetStats();
+        CHECK_EQ(s.pending, int64_t(0));
+        CHECK_EQ(c.made.load(), c.published.load());   // every run published, none twice
+        CHECK_EQ(static_cast<int64_t>(c.made.load()) + s.forgotten, int64_t(kObjects));
     }
-    for (std::thread& th : threads) {
-        th.join();
-    }
-    t.DrainQueue();
-    for (int i = 0; i < kObjects; ++i) {
-        t.Ensure(&objs[i]);
-    }
-    const LazyTable::Stats s = t.GetStats();
-    CHECK_EQ(s.pending, int64_t(0));
-    CHECK_EQ(c.made.load(), c.published.load());   // every run published, none twice
-    CHECK_EQ(static_cast<int64_t>(c.made.load()) + s.forgotten, int64_t(kObjects));
-    CHECK_EQ(c.destroyed.load(), kObjects);
+    CHECK_EQ(c.destroyed.load(), kObjects);   // every record went: forgotten, or with the table
     int wrong = 0;
     for (int i = 0; i < kObjects; ++i) {
         if (fields[i] != 0 && fields[i] != i + 1) ++wrong;
@@ -674,4 +692,121 @@ UNIT_TEST(ext_create_on_demand_megamod_payloads_redecode_through_the_production_
     CHECK_EQ(mismatches, int64_t(0));
     std::printf("  [create_on_demand] %s: %lld payloads re-decoded through Maps/Locator/Redecode, %lld mismatches\n",
                 path.c_str(), static_cast<long long>(payloads), static_cast<long long>(mismatches));
+}
+
+// ---- eviction (CREATEONDEMAND.md section 7) ------------------------------------------------------
+
+UNIT_TEST(ext_create_on_demand_use_stamps) {
+    UseStamps st;
+    const int a = 0;
+    const int b = 0;
+    uint32_t e = 0;
+    CHECK(!st.LastUse(&a, &e));
+    st.Touch(&a, 9);   // untracked: nothing
+    CHECK(!st.LastUse(&a, &e));
+    CHECK(st.Insert(&a, 3));
+    CHECK(st.LastUse(&a, &e) && e == 3);
+    st.Touch(&a, 5);
+    CHECK(st.LastUse(&a, &e) && e == 5);
+    CHECK(st.Insert(&b, 4));
+    st.Remove(&a);
+    CHECK(!st.LastUse(&a, &e));
+    CHECK(st.LastUse(&b, &e) && e == 4);   // found past the tombstone
+    CHECK(st.Insert(&a, 7));               // the tombstone is reused
+    CHECK(st.LastUse(&a, &e) && e == 7);
+}
+
+UNIT_TEST(ext_create_on_demand_table_evicts_idle_and_remakes) {
+    LazyTable t(0);
+    t.SetIdleLimit(2, std::chrono::milliseconds(0));
+    Counters c;
+    int fa = 0;
+    int fb = 0;
+    const int a = 0;
+    const int b = 0;
+    t.Add(&a, Fake(&c, &fa, 1));
+    t.Add(&b, Fake(&c, &fb, 2));
+    t.Ensure(&a);
+    t.Ensure(&b);   // both made at epoch 1
+    CHECK_EQ(t.Sweep(), int64_t(0));   // epoch 2: unused for 1 epoch, kept
+    t.Use(&a);                          // a used at epoch 2
+    CHECK_EQ(t.Sweep(), int64_t(1));   // epoch 3: b unused for 2 epochs, given back
+    CHECK_EQ(fa, 1);
+    CHECK_EQ(fb, 0);
+    CHECK_EQ(c.evicted.load(), 1);
+    LazyTable::Stats s = t.GetStats();
+    CHECK_EQ(s.evicted, int64_t(1));
+    CHECK_EQ(s.pending, int64_t(1));
+    t.Ensure(&b);   // the next use makes it again, from the same record
+    CHECK_EQ(fb, 2);
+    s = t.GetStats();
+    CHECK_EQ(s.remade, int64_t(1));
+    CHECK_EQ(s.pending, int64_t(0));
+    CHECK_EQ(c.made.load(), 3);
+    t.Forget(&a);   // a made record goes without counting as dropped unmade
+    CHECK_EQ(t.GetStats().forgotten, int64_t(0));
+    CHECK_EQ(c.destroyed.load(), 1);
+    t.Sweep();
+    t.Sweep();   // b, unused again, goes again
+    CHECK_EQ(c.evicted.load(), 2);
+}
+
+UNIT_TEST(ext_create_on_demand_table_idle_zero_never_evicts) {
+    LazyTable t(0);
+    t.SetIdleLimit(0, std::chrono::milliseconds(0));
+    Counters c;
+    int f = 0;
+    const int a = 0;
+    t.Add(&a, Fake(&c, &f, 1));
+    t.Ensure(&a);
+    for (int i = 0; i < 10; ++i) {
+        CHECK_EQ(t.Sweep(), int64_t(0));
+    }
+    CHECK_EQ(f, 1);
+    CHECK_EQ(c.evicted.load(), 0);
+}
+
+UNIT_TEST(ext_create_on_demand_table_eviction_waits_for_a_use_in_progress) {
+    LazyTable t(0);
+    t.SetIdleLimit(1, std::chrono::milliseconds(0));
+    Counters c;
+    int f = 0;
+    const int a = 0;
+    t.Add(&a, Fake(&c, &f, 1));
+    t.Ensure(&a);
+    t.Enter();   // a use in progress (another object: the stamp of `a` stays old)
+    std::atomic<bool> swept{false};
+    std::thread sweeper([&] {
+        t.Sweep();
+        swept.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    CHECK(!swept.load(std::memory_order_acquire));   // held at the gate
+    CHECK_EQ(f, 1);
+    t.Leave();
+    sweeper.join();
+    CHECK(swept.load());
+    CHECK_EQ(f, 0);   // given back once no use was in progress
+    // A use after the gate reopened enters at once and remakes it.
+    t.Enter();
+    t.Use(&a);
+    t.Ensure(&a);
+    t.Leave();
+    CHECK_EQ(f, 1);
+}
+
+UNIT_TEST(ext_create_on_demand_table_timed_sweep_on_worker) {
+    LazyTable t(1);
+    Counters c;
+    int f = 0;
+    const int a = 0;
+    t.Add(&a, Fake(&c, &f, 1));
+    t.Ensure(&a);
+    t.SetIdleLimit(1, std::chrono::milliseconds(20));   // worker 0 sweeps every 20 ms
+    for (int i = 0; i < 200 && c.evicted.load() == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK_EQ(c.evicted.load(), 1);
+    CHECK_EQ(f, 0);
+    CHECK(t.GetStats().sweeps >= 1);
 }

@@ -31,7 +31,7 @@ void Boot() {
     const bool on = Ext().create_on_demand && CreateOnDemandBackend::Supported();
     if (Ext().create_on_demand && !on)
         std::fprintf(stderr, "[CreateOnDemand] the renderer does not support deferred creates: all made at load\n");
-    CreateOnDemandBackend::Request(on);
+    CreateOnDemandBackend::Request(on, Val().create_on_demand_idle_min);
     ::IO::FileSystem::_extHandleClosing = on ? &HandleClosing : nullptr;
     ::Video::ImageBuffer::_extLevelSource = on ? &ReadLevels : nullptr;
     ::Graphics::MeshInstance::_extMeshAssigned = on ? &PrefetchMesh : nullptr;

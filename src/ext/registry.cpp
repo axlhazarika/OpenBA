@@ -341,6 +341,10 @@ const ValueKey kValueKeys[] = {
     // one cap. 4096 holds a MegaMod 7-part boot's AO maps (~1.04 GB) four times over.
     { "derived_cache_mb", "compress_ao", 256, 65536, 4096,
       [](State& s) -> int32_t& { return s.val.derived_cache_mb; }, nullptr, 0 },
+    // CREATEONDEMAND section 7: minutes a made object may go unused before it is given back (released,
+    // re-made from its package at the next use); 0 = never. Read once at boot.
+    { "create_on_demand_idle_min", "create_on_demand", 0, 120, 5,
+      [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

@@ -121,8 +121,9 @@ bool Supported() {
 // the answer is "not supported".
 namespace CreateOnDemandBackend {
 
-void Request(bool on) {
+void Request(bool on, int idleMinutes) {
     (void)on;
+    (void)idleMinutes;
 }
 
 bool Supported() {

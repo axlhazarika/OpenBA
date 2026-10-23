@@ -19,7 +19,8 @@ namespace CreateOnDemandBackend {
 
 // The extension's one call (Ext::CreateOnDemand::Boot, main thread, once at boot, before the first
 // load: the row takes effect at the next start). Off: every object is created at load, retail's.
-void Request(bool on);
+// `idleMinutes` > 0: a made object unused that long is given back and re-made at its next use.
+void Request(bool on, int idleMinutes);
 
 // False when the backend has no deferred path (Metal today): the request is then ignored.
 bool Supported();

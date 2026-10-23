@@ -106,6 +106,16 @@ public:
         *_out = _made;
     }
 
+    // share_gpu_data's user is dropped before the Release, as ~VertexBufferData orders it.
+    void Evict() override {
+        ID3D11Buffer* const buffer = *_out;
+        *_out = nullptr;
+        _made = nullptr;
+        if (buffer == nullptr) return;
+        ShareGpuData::DropBuffer(buffer);
+        buffer->Release();
+    }
+
     uint64_t Bytes() const override {
         return static_cast<uint64_t>(_loc.len);
     }
@@ -179,6 +189,20 @@ public:
         *_outSrv     = _madeSrv;
     }
 
+    // ImageBufferData::ReleaseInterfaces' order for these two: the share table's user first, the
+    // view, then the texture. The sampler stays (made at load, as retail makes it).
+    void Evict() override {
+        ID3D11Texture2D* const texture = *_outTexture;
+        ID3D11ShaderResourceView* const srv = *_outSrv;
+        *_outTexture = nullptr;
+        *_outSrv     = nullptr;
+        _madeTexture = nullptr;
+        _madeSrv     = nullptr;
+        ShareGpuData::DropTexture(texture);
+        if (srv != nullptr) srv->Release();
+        if (texture != nullptr) texture->Release();
+    }
+
     uint64_t Bytes() const override {
         return _bytes;
     }
@@ -211,7 +235,8 @@ void Print(const char* when) {
     std::lock_guard<std::mutex> lock(printMutex);
     const ::CreateOnDemand::LazyTable::Stats s = t->GetStats();
     if (s.recorded == g_lastPrinted.recorded && s.onUse == g_lastPrinted.onUse &&
-        s.prefetched == g_lastPrinted.prefetched && s.forgotten == g_lastPrinted.forgotten)
+        s.prefetched == g_lastPrinted.prefetched && s.forgotten == g_lastPrinted.forgotten &&
+        s.evicted == g_lastPrinted.evicted)
         return;
     g_lastPrinted = s;
     const ::CreateOnDemand::PackageMaps::Stats m = ::CreateOnDemand::Maps().GetStats();
@@ -228,6 +253,13 @@ void Print(const char* when) {
                  static_cast<long long>(s.failed), static_cast<long long>(s.forgotten),
                  static_cast<long long>(g_notLocatable.load(std::memory_order_relaxed)),
                  static_cast<long long>(m.live), static_cast<long long>(m.detached));
+    if (s.evicted != 0 || s.sweeps != 0)
+        std::fprintf(stderr,
+                     "[CreateOnDemand] %s: given back %lld (%.1f MB) over %lld sweeps (uses held %.1f ms), "
+                     "re-made %lld; made and held %.1f MB\n",
+                     when, static_cast<long long>(s.evicted), s.evictedBytes * mb, static_cast<long long>(s.sweeps),
+                     s.evictNs / 1e6, static_cast<long long>(s.remade),
+                     (static_cast<double>(s.recordedBytes) - static_cast<double>(s.pendingBytes)) * mb);
 }
 
 std::atomic<int64_t> g_lastPrintNs{0};
@@ -292,20 +324,31 @@ void LoadEnd() {
     Print("load end (run total)");
 }
 
+void AfterSweep(int64_t evicted) {
+    (void)evicted;
+    Print("given back (run total)");
+}
+
 }  // namespace CreateOnDemand
 }  // namespace VideoDX11
 
 // ---- the backend-neutral interface (create_on_demand_backend.h) -----------------------------------
 namespace CreateOnDemandBackend {
 
-void Request(bool on) {
+void Request(bool on, int idleMinutes) {
     if (on && VideoDX11::CreateOnDemand::g_table.load(std::memory_order_relaxed) == nullptr) {
         // Never destroyed: records and workers live to the end of the process.
-        VideoDX11::CreateOnDemand::g_table.store(
-            new ::CreateOnDemand::LazyTable(VideoDX11::CreateOnDemand::WorkerCount()), std::memory_order_release);
+        ::CreateOnDemand::LazyTable* const t = new ::CreateOnDemand::LazyTable(VideoDX11::CreateOnDemand::WorkerCount());
+        // One epoch is a minute: an object unused for `idleMinutes` epochs is given back.
+        t->SetSweepHook(&VideoDX11::CreateOnDemand::AfterSweep);
+        t->SetIdleLimit(idleMinutes > 0 ? static_cast<uint32_t>(idleMinutes) : 0, std::chrono::minutes(1));
+        VideoDX11::CreateOnDemand::g_table.store(t, std::memory_order_release);
     }
-    std::fprintf(stderr, "[CreateOnDemand] %s\n",
-                 on ? "on: static buffers and textures are created at their first use" : "off");
+    if (on)
+        std::fprintf(stderr, "[CreateOnDemand] on: static buffers and textures are created at their first use; "
+                             "given back after %d idle minute(s) (0 = never)\n", idleMinutes);
+    else
+        std::fprintf(stderr, "[CreateOnDemand] off\n");
 }
 
 bool Supported() {
