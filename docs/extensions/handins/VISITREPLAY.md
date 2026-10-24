@@ -191,3 +191,18 @@ and copy (picking meshes first), not path or table work. First menu pass (774 sa
 (`VisitExternal` -> FindOrLoad, ExpandRelativePath 18.5 %, Filename copies and AdjustDelimiters) plus the
 recording. New-game bracket (791 samples): `WorldGeometry::BuildTerrain` 77 %, of which erosion 52 %; the
 resource pass no longer shows.
+
+## Clean-machine re-timing (coordinator, 2026-10-24, perf exe from `cache-round2/integrate`, MegaMod 7-part, warm derived cache, medians of 3 interleaved pairs, machine load CLEAN)
+
+| | both off | both on |
+|---|---|---|
+| loader passes after the big load, summed | 2.00 s | 1.41 s |
+| boot to menu | -0.26 s | |
+| new game click to first frame | -0.39 s | |
+| Gate.sav entity-loading stage (vanilla save) | 229 ms | 129 ms |
+
+`ext.find_fastpath` alone is inside the both-off spread on boot and on a new game; its measured gain is the
+save-load entity stage above. **Ruled 2026-10-24: kept, default on** (the user: "130 ms is an acceptable perf
+increase at this point"); the save-load gain is the reason, boot and new game being neutral. With all four
+round-2 rows on (texture drop 1) the MegaMod boot to menu is 12.94 -> 11.54 s and boot to first game frame
+15.76 -> 13.98 s. Raw logs: the session scratchpad `retime/runs/`.

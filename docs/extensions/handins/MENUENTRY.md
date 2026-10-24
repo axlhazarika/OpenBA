@@ -156,3 +156,18 @@ own append (`SetSize`, a second clone), the stack Mod's destruction and the sett
 - No 2000 Hz loader profile was taken (the round's prerequisite note is for the loader items; this
   block's costs are main-thread and stamped).
 - No derived-cache entry: the icon decode is no longer paid at all after the first scan of a run.
+
+## Clean-machine re-timing (coordinator, 2026-10-24, perf exe from `cache-round2/integrate`, MegaMod 7-part, warm derived cache, medians of 3 interleaved pairs, machine load CLEAN)
+
+| | row off | row on |
+|---|---|---|
+| boot menu entry: mod scan | 484 ms | 170 ms |
+| boot menu entry: remount | 1067 ms | 0.5 ms (skipped) |
+| boot: menu opens at | 12.81 s | 11.65 s |
+| return to the menu (pause menu button 5): scan | 459 ms | 153 ms |
+| return to the menu: remount | 1005 ms | 0.4 ms (skipped) |
+| return to the menu: mount to menu | 2.16 s | 0.83 s |
+
+Default ON confirmed on the clean machine. Harness note: pause-menu button 6 exits the game outright; the
+return route needs button 5 (Quit to Main Menu), and the pause dialog writes a `menu.opened` stamp of its own,
+so a return run carries three of them. Raw logs: the session scratchpad `retime/runs/`.
