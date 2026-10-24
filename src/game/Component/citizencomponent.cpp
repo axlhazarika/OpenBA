@@ -20,6 +20,9 @@
 // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): ext.restricted_foods
 // (class C), Ext::RestrictedFoods::g_on, Ext::RestrictedFoods::IsBlocked
 #include "ext/restricted_foods/restricted_foods.h"
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): ext.item_priority
+// (class C), Ext::ItemPriority::Active / RankOfMat / Ceiling
+#include "ext/item_priority/item_priority.h"
 #include "graphics/Mesh.h"
 #include "err_line.h"   // HITCH_POSTDRAIN: one write per diagnostic line
 #include "Component/InteractComponent.h"       // ENDGAME B.3.9 C1: 0x1401c7900 cell class
@@ -1794,6 +1797,28 @@ ComponentDescription** CitizenComp_Entity_impl_ef40(const void* param_1, Compone
         return nullptr;
     };
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+    // with item priority active for this category (1 Fuel, 2 Tool, 3 Health, 4 Clothing), only the rows of
+    // the BEST rank among those this search may take stay eligible (a rank worse than the finder's tier
+    // ceiling is not eligible at all); the `_preferred` / random choice below then runs among them, as
+    // retail's does. Tested once here, above the loops; a row's rank is a scan of a short flat array.
+    const bool prio = Ext::ItemPriority::Active(param_4);
+    int bestRank = 0x7fffffff;
+    if (prio) {
+        const int ceiling = Ext::ItemPriority::Ceiling();
+        for (int64_t row = 0; row < taskCount; row++) {
+            StorageComponent::Item* listBase = store->storageSlots._data;
+            RawMaterialDescription* mat = findMat(listBase[row]._resource);
+            if (((mat->_flags >> shift) & 1) == 0 || listBase[row]._count - listBase[row]._reserve <= 0) {
+                continue;
+            }
+            const int r = Ext::ItemPriority::RankOfMat(param_4, mat);
+            if (r <= ceiling && r < bestRank) {
+                bestRank = r;
+            }
+        }
+    }
+
     // Pass 1: count eligible slots; remember the last eligible index in `chosen`.
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): ext.restricted_foods (class C):
     // tested once here, above both passes; only the eating category.
@@ -1811,6 +1836,11 @@ ComponentDescription** CitizenComp_Entity_impl_ef40(const void* param_1, Compone
         // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): a blocked food is not eligible
         // for the eating category.
         if (restrictFoods && bitSet && Ext::RestrictedFoods::IsBlocked(mat)) {
+            bitSet = false;
+        }
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+        // only the best rank stays eligible.
+        if (bitSet && prio && Ext::ItemPriority::RankOfMat(param_4, mat) != bestRank) {
             bitSet = false;
         }
         int demand = listBase[row]._count -
@@ -1836,6 +1866,11 @@ ComponentDescription** CitizenComp_Entity_impl_ef40(const void* param_1, Compone
         // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): the same test as pass 1,
         // so both passes agree.
         if (restrictFoods && bitSet && Ext::RestrictedFoods::IsBlocked(mat)) {
+            bitSet = false;
+        }
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+        // the same test as pass 1, so both passes agree.
+        if (bitSet && prio && Ext::ItemPriority::RankOfMat(param_4, mat) != bestRank) {
             bitSet = false;
         }
         int demand = entryP->_count - entryP->_reserve;

@@ -78,6 +78,9 @@
 // `sizeof(Rectangle)` assert.  ENDGAME B.3.5 caller batch I2.
 #include "graphics/Scene.h"
 #include "Component/RawMaterialDescription.h"   // B.3.8 CB1a (TypeId)
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+// ext.item_priority (class C), the fuel pick and the finder tiers
+#include "ext/item_priority/item_priority.h"
 #include "Component/CitizenDescription.h"   // B.3.8 CB1a (TypeId)
 #include "Component/CitizenAIComponent.h"
 #include "Component/CitizenComponent.h"
@@ -255,6 +258,26 @@ static void SelectAndTransfer(ComponentEntity* found, ::Object::InternalPtr<Acti
         int chosenIdx = -1;                                     // local_res8 low
         int matchCount = 0;                                    // pvVar21
 
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+        // this fetch picks the fuel itself (the finder only named the storage), so item priority narrows it
+        // here: only the rows of the best rank among the fuel the storage holds stay eligible. Tested once,
+        // above the loops.
+        const bool prio = Ext::ItemPriority::Active(Ext::ItemPriority::kFuel);
+        int bestRank = 0x7fffffff;
+        if (prio) {
+            for (int cur = 0; cur < rowCount; ++cur) {
+                StorageComponent::Item* rb = stor->storageSlots._data;
+                RawMaterialDescription* rm = FindRawMaterialChild(rb[cur]._resource);
+                if ((rm->_flags >> 6 & 1) == 0 || rb[cur]._count - rb[cur]._reserve <= 0) {
+                    continue;
+                }
+                const int r = Ext::ItemPriority::RankOfMat(Ext::ItemPriority::kFuel, rm);
+                if (r < bestRank) {
+                    bestRank = r;
+                }
+            }
+        }
+
         // pass 1: count matches + preferred index
         StorageComponent::Item* rowsBase = nullptr;  // local_res10 (= *(stor+0x28))
         for (int cur = 0; cur < rowCount; ++cur) {
@@ -263,6 +286,10 @@ static void SelectAndTransfer(ComponentEntity* found, ::Object::InternalPtr<Acti
             RawMaterialDescription* rm = FindRawMaterialChild(child);
             bool flagged = (rm->_flags >> 6 & 1) != 0;
             int avail = rowsBase[cur]._count - rowsBase[cur]._reserve;
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): only the best rank
+            if (flagged && prio && Ext::ItemPriority::RankOfMat(Ext::ItemPriority::kFuel, rm) != bestRank) {
+                flagged = false;
+            }
             if (flagged && avail > 0) {
                 if (rm->_unknown58)
                     chosenIdx = matchCount;
@@ -286,6 +313,10 @@ static void SelectAndTransfer(ComponentEntity* found, ::Object::InternalPtr<Acti
             RawMaterialDescription* rm = FindRawMaterialChild(child);
             bool flagged = (rm->_flags >> 6 & 1) != 0;
             int avail = rb[cur]._count - rb[cur]._reserve;
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): the same test as pass 1
+            if (flagged && prio && Ext::ItemPriority::RankOfMat(Ext::ItemPriority::kFuel, rm) != bestRank) {
+                flagged = false;
+            }
             if (flagged && avail > 0) {
                 if (matchCounter == chosenIdx) { hitChild = child; hitCursor = cur; break; }
                 ++matchCounter;
@@ -459,7 +490,15 @@ uint64_t CitizenAIComponent::State_GatherResources2() {
         ComponentEntity* found = nullptr;          // local_70
         ComponentDescription* outComp = nullptr;   // local_res10
         CitizenBehavior* listpair = GameUpdateLoop::_singleton->m_citizenList;
-        listpair->FindBestTarget(&found, cell, bGoal, &outComp, srcPos, 1);
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+        // with item priority active for Fuel (category 1) the finder runs once per rank, best first, so a
+        // better-ranked fuel in a farther storage wins over a worse one in the nearest.
+        Ext::ItemPriority::FindTiered(Ext::ItemPriority::kFuel, [&]() -> bool {
+            found = nullptr;
+            outComp = nullptr;
+            listpair->FindBestTarget(&found, cell, bGoal, &outComp, srcPos, 1);
+            return found != nullptr;
+        });
         (void)w;
 
         if (found == nullptr) {

@@ -46,6 +46,22 @@ StringTable resource
 		{ String _name = "RestrictedFoodsShowAll";		String _text = "Show all foods"; }
 		{ String _name = "RestrictedFoodsShowAllTip";	String _text = "Unchecked: only foods your town has made or stored."; }
 
+		// ext.item_priority's page in it (ItemPriorityPage.rsc)
+		{ String _name = "ItemPriorityTab";			String _text = "Priority"; }
+		{ String _name = "ItemPriorityHint";		String _text = "Rank the items citizens take first. A citizen takes the best-ranked item the storages hold; items not ranked come last."; }
+		{ String _name = "ItemPriorityCatTool";		String _text = "Tools"; }
+		{ String _name = "ItemPriorityCatFuel";		String _text = "Fuel"; }
+		{ String _name = "ItemPriorityCatClothing";	String _text = "Clothing"; }
+		{ String _name = "ItemPriorityCatHealth";	String _text = "Health"; }
+		{ String _name = "ItemPriorityParam";		String _text = "@0"; }
+		{ String _name = "ItemPriorityCheckTip";	String _text = "Check to rank this item (it goes to the bottom of the ranking)."; }
+		{ String _name = "ItemPriorityTop";			String _text = "Top"; }
+		{ String _name = "ItemPriorityUp";			String _text = "Up"; }
+		{ String _name = "ItemPriorityDown";		String _text = "Down"; }
+		// the filter button names what a click does, under the key of the mode being shown
+		{ String _name = "ItemPriorityShowAll";	String _text = "Show all items"; }
+		{ String _name = "ItemPriorityShowAllTip";	String _text = "Unchecked: only items your town has made or stored, and the ranked ones."; }
+
 		// the load notices (Extensions.rsc:extension*, shown by SaveLoadDialog::DoLoad in place of
 		// retail's ModMissing): @0 name, @1 the save's `ext:<id>`, @2 the saved format version
 		{ String _name = "ExtensionNotInBuild";		String _text = "The following extension is not part of this version of the game.~n~n@0 [@1]~nSaved with extension version @2~n~nA save keeps the extensions it was made with, so this one cannot be played here: loading it will stop the game with an error. Do you still want to load the save game?"; }

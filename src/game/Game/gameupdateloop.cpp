@@ -68,6 +68,9 @@
 // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md):
 // ext.restricted_foods (class C), Ext::RestrictedFoods::BeginFrame
 #include "ext/restricted_foods/restricted_foods.h"
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md):
+// ext.item_priority (class C), Ext::ItemPriority::BeginFrame
+#include "ext/item_priority/item_priority.h"
 #include "ext/drain_split/drain_split.h"       // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_DRAINSPLIT.md): ext.drain_split (class B), Ext::DrainSplit::BeginFrame
 #include "Game/terrain_sidecar.h" // the terrain-type mirror's teardown (faithful perf work)
 #include <cstdio>
@@ -589,6 +592,8 @@ bool GameUpdateLoop::Update(const System::Time& timeRef) {
     Ext::SpreadWarmth::BeginFrame();         // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_PFBURST.md): ext.spread_warmth (B) read once per frame, its budget reset
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/RESTRICTEDFOODS.md): ext.restricted_foods (C) read once per frame
     Ext::RestrictedFoods::BeginFrame();
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ITEMPRIO.md): ext.item_priority (C) read once per frame
+    Ext::ItemPriority::BeginFrame();
     Ext::DrainSplit::BeginFrame();           // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_DRAINSPLIT.md): ext.drain_split (B) read once per frame, the owed half's frame count
 
     // [EVENTS] RETIRED: the BANISHED_LIVE_EVENTS resource-shortage scanner used to

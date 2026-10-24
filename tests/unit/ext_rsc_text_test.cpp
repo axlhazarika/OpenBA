@@ -37,12 +37,13 @@ bool ParseEmbedded(const char* path, File& f) {
 }  // namespace
 
 UNIT_TEST(ext_rsc_text_embedded_files) {
-    CHECK(kEmbeddedCount == 5);
+    CHECK(kEmbeddedCount == 6);
     CHECK(Embedded("Dialog/Extensions.rsc") != nullptr);
     CHECK(Embedded("Dialog/EnhancedOptions.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsStringTable.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsWindow.rsc") != nullptr);
     CHECK(Embedded("Dialog/RestrictedFoodsPage.rsc") != nullptr);
+    CHECK(Embedded("Dialog/ItemPriorityPage.rsc") != nullptr);
 }
 
 UNIT_TEST(ext_rsc_text_parse_extensions) {
@@ -122,8 +123,8 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 33);
-    if (strings && strings->blocks.size() == 33) {
+    CHECK(strings && strings->blocks.size() == 46);
+    if (strings && strings->blocks.size() == 45) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
         bool found = false;
@@ -182,6 +183,34 @@ UNIT_TEST(ext_rsc_text_parse_restricted_foods_page) {
           f.Find("labelRestrictedFoodsRow") && f.Find("checkRestrictedFoodsRow") &&
           f.Find("checkRestrictedFoodsShowAll") && f.Find("textRestrictedFoodsHint"));
     CheckKnownTypes(f, "RestrictedFoodsPage.rsc");
+}
+
+UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
+    File f;
+    CHECK(ParseEmbedded("Dialog/ItemPriorityPage.rsc", f));
+    CHECK(f.Find("resource") == nullptr);   // a page, not a dialog: the root object is pageItemPriority
+    const Object* page = f.Find("pageItemPriority");
+    CHECK(page && page->type == "RibbonDescription");
+    CHECK(f.Find("tableItemPriorityTool") && f.Find("tableItemPriorityFuel") &&
+          f.Find("tableItemPriorityClothing") && f.Find("tableItemPriorityHealth") &&
+          f.Find("ribbonItemPriorityCell") && f.Find("labelItemPriorityRow") &&
+          f.Find("checkItemPriorityRow") && f.Find("textItemPriorityRank") &&
+          f.Find("ribbonItemPriorityMoves") && f.Find("checkItemPriorityShowAll"));
+    // The category strip: one tab per category, each a button and its own list.
+    const Object* strip = f.Find("tabItemPriorityCategories");
+    CHECK(strip && strip->type == "TabDescription" && strip->base == "Mod.rsc:tabMod");
+    if (strip) {
+        const Field* tabs = strip->body.Find("_tabs");
+        CHECK(tabs && tabs->isArray && tabs->blocks.size() == 4);
+        if (tabs && tabs->blocks.size() == 4) {
+            CHECK(tabs->blocks[0].Find("_button") && tabs->blocks[0].Find("_content"));
+        }
+    }
+    const Object* up = f.Find("buttonItemPriorityUp");
+    CHECK(up && up->base == "Mod.rsc:buttonMod");
+    const Object* rank = f.Find("textItemPriorityRank");
+    CHECK(rank && rank->body.Find("_text"));
+    CheckKnownTypes(f, "ItemPriorityPage.rsc");
 }
 
 UNIT_TEST(ext_rsc_text_syntax_errors) {

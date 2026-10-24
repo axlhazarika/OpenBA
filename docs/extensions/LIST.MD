@@ -45,3 +45,4 @@
 | Ext B | Spread warmth searches | At high speed, cold citizens pick a warm house a few frames later instead of all in one frame. |
 | Ext B | Split the job reassignment | At high speed, the five-minute job assignment runs one frame after the housing pass. |
 | Ext C | Restricted foods | Stop citizens eating foods you choose, from the Foods page of the extension window (the toolbar's cog button, in a game). They can still be stored, sold and cooked. Off by default; locked for the game, and the choice is recorded in the town's save. |
+| Ext C | Item priority | Rank the tools, fuels, clothing and health items your citizens take first, from the Priority page of the extension window (the toolbar's cog button, in a game); a citizen takes the best-ranked item the storages hold, even from a farther storage. Off by default; locked for the game, and the ranking is recorded in the town's save. |
