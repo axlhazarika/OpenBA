@@ -70,6 +70,21 @@ UNIT_TEST(ext_rsc_text_parse_extensions) {
             CHECK(anchor && anchor->tokens[0].quoted && anchor->tokens[0].text == "blurb");
         }
     }
+    // The description wraps at a width of our own (not the game's, which a mod can widen over the toggle).
+    const Object* blurb = f.Find("textModDescription");
+    CHECK(blurb && blurb->base == "Mod.rsc:textModDescription");
+    if (blurb) {
+        const Field* size = blurb->body.Find("_wordWrapSize");
+        CHECK(size && size->tokens.size() == 1 && size->tokens[0].text == "192");
+        const Field* wrap = blurb->body.Find("_wordWrap");
+        CHECK(wrap && wrap->tokens.size() == 1 && wrap->tokens[0].text == "true");
+    }
+    const Object* list = f.Find("tableList");
+    CHECK(list && list->type == "ContainerDescription");
+    if (list) {
+        const Field* w = list->body.Find("_width");
+        CHECK(w && w->tokens.size() == 1 && w->tokens[0].text == "596");
+    }
     const Object* title = f.Find("labelTitle");
     CHECK(title && title->base == "Mod.rsc:labelTitle" && title->type == "LabelDescription");
     const Object* notice = f.Find("extensionNotInBuild");

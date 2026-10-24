@@ -113,7 +113,11 @@ const FieldDesc kElement[] = {
 // UI::TextDescription::Serialize, version 1 (the +0x8c tail is always read by a text encoding).
 const FieldDesc kText[] = {
     F("_font", Ext), F("_stringTable", Ext), F("_text", String),
-    F("", Bool), F("", Bool), F("", Int), F("", UInt), F("", Int),
+    F("", Bool),                 // +0x84, the element's _drawShadow
+    F("_wordWrap", Bool),        // +0x85, the element's _wrap
+    F("_wordWrapSize", Int),     // +0x88, default 200: the width a wrapped text breaks at (the game's own Mods text: 192)
+    F("", UInt),                 // +0x80
+    F("", Int),                  // +0x8c, the element's _maxWidth (-1: none); NOT the wrap width (setting it shrinks the box)
 };
 // UI::LabelDescription::Serialize: the sprite pair, then the six dwords.
 const FieldDesc kLabel[] = {
@@ -136,7 +140,8 @@ const FieldDesc kTabDesc[] = {
 const FieldDesc kRibbon[] = { F("_vertical", Bool), F("", Bool), F("_cellPad", Int), F("_elements", ExtArray) };
 const FieldDesc kGroup[]  = { F("_elements", ExtArray) };
 const FieldDesc kContainer[] = {
-    F("", Int), F("", Int), F("", Int), F("", Ext), F("", Ext), F("_content", Ext), F("", Bool), F("", Bool),
+    F("_width", Int), F("_height", Int), F("_scrollSpacing", Int),   // +0x68 / +0x6c requested size, +0x74 the scroll bar's gap
+    F("", Ext), F("", Ext), F("_content", Ext), F("", Bool), F("", Bool),
 };
 const FieldDesc kLayoutItem[] = {
     F("_element", Ext), F("_name", String), F("_xAnchorTo", String), F("_yAnchorTo", String),
