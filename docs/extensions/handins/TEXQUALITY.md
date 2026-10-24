@@ -7,10 +7,13 @@
 ## 1. What it does
 
 `ext.texture_quality` (class A, default OFF, next start) with the valued key
-`ext.texture_quality_drop` 0..2 (default 0 = Full: ruled by the user, a `profile=all` run or the row
-alone loads textures at Full). On the Enhanced tab: the combo **Texture quality**
-Full / Half (next start) / Quarter (next start); Full is the row off (or drop 0), Half / Quarter the
-row on with drop 1 / 2 (`SetTextureQualityAndRecord`, `TextureQualityChoice` in `registry_boot.cpp`). The drop is
+`ext.texture_quality_drop` 0..1 (default 0 = Full: ruled by the user, a `profile=all` run or the row
+alone loads textures at Full). **The shipped levels are Full and Half.** Quarter (drop 2) was built,
+measured (the tables below keep its numbers as a record) and removed by the user's ruling after the
+MegaMod screenshots (too blurry to be useful): the key's range is 0..1, so a 2 from an older
+settings.cfg clamps to 1 (Half). The code below the key stays general (any drop N). On the Enhanced
+tab: the combo **Texture quality** Full / Half (next start); Full is the row off (or drop 0), Half the
+row on with drop 1 (`SetTextureQualityAndRecord`, `TextureQualityChoice` in `registry_boot.cpp`). The drop is
 read once at boot (`Ext::TextureQuality::Boot`, after create_on_demand's Boot and before
 stream_cache's) into `TextureQuality::SetDrop`. Off under the faithful profile (the row is off).
 
@@ -101,7 +104,8 @@ only (no UI).
   are small and keep every level).
 - `D_drop0_loadTQ1/Screenshot3.png`: the save made at Half, loaded at Full: full-detail terrain.
 
-**The look at Quarter is the coordinator's / user's call** (close up it is obviously low-res).
+**Ruled (2026-10-24, after the MegaMod screenshots):** Quarter is too blurry to be useful and was
+removed from the key and the combo; Full and Half ship. The Quarter rows above are kept as a record.
 
 ## 6. Verification
 
