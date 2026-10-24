@@ -418,6 +418,18 @@ const ArraySpec kSpec_VideoResource = {           // 0x18004f620
 // ORACLE: shadow. Replay is invalid — see §5.
 // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_SAVESNAP.md, HITCH_BGSAVE.md): ext.background_save's barrier, null by default (MainLoop.h).
 Engine::MainLoop::ExtVideoErrorBarrierFn Engine::MainLoop::_extVideoErrorBarrier = nullptr;
+const bool* Engine::MainLoop::_extFixBootDeviceLost = nullptr;   // fix.boot_device_lost seam
+
+namespace {
+// FIX boot_device_lost (docs/retail_bugs.md section 10): true when the SaveLoad walks of
+// OnVideoError step 5 and OnVideoRestart step 3 are to be skipped: the fix is on and no
+// Save::SaveLoad exists yet. Retail (0x1800dcc30 in OnVideoError, the SaveLoad::OnVideoRestart
+// call in OnVideoRestart 0x1800dc3b0) reads through the null.
+bool SkipSaveLoadWalk() {
+    const bool* const fix = Engine::MainLoop::_extFixBootDeviceLost;
+    return fix != nullptr && *fix && ::Save::SaveLoad::_singleton == nullptr;
+}
+}  // namespace
 
 void Engine::MainLoop::OnVideoError() {
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_SAVESNAP.md, HITCH_BGSAVE.md): ext.background_save -- wait for a background save's worker before anything below runs.
@@ -531,7 +543,9 @@ void Engine::MainLoop::OnVideoError() {
     // The base pointer is re-loaded EVERY iteration (0x1800dcc30 sits inside the
     // loop), which matters because the deleting destructor below can reallocate
     // it. Kept inside the loop for that reason and not hoisted.
-    {
+    // FIX SEAM (NOT RETAIL, docs/retail_bugs.md section 10): fix.boot_device_lost skips this walk
+    // while no SaveLoad exists (a device loss during the boot's loader / splash frames).
+    if (!SkipSaveLoadWalk()) {
         ::Save::SaveLoad* const sl = ::Save::SaveLoad::_singleton;
         // The COUNT is re-read every iteration, not hoisted: 0x1800dcc62 is
         // `CMP EDI, dword ptr [R14+0x58]` INSIDE the loop, and so is the base
@@ -657,7 +671,8 @@ void Engine::MainLoop::OnVideoRestart() {
     // ---- 2 + 3 -------------------------------------------------------------------
     _currentLoop->OnVideoRestart();    // slot 9 (+0x48), ENDGAME B.3.7
 
-    ::Save::SaveLoad::_singleton->OnVideoRestart();
+    // FIX SEAM (NOT RETAIL, docs/retail_bugs.md section 10): fix.boot_device_lost, as in OnVideoError.
+    if (!SkipSaveLoadWalk()) ::Save::SaveLoad::_singleton->OnVideoRestart();
 
     // ---- 4 + 5: re-register each resource with its type, restore its path -------
     {

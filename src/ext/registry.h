@@ -64,6 +64,7 @@ struct Fixes {
     bool rock_seat         = true;   // docs/retail_bugs.md §7, src/ext/rock_seat/ (docs/extensions/handins/ROCKSEAT.md): render only
     bool terrain_resort    = true;   // docs/retail_bugs.md §8, src/ext/terrain_resort/ (docs/extensions/handins/TERRAINRESORT.md)
     bool large_packages    = true;   // docs/retail_bugs.md §9, src/ext/large_packages/ (docs/extensions/handins/LARGEPKM.md): engine seam IO::FileSystem::_extPackagesMounted
+    bool boot_device_lost  = true;   // docs/retail_bugs.md §10 (engine seam Engine::MainLoop::_extFixBootDeviceLost, backend seam BootDeviceLostBackend::SetFixFlag)
 };
 
 // One bool per registered extension (settings key `ext.<id>`). Each extension
