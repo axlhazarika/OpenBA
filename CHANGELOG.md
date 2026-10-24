@@ -26,6 +26,11 @@ Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CM
   its writer thread and survives a crash between its two file replaces; a lost update of the usage stamps.
 - A boot crash on a first-run window size with the texture quality at Half: the menu scene load now waits
   for a pending device reset (the standalone loads that scene on the main thread, retail inside the loader).
+- The borderless window no longer keeps a hidden caption frame, so a boot whose device reset is refused
+  (another window holding the foreground) does not shrink the window and retry every frame.
+- `fix.boot_device_lost` (on): a device removed by a GPU reset during boot is recovered from the reset path, not
+  only from Present, and the main loop no longer walks a SaveLoad that does not exist yet during a device loss
+  before the menu (a retail bug, `docs/retail_bugs.md` section 10). Off under `/profile:faithful`.
 
 ## v1.0.1 (2026-10-23)
 
