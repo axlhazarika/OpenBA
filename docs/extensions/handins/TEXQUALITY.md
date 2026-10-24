@@ -124,6 +124,22 @@ removed from the key and the combo; Full and Half ship. The Quarter rows above a
   vs drop 0, control drop1/drop1: S2 0, S3 0, S6 0; S1 32 and S5 26 are texture keys (desc +
   mip-0 hash differ by design). Traces: `t-texq/trace/*.jsonl`.
 
+## 6b. Follow-up: the boot crash on a short settings.cfg (2026-10-24)
+
+A settings.cfg holding only the two texture keys crashed 4/4 at the main menu (null `AddRef` in
+`ImageBufferData::AttachColorBuffer` <- `FrameCopyImageBuffer` <- the menu scene load); with the drop
+at 0 it passed 2/2. Cause (instrumented): not a thread race. Every `DeviceData_Resize` of the
+first-run window (clamped to the desktop, so it re-arms every few frames) failed at
+`SetFullscreenState(FALSE)` = `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` (another lane's game held the
+foreground), leaving `DeviceData::colorBuffer` released and null until a later retry; all on the main
+thread. Our `ChunkedSceneLoader` (not retail: retail loads the menu scene inside the loader's load) ran
+LoadSceneA1 from the splash update in that window. The drop only moved the load's timing into it.
+Fix (`splash_loop_stubs.cpp`): the chunked menu-scene work also waits while
+`Video::Device::settingsChanged` is set, as BeginCommands does; no retail body gains a check. After:
+crash route 5/5 + 5/5 instrumented, full-settings route 5/5, the gate route (autostart,
+`/profile:faithful`, pause-menu quit) 1/1 exit 0. One other crash (the cursor's staging read at
+`MenuDialogLoopT::Startup`, 1 run in 20) is row 1334 of `docs/known_port_issues.md`.
+
 ## 7. Not done / not tested
 
 - **Metal**: answers `TextureQualityBackend::Supported() == false`; the extension then keeps the drop
