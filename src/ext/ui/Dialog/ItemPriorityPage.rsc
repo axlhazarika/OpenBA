@@ -229,10 +229,12 @@ LabelDescription labelItemPriorityRow : "TownHall.rsc:storageItem"
 }
 
 // The item's place in the ranking ("1" for the best), or a dash while it is not ranked; the controller sets it.
-// A fixed width, right-aligned: "1", "10" and "-" end at the same place, so Up / Down stay in line.
+// A fixed width, right-aligned: "1", "10" and "-" end at the same place, so Up / Down stay in line. The text
+// lines up inside its _maxWidth, so that is the width (and the box is no wider than it).
 TextDescription textItemPriorityRank : "Extensions.rsc:textProfile"
 {
 	int _minWidth = 30;
+	int _maxWidth = 30;
 	Justify _justify = Right;
 	String _text = "ItemPriorityParam";
 }

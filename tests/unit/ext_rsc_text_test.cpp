@@ -209,7 +209,7 @@ UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
     const Object* up = f.Find("buttonItemPriorityUp");
     CHECK(up && up->base == "Mod.rsc:buttonMod");
     const Object* rank = f.Find("textItemPriorityRank");
-    CHECK(rank && rank->body.Find("_minWidth") && rank->body.Find("_justify"));
+    CHECK(rank && rank->body.Find("_minWidth") && rank->body.Find("_maxWidth") && rank->body.Find("_justify"));
     CheckKnownTypes(f, "ItemPriorityPage.rsc");
 }
 
