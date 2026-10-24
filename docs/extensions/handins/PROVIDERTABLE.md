@@ -28,5 +28,6 @@ Registration happens once at boot and a lookup runs once per missed resource pat
 
 * Built on Windows (MinGW, release): unit tests pass, `tools/abi_audit.py` OK, `tools/acceptance/acceptance.sh` 0 lines off target, `OpenBA.exe` builds.
 * In a running game with the table past 8 entries (two throwaway providers registered ahead of the sprite sheet, not part of this change): the Extensions icons draw. Without the change the sprite sheet is the entry refused and every icon draws blank (seen on a branch with a sixth page).
+* After the review fixes (commit 525c53d, Windows release build, no compiler warnings): in a running game the Extensions window opens, its icons draw, the log has no "not registered" line, and the game exits normally.
 * No unit test: `resources.cpp` needs the engine's object factory and is not part of the unit build, and the table is not new logic.
 * Not verified: Linux and macOS.
