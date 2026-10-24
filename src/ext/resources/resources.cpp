@@ -43,25 +43,25 @@ struct Entry {
     ProviderFn  fn;
     void*       user;
 };
-constexpr int kMaxProviders = 8;
-Entry g_table[kMaxProviders];
-int   g_count = 0;
+// The registered providers, in registration order. A vector: it was a fixed table of 8 that the current
+// providers fill exactly (docs/extensions/handins/PROVIDERTABLE.md).
+std::vector<Entry> g_table;
 int   g_provided = 0;
 
 }  // namespace
 
 bool Register(const char* prefix, ProviderFn fn, void* user) {
-    if (prefix == nullptr || fn == nullptr || g_count >= kMaxProviders) return false;
-    if (g_count == 0) RtObject::g_extProvideSeam = &Provide;   // the engine seam, armed once
-    g_table[g_count++] = Entry{prefix, fn, user};
+    if (prefix == nullptr || fn == nullptr) return false;
+    if (g_table.empty()) RtObject::g_extProvideSeam = &Provide;   // the engine seam, armed once
+    g_table.push_back(Entry{prefix, fn, user});
     return true;
 }
 
 bool HasProvider(const char* path) {
-    if (g_count == 0 || path == nullptr || path[0] == '\0') return false;
+    if (g_table.empty() || path == nullptr || path[0] == '\0') return false;
     std::string norm(path);
     for (char& c : norm) if (c == '\\') c = '/';
-    for (int i = 0; i < g_count; ++i)
+    for (size_t i = 0; i < g_table.size(); ++i)
         if (std::strncmp(norm.c_str(), g_table[i].prefix, std::strlen(g_table[i].prefix)) == 0) return true;
     return false;
 }
@@ -117,11 +117,11 @@ void Pin(Object::External* obj, const char* expandedPath) {
 }  // namespace
 
 Object::External* Provide(const char* path) {
-    if (g_count == 0 || path == nullptr || path[0] == '\0') return nullptr;
+    if (g_table.empty() || path == nullptr || path[0] == '\0') return nullptr;
     std::string norm(path);
     for (char& c : norm) if (c == '\\') c = '/';
-    for (int i = 0; i < g_count; ++i) {
-        const Entry& e = g_table[i];
+    for (size_t i = 0; i < g_table.size(); ++i) {
+        const Entry e = g_table[i];   // a copy: a provider that registers another would reallocate the vector
         if (std::strncmp(norm.c_str(), e.prefix, std::strlen(e.prefix)) != 0) continue;
         Object::External* obj = e.fn(norm.c_str(), e.user);
         if (obj != nullptr) {

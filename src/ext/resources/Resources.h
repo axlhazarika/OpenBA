@@ -35,7 +35,7 @@ using ProviderFn = Object::External* (*)(const char* path, void* user);
 // Registers a provider for every path that starts with `prefix`
 // (e.g. "Dialog/Extensions", "Font/SharpFont"). Called from the ext boot
 // (registry_boot.cpp's Ext::InitFromSettings order) by each block. Returns
-// false when the table is full (8 entries).
+// false for a null prefix or function; the table has no size limit.
 bool Register(const char* prefix, ProviderFn fn, void* user);
 
 // True when a registered provider owns `path` (prefix match, nothing built):
