@@ -22,6 +22,7 @@
 #include "system/WideString.h"
 
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -85,11 +86,90 @@ struct Scan {
     std::vector<FileStamp>           pendingKey;
     int32_t                          hits = 0;
     int32_t                          reads = 0;
+    double                           fillMs = 0.0;   // copying kept records out, this scan
+    // The debug exe's shadow: a kept record is not served; the file is read and the read's record
+    // compared with it, and loop 2 runs and is compared with its kept answer.
+    std::map<std::string, Record>    shadowExpect;
+    int32_t                          shadowSame = 0;
+    int32_t                          shadowDiffer = 0;
+    bool                             shadowOverrides = false;
+    std::vector<std::vector<int32_t>> shadowCollides;
 };
-Scan g_scan;
+// Never destroyed: the records hold game-allocator memory (strings, arrays, path sets), and the
+// allocator is gone before static destructors run at exit.
+Scan& ScanState() {
+    static Scan* const s = new Scan;
+    return *s;
+}
+Scan& g_scan = ScanState();
 
 void ForgetScan() {
-    g_scan = Scan();
+    ScanState() = Scan();
+}
+
+bool SameChars(const char* a, const char* b) {
+    if (a == nullptr || b == nullptr)
+        return a == b;
+    return std::strcmp(a, b) == 0;
+}
+
+// Two path sets with the same shape, keys (by characters), balance and height.
+bool SameSet(const RtIO::ModFilenameSet& a, const RtIO::ModFilenameSet& b) {
+    if (a.GetCount() != b.GetCount())
+        return false;
+    using Node = RtIO::ModFilenameSet::Node;
+    std::vector<std::pair<const Node*, const Node*>> stack;
+    if ((a._root == nullptr) != (b._root == nullptr))
+        return false;
+    if (a._root != nullptr)
+        stack.emplace_back(a._root, b._root);
+    while (!stack.empty()) {
+        const Node* x = stack.back().first;
+        const Node* y = stack.back().second;
+        stack.pop_back();
+        if (!SameChars(x->element._data, y->element._data) || x->balance != y->balance ||
+            x->height != y->height)
+            return false;
+        if ((x->left == nullptr) != (y->left == nullptr) || (x->right == nullptr) != (y->right == nullptr))
+            return false;
+        if (x->left != nullptr)
+            stack.emplace_back(x->left, y->left);
+        if (x->right != nullptr)
+            stack.emplace_back(x->right, y->right);
+    }
+    return true;
+}
+
+template <class T>
+bool SameArray(const Collection::Array<T>& a, const Collection::Array<T>& b) {
+    if (a._size != b._size)
+        return false;
+    for (int32_t i = 0; i < a._size; ++i) {
+        if (!(a._data[i] == b._data[i]))
+            return false;
+    }
+    return true;
+}
+
+// The first member two loop-1 records differ in, or null.
+const char* RecordDifference(const RtIO::Mod& a, const RtIO::Mod& b) {
+    if (!SameChars(a.name._data, b.name._data) || !SameChars(a.author._data, b.author._data) ||
+        !SameChars(a.description._data, b.description._data))
+        return "strings";
+    if (a.i18 != b.i18 || a.i1c != b.i1c || a.order != b.order || a.i24 != b.i24 || a.i28 != b.i28 ||
+        a.i2c != b.i2c || a.enabled != b.enabled)
+        return "ints";
+    if (!SameArray(a.ints, b.ints))
+        return "icon";
+    if (!SameArray(a.bytes, b.bytes))
+        return "preview";
+    if (!SameChars(a.file._data, b.file._data))
+        return "file";
+    if (!SameSet(a.set, b.set))
+        return "path set";
+    if (a.files._size != 0 || b.files._size != 0)
+        return "files";
+    return nullptr;
 }
 
 int ModCached(const System::Filename& file, RtIO::Mod& out) {
@@ -103,12 +183,21 @@ int ModCached(const System::Filename& file, RtIO::Mod& out) {
     auto it = g_scan.records.find(s.name);
     if (s.size >= 0 && it != g_scan.records.end() && it->second.stamp == s) {
         ++g_scan.hits;
+        if (OPENBA_PATHINDEX_CHECK) {
+            g_scan.shadowExpect[s.name] = std::move(it->second);
+            g_scan.records.erase(it);
+            g_scan.pending[s.name] = s;
+            ++g_scan.reads;
+            return IO::Modification::kModRead;
+        }
         if (it->second.discarded)
             return IO::Modification::kModSkipped;
         // Everything the read would have built; `file` stays the one loop 1 set from FindFiles.
+        const auto t0 = std::chrono::steady_clock::now();
         const System::Filename keep(out.file);
         out = *it->second.mod;   // Mod::operator= 0x180026ef0: strings shared, arrays and set copied
         out.file = keep;
+        g_scan.fillMs += MsSince(t0);
         return IO::Modification::kModFilled;
     }
     ++g_scan.reads;
@@ -130,6 +219,22 @@ void ModStored(const System::Filename& file, const RtIO::Mod* record) {
     r.discarded = record == nullptr;
     if (record != nullptr)
         r.mod.reset(new RtIO::Mod(*record));   // Mod's copy ctor 0x1800101e0
+    auto shadow = g_scan.shadowExpect.find(name);
+    if (shadow != g_scan.shadowExpect.end()) {
+        const char* diff = nullptr;
+        if (shadow->second.discarded != r.discarded)
+            diff = "discarded";
+        else if (record != nullptr)
+            diff = RecordDifference(*shadow->second.mod, *record);
+        if (diff == nullptr) {
+            ++g_scan.shadowSame;
+        } else {
+            ++g_scan.shadowDiffer;
+            std::fprintf(stderr, "[MenuEntry] shadow MISMATCH: kept record of %s differs in %s\n",
+                         name.c_str(), diff);
+        }
+        g_scan.shadowExpect.erase(shadow);
+    }
     g_scan.records[name] = std::move(r);
 }
 
@@ -158,9 +263,20 @@ void PruneUnseen() {
 }
 
 void LogScan(const IO::Modification& mod, const char* overrides) {
-    std::fprintf(stderr, "[MenuEntry] mod scan: %d mods, %d .pkm from the last scan, %d read; collisions %s\n",
-                 mod._mods._size, g_scan.hits, g_scan.reads, overrides);
+    std::fprintf(stderr,
+                 "[MenuEntry] mod scan: %d mods, %d .pkm from the last scan (records copied in %.1f ms), "
+                 "%d read; collisions %s\n",
+                 mod._mods._size, g_scan.hits, g_scan.fillMs, g_scan.reads, overrides);
+    if (OPENBA_PATHINDEX_CHECK && g_scan.shadowSame + g_scan.shadowDiffer > 0) {
+        std::fprintf(stderr, "[MenuEntry] shadow %s: %d kept records read again, %d same, %d differ\n",
+                     g_scan.shadowDiffer == 0 ? "SAME" : "MISMATCH", g_scan.shadowSame + g_scan.shadowDiffer,
+                     g_scan.shadowSame, g_scan.shadowDiffer);
+    }
+    g_scan.shadowSame = 0;
+    g_scan.shadowDiffer = 0;
+    g_scan.shadowExpect.clear();
     g_scan.hits = 0;
+    g_scan.fillMs = 0.0;
     g_scan.reads = 0;
 }
 
@@ -173,6 +289,11 @@ bool OverridesRestore(IO::Modification& mod) {
     g_scan.pendingKey = keyed ? key : std::vector<FileStamp>();
     if (!keyed || !g_scan.overridesValid || key != g_scan.overrides.key ||
         g_scan.overrides.collides.size() != static_cast<size_t>(mod._mods._size)) {
+        return false;
+    }
+    if (OPENBA_PATHINDEX_CHECK) {
+        g_scan.shadowOverrides = true;
+        g_scan.shadowCollides = g_scan.overrides.collides;
         return false;
     }
     // Loop 2's appends, in its order: for each mod i, mods[j].file for every j it collides with.
@@ -219,9 +340,45 @@ void OverridesBuilt(const IO::Modification& mod) {
         }
         a.collides.push_back(std::move(js));
     }
+    const bool shadow = g_scan.shadowOverrides;
+    const bool same = a.collides == g_scan.shadowCollides;
+    g_scan.shadowOverrides = false;
     g_scan.overrides = std::move(a);
     g_scan.overridesValid = true;
-    LogScan(mod, "computed");
+    if (shadow)
+        LogScan(mod, same ? "computed; shadow SAME as the kept answer"
+                          : "computed; shadow MISMATCH with the kept answer");
+    else
+        LogScan(mod, "computed");
+}
+
+// The boot's first scan (Engine::Startup, engine.mods) runs before the registry exists, so its
+// reads are not stored. Its records are still in the mod list: loop 1's record is the mod as it
+// stands with the settings part undone (enabled and order back to the 0 loop 1 leaves them at)
+// and loop 2's `files` freed (~Array<Filename>'s body, 0x1800098d0: the header ends zeroed, as a
+// record born in loop 1 has it). Each is stamped now; the boot's second scan (the main menu)
+// then reads only a .pkm that changed in between. Files the first scan discarded have no mod and
+// are read again.
+void PrimeFromBootScan() {
+    const IO::Modification* mod = IO::Modification::_singleton;
+    if (!Ext().menu_entry || mod == nullptr)
+        return;
+    int32_t primed = 0;
+    for (int32_t i = 0; i < mod->_mods._size; ++i) {
+        const RtIO::Mod& m = mod->_mods._data[i];
+        const FileStamp s = Stat(Chars(m.file));
+        if (s.size < 0)
+            continue;
+        Record r;
+        r.stamp = s;
+        r.mod.reset(new RtIO::Mod(m));   // Mod's copy ctor 0x1800101e0
+        r.mod->enabled = 0;
+        r.mod->order = 0;
+        r.mod->files.DestroyAndFree();   // ~Array<Filename>'s body: elements, buffer, zeroed header
+        g_scan.records[s.name] = std::move(r);
+        ++primed;
+    }
+    std::fprintf(stderr, "[MenuEntry] %d mod records kept from the boot's first scan\n", primed);
 }
 
 // ============================================================================
@@ -451,6 +608,8 @@ void Sync() {
     IO::Modification::_extRemountSkip = faithful ? nullptr : &RemountSkip;
     IO::Modification::_extRemountDone = faithful ? nullptr : &RemountDone;
     IO::FileSystem::_extPackagesClosed = faithful ? nullptr : &PackagesClosed;
+    if (!faithful)
+        PrimeFromBootScan();
 }
 
 }  // namespace MenuEntry

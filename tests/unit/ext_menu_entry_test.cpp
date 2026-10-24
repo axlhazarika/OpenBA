@@ -71,7 +71,9 @@ Install Sample() {
     in.disk.Put("WinData/MegaMod2.pkm", 4000, 14);
     in.disk.Put("WinData/Other.pkm", 5000, 15);
     in.base = { "WinData/Audio.pkg", "WinData/Resource.pkg" };
-    in.mods = { { "WinData/MegaMod1.pkm", true }, { "WinData/MegaMod2.pkm", true }, { "WinData/Other.pkm", false } };
+    in.mods = { { "WinData/MegaMod1.pkm", true },
+                { "WinData/MegaMod2.pkm", true },
+                { "WinData/Other.pkm", false } };
     MountedPack p;
     p.object = 0x1000;
     p.name = "Resource";
