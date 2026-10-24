@@ -650,6 +650,8 @@ void Modification::SetupFileSystem() {
         // owns a string is `Filename::operator=(const Filename&)`, 0x180006770
         // (Filename.h's DELIMITERS note). `ext->_path` is the class's
         // `System::Filename`, and so is `e->file`.
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): a `_path` write.
+        ::Object::NotifyResourceEvent(::Object::ResourceEvent::PathWrite, nullptr, ext, e->file._data);
         ext->_path = e->file;                              // 0x1800af341/0x1800af3b3
 
         System::Filename compiled(                            // 0x1800af3c0  [RBP+0x6f]

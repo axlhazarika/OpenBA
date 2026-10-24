@@ -27,4 +27,14 @@ void VisitExternal(::Object::External* cur, const ::Object::BaseTypeInfo& typeIn
 // The `[VisitPass]` exit line (installed with the `[ExtAdd]` one).
 void DumpVisitCounters();
 
+// NOT RETAIL, print-only (docs/extensions/handins/VISITREPLAY.md section 1): the
+// ExternalPtr pointers per mode, printed in DumpVisitCounters' `[FindCensus]` line
+// with the FindOrLoad / Find call counts.
+struct PtrCensus {
+    uint64_t visit;   // mode 1: a non-null pointer visited
+    uint64_t read2;   // the load tail ran with reference mode on (save load)
+    uint64_t read3;   // ... with reference mode off (a resource load)
+};
+extern PtrCensus g_ptrCensus;   // external_visit.cpp; external_ptr_serialize.cpp counts
+
 }  // namespace RtObject

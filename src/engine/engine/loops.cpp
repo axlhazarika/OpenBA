@@ -1016,7 +1016,10 @@ void Engine::Loader::Run() {
     // `CALL ?LoadResources@UpdateLoop@Engine@@QEAAXXZ` -- a near CALL in
     // retail, so no qualification question: it is non-virtual.
     LoadTime::Stamp("loader.resources");   // NOT RETAIL: print-only
+    // NOT RETAIL, print-only: rows a first touch marked, per bracket part (VISITREPLAY.md section 1).
+    RtObject::VisitCensusPass("outside", typeid(*_loop).name(), factory->_cleanBitIndex);
     loop->LoadResources();
+    RtObject::VisitCensusPass("resources", typeid(*_loop).name(), factory->_cleanBitIndex);
 
     // slot 6 Load, dispatched off the loop's OWN table, so a LoaderLoop gets
     // the empty body and a DialogLoaderLoopT or the exe's GameUpdateLoop its
@@ -1025,6 +1028,7 @@ void Engine::Loader::Run() {
     loop->Load();
 
     factory->_loadEnabled = false;
+    RtObject::VisitCensusPass("load", typeid(*_loop).name(), factory->_cleanBitIndex);   // NOT RETAIL, print-only
 
     ::Video::Device* owner2 = engine->_videoDevice;
     ::Video::DeviceData* mode2 = owner2->deviceData;

@@ -326,6 +326,21 @@ const Entry kEntries[] = {
       "Skips rescanning and remounting the mod files when returning to the main menu if none of "
       "them changed. Same game data.",
       0, [](State& s) -> bool& { return s.ext.menu_entry; } },
+    // VISITREPLAY (docs/extensions/handins/VISITREPLAY.md, issue #13): each loader bracket's first
+    // touch of a resource re-walks what it references; the rows that walk reaches are recorded and
+    // the next bracket reaches the same rows from the record. Read once at boot (next start).
+    { "visit_replay", Tier::Extension, Class::A, true,
+      "Remembered resource links",
+      "Remembers which resources each resource uses, so the loading after the menu, a new game or a "
+      "load skips walking them again. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.visit_replay; } },
+    // VISITREPLAY section B4: FindOrLoad's hit arm answered from a request (or a save's reference
+    // id) that already named a row. Read once at boot (next start).
+    { "find_fastpath", Tier::Extension, Class::A, true,
+      "Faster resource lookups",
+      "Remembers where each resource a load asks for already is, so loading a large mod set or a save "
+      "skips looking it up again. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.find_fastpath; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

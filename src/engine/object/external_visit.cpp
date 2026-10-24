@@ -110,6 +110,8 @@
 #include "object/External.h"
 #include "object/TypeInfo.h"
 #include "system/Filename.h"
+#include "external_find.h"       // g_fc: the [FindCensus] line
+#include "external_compiled.h"   // g_cc; FindOrLoadVisit (VISITREPLAY.md)
 
 // The debug exe walks behind every shortcut and compares (see THE CHECK).
 #if defined(_DEBUG)
@@ -131,6 +133,12 @@ struct VisitCounters {
     uint64_t mismatches;  // ... and differed
 };
 VisitCounters g_vc{};
+
+}  // namespace
+
+PtrCensus g_ptrCensus{};
+
+namespace {
 
 // (d): the row's key is `cur->_path`, character for character. The common case
 // is one shared buffer (Add's key is a Filename copy of the object's path).
@@ -176,7 +184,7 @@ void VisitExternal(::Object::External* cur, const ::Object::BaseTypeInfo& typeIn
     if (shortcut) {
         ++g_vc.shortcuts;
         if (f->_loadEnabled)
-            RtObject_ExternalFactory_AddHit(f, node, cur);
+            RtObject_ExternalFactory_AddHit(f, node, cur, false);
         (void)cur->IsDerivedFrom(typeInfo.typeId);
         return;
     }
@@ -184,7 +192,8 @@ void VisitExternal(::Object::External* cur, const ::Object::BaseTypeInfo& typeIn
     // ---- retail's walk (external_ptr_serialize.cpp mode 1, 0x1800042ce) -----
     ++g_vc.walks;
     System::Filename scratch = cur->GetPath();                  // [rbp+0x38]
-    const ::Object::External* found = f->FindOrLoad(scratch);
+    // NOT RETAIL: FindOrLoad's body without ext.find_fastpath (docs/extensions/handins/VISITREPLAY.md).
+    const ::Object::External* found = RtObject_ExternalFactory_FindOrLoadVisit(f, &scratch);
     if (found != nullptr) {
         // The answer is genuinely discarded -- retail calls it for the side
         // effect of nothing, and keeps the pointer it already had.
@@ -235,6 +244,11 @@ void DumpVisitCounters() {
            (unsigned long long)g_vc.verified, (unsigned long long)g_vc.checked,
            (unsigned long long)g_vc.mismatches, (unsigned long long)size, broken ? 1 : 0,
            (unsigned long long)duplicates);
+    fprintf(stderr, "[FindCensus] findOrLoad=%llu find=%llu hit=%llu miss=%llu ptrVisit=%llu ptrRead2=%llu ptrRead3=%llu\n",
+            (unsigned long long)g_cc.findOrLoadCalls, (unsigned long long)g_fc.calls,
+            (unsigned long long)g_cc.cacheHit, (unsigned long long)g_cc.cacheMiss,
+            (unsigned long long)g_ptrCensus.visit, (unsigned long long)g_ptrCensus.read2,
+            (unsigned long long)g_ptrCensus.read3);
 }
 
 }  // namespace RtObject
