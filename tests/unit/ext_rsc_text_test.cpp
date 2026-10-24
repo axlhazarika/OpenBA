@@ -97,7 +97,50 @@ UNIT_TEST(ext_rsc_text_parse_extensions) {
         const Field* ov = notice->body.Find("_override");
         CHECK(ov && ov->blocks.size() == 3 && ov->blocks[1].fields.size() == 1);
     }
-    CHECK(f.objects.size() == 36);
+    // Two tabs, Optional first: each its own button and list, down to its own table (the controller finds
+    // tableOptional / tableDefault by name), all deriving from the bases the in-game pages share.
+    const Object* tabs = f.Find("tabExtensions");
+    CHECK(tabs && tabs->type == "TabDescription" && tabs->base == "Mod.rsc:tabMod");
+    if (tabs) {
+        const Field* list = tabs->body.Find("_tabs");
+        CHECK(list && list->isArray && list->blocks.size() == 2);
+        if (list && list->blocks.size() == 2) {
+            const Field* b0 = list->blocks[0].Find("_button");
+            const Field* c0 = list->blocks[0].Find("_content");
+            const Field* b1 = list->blocks[1].Find("_button");
+            const Field* c1 = list->blocks[1].Find("_content");
+            CHECK(b0 && b0->tokens[0].text == "tabButtonOptional" && c0 && c0->tokens[0].text == "entryListOptional");
+            CHECK(b1 && b1->tokens[0].text == "tabButtonDefault" && c1 && c1->tokens[0].text == "entryListDefault");
+        }
+    }
+    for (const char* half : { "Optional", "Default" }) {
+        const std::string h(half);
+        const Object* caption = f.Find(("tabCaption" + h).c_str());
+        CHECK(caption && caption->base == "tabCaption");
+        if (caption) {
+            const Field* text = caption->body.Find("_text");
+            CHECK(text && text->tokens[0].text == "ExtensionsTab" + h);
+        }
+        const Object* button = f.Find(("tabButton" + h).c_str());
+        CHECK(button && button->type == "ButtonDescription" && button->base == "tabButton");
+        const Object* entries = f.Find(("entryList" + h).c_str());
+        CHECK(entries && entries->base == "entryList");
+        if (entries) {
+            const Field* els = entries->body.Find("_elements");
+            CHECK(els && els->tokens.size() == 2 && els->tokens[1].text == "tableList" + h);
+        }
+        const Object* box = f.Find(("tableList" + h).c_str());
+        CHECK(box && box->type == "ContainerDescription" && box->base == "tableList");
+        if (box) {
+            const Field* content = box->body.Find("_content");
+            CHECK(content && content->tokens[0].text == "table" + h);
+        }
+        const Object* table = f.Find(("table" + h).c_str());
+        CHECK(table && table->type == "RibbonDescription" && table->base == "tableMods");
+    }
+    // The bases the in-game pages derive from (RestrictedFoodsPage.rsc, ItemPriorityPage.rsc) stay.
+    CHECK(f.Find("entryList") && f.Find("tableList") && f.Find("tableMods"));
+    CHECK(f.objects.size() == 46);
 }
 
 UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
@@ -123,7 +166,18 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 46);
+    CHECK(strings && strings->blocks.size() == 47);
+    if (strings) {
+        // The Extensions dialog's two tab captions.
+        int tabKeys = 0;
+        for (const auto& b : strings->blocks) {
+            const Field* n = b.Find("_name");
+            if (n && !n->tokens.empty() &&
+                (n->tokens[0].text == "ExtensionsTabOptional" || n->tokens[0].text == "ExtensionsTabDefault"))
+                ++tabKeys;
+        }
+        CHECK(tabKeys == 2);
+    }
     if (strings && strings->blocks.size() == 45) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
