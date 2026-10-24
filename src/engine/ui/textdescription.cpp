@@ -108,9 +108,9 @@ TextDescription::~TextDescription() {
 //   System::String::Serialize(&_name, &pair)               0x1800c9930
 //   rw->vt[0x78](rw, &_b84, 0)   kScalarBool
 //   rw->vt[0x78](rw, &_b85, 0)   kScalarBool
-//   rw->vt[0xa0](rw, &_i88, 0)   kScalarInt
+//   rw->vt[0xa0](rw, &_wordWrapSize, 0)   kScalarInt
 //   rw->vt[0x98](rw, &_u80, 0)   kScalarUInt   <- NOT in offset order, and
-//                                                 NOT the same slot as _i88
+//                                                 NOT the same slot as _wordWrapSize
 //   if (rw->GetVersion() >= 1 || !encoding->vt[0]())
 //       rw->vt[0xa0](rw, &_i8c, 0)   kScalarInt
 //   if (rw) rw->vt[0](rw, 1)
@@ -139,7 +139,7 @@ bool TextDescription::Serialize(IO::Stream& streamv) {
 
     rw->SerializeBool(_b84, nullptr);
     rw->SerializeBool(_b85, nullptr);
-    rw->SerializeInt(_i88, nullptr);
+    rw->SerializeInt(_wordWrapSize, nullptr);
     rw->SerializeUInt(_u80, nullptr);
 
     const int32_t rwVersion = rw->GetVersion();                // 18011ef0e

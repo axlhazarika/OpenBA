@@ -651,11 +651,11 @@ void TextDescription::CreateInstance(Object::InternalPtr<TextElement>* element,
     // Five more stores, each through its own re-read of the slot, and note the
     // TWO SEPARATE BYTES at +0xe8 / +0xe9 (the ctor above writes them as one
     // word) and that +0xf4 is written BEFORE +0xf0.
-    element->Get()->_drawShadow  = _b84;                           // 18011f00b  +0xe8 <- +0x84
-    element->Get()->_wrap        = _b85;                           // 18011f01b  +0xe9 <- +0x85
-    element->Get()->_lineSpacing = _i88;                           // 18011f02a  +0xec <- +0x88
-    element->Get()->_justify     = static_cast<int32_t>(_u80);     // 18011f039  +0xf4 <- +0x80
-    element->Get()->_maxWidth    = _i8c;                           // 18011f04d  +0xf0 <- +0x8c
+    element->Get()->_drawShadow   = _b84;                          // 18011f00b  +0xe8 <- +0x84
+    element->Get()->_wrap         = _b85;                          // 18011f01b  +0xe9 <- +0x85
+    element->Get()->_wordWrapSize = _wordWrapSize;                 // 18011f02a  +0xec <- +0x88
+    element->Get()->_justify      = static_cast<int32_t>(_u80);    // 18011f039  +0xf4 <- +0x80
+    element->Get()->_maxWidth     = _i8c;                          // 18011f04d  +0xf0 <- +0x8c
 }
 
 }  // namespace UI

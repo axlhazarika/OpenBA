@@ -116,6 +116,7 @@ ContainerDescription tableList : "Mod.rsc:tableList"
 {
 	int _width = 596;
 	int _height = 350;
+	int _scrollSpacing = 4;
 	ElementDescription _content = "tableMods";
 }
 
@@ -176,7 +177,6 @@ TextDescription textModName : "Mod.rsc:textModName"
 // widens the Mods window's description text (MegaMod does) would otherwise push the text over the toggle.
 TextDescription textModDescription : "Mod.rsc:textModDescription"
 {
-	bool _wordWrap = true;
 	int _wordWrapSize = 192;
 }
 

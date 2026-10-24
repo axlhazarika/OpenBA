@@ -67,7 +67,7 @@ TextElement::~TextElement() {
 void TextElement::ComputeSize() {
     if ((_flags & kElementFlagNeedsSizeCalc) == 0) return;
 
-    _font->ComputeStringLayout(_cachedText, _wrap != 0, _lineSpacing,
+    _font->ComputeStringLayout(_cachedText, _wrap != 0, _wordWrapSize,
                                _maxWidth, _justify, _layoutWidth, _layoutHeight,
                                nullptr);
 
@@ -131,13 +131,13 @@ void TextElement::Draw(SpriteContext& ctx, uint8_t alpha) const {
 
     if (_drawShadow != 0) {
         ctx.AddFont(Object::ExternalPtr<Font>(font), _cachedText, _wrap != 0,
-                    _lineSpacing, _justify, _maxWidth,
+                    _wordWrapSize, _justify, _maxWidth,
                     _layoutLeft + 1, _layoutTop + 1 + baseline,
                     0xff000000u);
     }
 
     ctx.AddFont(Object::ExternalPtr<Font>(font), _cachedText, _wrap != 0,
-                _lineSpacing, _justify, _maxWidth,
+                _wordWrapSize, _justify, _maxWidth,
                 _layoutLeft, baseline + _layoutTop,
                 rtuielem::ComputeColor(raw, alpha));
 }

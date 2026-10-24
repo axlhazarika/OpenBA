@@ -111,13 +111,21 @@ const FieldDesc kElement[] = {
     F("_toolTipText", String),           // +0x60
 };
 // UI::TextDescription::Serialize, version 1 (the +0x8c tail is always read by a text encoding).
+// The five tail slots, in stream order (member names of TextDescription.h and TextElement.h):
+//   stream  description  member         element member   meaning
+//   1st     +0x84        _b84           _drawShadow      black +1/+1 pass
+//   2nd     +0x85        _b85           _wrap            word wrap on
+//   3rd     +0x88        _wordWrapSize  _wordWrapSize    the width a wrapped text breaks at (default 200)
+//   4th     +0x80        _u80           _justify         UI::Font::Justify
+//   5th     +0x8c        _i8c           _maxWidth        -1: none; NOT the wrap width (shrinks the box)
+// Both Int slots are the same kind, so swapping them reads fine and writes the wrap width into _maxWidth.
 const FieldDesc kText[] = {
     F("_font", Ext), F("_stringTable", Ext), F("_text", String),
-    F("", Bool),                 // +0x84, the element's _drawShadow
-    F("_wordWrap", Bool),        // +0x85, the element's _wrap
-    F("_wordWrapSize", Int),     // +0x88, default 200: the width a wrapped text breaks at (the game's own Mods text: 192)
-    F("", UInt),                 // +0x80
-    F("", Int),                  // +0x8c, the element's _maxWidth (-1: none); NOT the wrap width (setting it shrinks the box)
+    F("", Bool),                 // 1st: _drawShadow (not set from text)
+    F("_wordWrap", Bool),        // 2nd: _wrap
+    F("_wordWrapSize", Int),     // 3rd: _wordWrapSize
+    F("", UInt),                 // 4th: _justify (not set from text)
+    F("", Int),                  // 5th: _maxWidth (not set from text)
 };
 // UI::LabelDescription::Serialize: the sprite pair, then the six dwords.
 const FieldDesc kLabel[] = {
