@@ -351,6 +351,16 @@ const Entry kEntries[] = {
       "Remembers where each resource a load asks for already is, so loading a large mod set or a save "
       "skips looking it up again. Same game data. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.find_fastpath; } },
+    // HEAPSLACK (docs/extensions/handins/HEAPSLACK.md, issue #13): the allocator keeps the pages it
+    // would decommit at the top of a range (up to 64 MB in all) and zeroes them itself when retail
+    // would have committed them fresh. Same bytes in every allocation. Read once at boot (next start).
+    // ON by default: a MegaMod start without the derived cache 15.75 -> 14.35 s to the menu; warm
+    // starts and the stress town are unchanged.
+    { "heap_slack", Tier::Extension, Class::A, true,
+      "Fewer memory round trips",
+      "Keeps recently freed memory ready instead of handing it back to the system and asking for it "
+      "again, so large mod sets load faster. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.heap_slack; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

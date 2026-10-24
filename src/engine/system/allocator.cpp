@@ -84,6 +84,10 @@ using rt::system::kThisFreeShl2;
 // zero until the ctor below runs (B3R W0-SM M1: was the mint's storage cell).
 System::MemoryAllocator* System::MemoryAllocator::_singleton = nullptr;
 
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): null by default; ext.heap_slack
+// sets it once at boot through RtSystemAllocatorSetCommitSeam (end of this file).
+const rt::system::MemoryAllocatorCommitSeam* System::MemoryAllocator::_extCommitSeam = nullptr;
+
 // The instrument seat (MemoryAllocator.h): STANDALONE DEVIATION, instrument
 // seat, retail has no such branch. Constant-initialised null; armed at boot only.
 System::MemoryAllocatorInstrument System::g_memoryAllocatorInstrument = { nullptr, nullptr };
@@ -311,7 +315,12 @@ void MemoryAllocator::CommitToPage(MemoryRange* range, void* upTo) {
     uint64_t need = ((page - reinterpret_cast<uint64_t>(range->base) - 1 +  // CAST-OK: alloc_header
                       reinterpret_cast<uint64_t>(upTo)) / page) * page;  // CAST-OK: alloc_header
     if (have <= need && need - have != 0) {
-        g_plat.commit(range->base + have, need - have);
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): ext.heap_slack decides
+        // what reaches the platform; retail's mark is stored either way.
+        if (_extCommitSeam != nullptr)
+            _extCommitSeam->commit(g_plat, range->base, have, need);
+        else
+            g_plat.commit(range->base + have, need - have);
         range->committed = need;
     }
 }
@@ -322,7 +331,12 @@ void MemoryAllocator::ReleaseToPage(MemoryRange* range, void* downTo) {
     uint64_t need = ((page - reinterpret_cast<uint64_t>(range->base) - 1 +  // CAST-OK: alloc_header
                       reinterpret_cast<uint64_t>(downTo)) / page) * page;  // CAST-OK: alloc_header
     if (need < range->committed) {
-        g_plat.decommit(range->base + need, range->committed - need);
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): ext.heap_slack may keep
+        // the pages committed; retail's mark is lowered either way.
+        if (_extCommitSeam != nullptr)
+            _extCommitSeam->decommit(g_plat, range->base, need, range->committed);
+        else
+            g_plat.decommit(range->base + need, range->committed - need);
         range->committed = need;
     }
 }
@@ -492,7 +506,11 @@ void* MemoryAllocator::Allocate(uint64_t size, int align) {
                           reinterpret_cast<uint64_t>(range->base) - 1 + page +  // CAST-OK: alloc_header
                           reinterpret_cast<uint64_t>(tag)) / page) * page;  // CAST-OK: alloc_header
         if (have <= need && need - have != 0) {
-            g_plat.commit(range->base + have, need - have);
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): as in CommitToPage.
+            if (_extCommitSeam != nullptr)
+                _extCommitSeam->commit(g_plat, range->base, have, need);
+            else
+                g_plat.commit(range->base + have, need - have);
             range->committed = need;
         }
     }
@@ -713,6 +731,20 @@ const char* PlatformSeamMissing() {
 
 extern "C" void RtSystemAllocatorSetCutoverArmer(RtAllocCutoverArmer fn) {
     g_armCutover = fn;
+}
+
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md). The store is made under the live
+// allocator's lock: a commit or decommit already inside Allocate / Free finishes under the policy
+// it started with, and every later one sees the new seam.
+void RtSystemAllocatorSetCommitSeam(const rt::system::MemoryAllocatorCommitSeam* seam) {
+    MemoryAllocator* self = MemoryAllocator::Get();
+    if (self == nullptr || !g_platInstalled) {
+        MemoryAllocator::_extCommitSeam = seam;
+        return;
+    }
+    g_plat.lockEnter(&self->lock);
+    MemoryAllocator::_extCommitSeam = seam;
+    g_plat.lockLeave(&self->lock);
 }
 
 // WAVE 22 LANE ALLOC -- SELF-ATTESTATION, and why it is fprintf and not printf.
