@@ -32,9 +32,14 @@ uint64_t EvictTarget(uint64_t capBytes, uint64_t refusedBytes) {
     return std::max(target, capBytes / 2);
 }
 
-// A rewrite waits this long after the cache's last Find / Put (the loads are over), unless asked
-// for at once (RequestCompact).
-constexpr auto kCompactQuiet = std::chrono::seconds(10);
+// The quiet spell: this long after the cache's last Find / Put the loads are over. The usage stamps
+// are written then (whoever the consumer is: ext.package_cache never sends RequestFlush), and the
+// rewrite runs then unless asked for at once (RequestCompact). 10 s; the unit test shortens it.
+std::atomic<int> g_quietMs{10000};
+
+std::chrono::milliseconds QuietSpell() {
+    return std::chrono::milliseconds(g_quietMs.load(std::memory_order_relaxed));
+}
 
 // Set by the unit test: the rewrite stops after replacing derived.dat, as a crash there would.
 std::atomic<bool> g_crashBetweenReplaces{false};
@@ -236,6 +241,10 @@ uint64_t KeyId(const Key& key) {
 
 void SetCrashBetweenReplacesForTest(bool on) {
     g_crashBetweenReplaces.store(on);
+}
+
+void SetQuietSpellForTest(int ms) {
+    g_quietMs.store(ms, std::memory_order_relaxed);
 }
 
 bool RequestClear(const std::string& dir) {
@@ -828,10 +837,11 @@ uint64_t Store::BytesOnDisk() const {
     return _open ? _dataEnd + _indexEnd : 0;
 }
 
-// The keep list is rewritten only on a Flush (the load's end) or at Close, never per payload: a
-// first launch stores thousands of entries, and a list rewritten after each would be quadratic.
-// The rewrite (Compact) runs when the queue is empty: at once after RequestCompact, otherwise once
-// per run, kCompactQuiet after the cache was last used, once a load's end (RequestFlush) was seen.
+// The usage stamps are rewritten on a Flush / RequestFlush (a load's end), after the quiet spell, at
+// Close and at exit (WriteStampsNow), never per payload: a first launch stores thousands of entries,
+// and a list rewritten after each would be quadratic. The rewrite (Compact) runs when the queue is
+// empty: at once after RequestCompact, otherwise once per run after the quiet spell, once a load's
+// end (RequestFlush) was seen.
 void Store::WriterMain() {
     std::unique_lock<std::mutex> lock(_mutex);
     for (;;) {
@@ -847,7 +857,9 @@ void Store::WriterMain() {
             _cv.notify_all();
             continue;
         }
-        if (_usedDirty && (_flushRequested || _stop)) {
+        const auto deadline = _lastActivity + QuietSpell();
+        const bool quiet    = std::chrono::steady_clock::now() >= deadline;
+        if (_usedDirty && (_flushRequested || _stop || quiet)) {
             _writing = true;
             lock.unlock();
             if (!_disabled.load(std::memory_order_acquire)) WriteUsedList();
@@ -869,9 +881,8 @@ void Store::WriterMain() {
             _cv.notify_all();
             continue;
         }
-        const bool waiting  = wanted && _compactArmed && !_compactDone;
-        const auto deadline = _lastActivity + kCompactQuiet;
-        if (wanted && (_compactNow || (waiting && std::chrono::steady_clock::now() >= deadline))) {
+        const bool waiting = wanted && _compactArmed && !_compactDone;
+        if (wanted && (_compactNow || (waiting && quiet))) {
             _writing = true;
             lock.unlock();
             // Background mode (Windows: low I/O and memory priority) for the rewrite only: the
@@ -889,7 +900,7 @@ void Store::WriterMain() {
             continue;
         }
         _cv.notify_all();
-        if (waiting)
+        if (waiting || (_usedDirty && !disabled))
             _cv.wait_until(lock, deadline);
         else
             _cv.wait(lock);
@@ -951,6 +962,12 @@ void Store::Stamp(uint64_t id) {
     if (stamp == _session) return;
     stamp      = _session;
     _usedDirty = true;
+    _cv.notify_all();   // the writer starts the quiet-spell wait for the stamps
+}
+
+void Store::WriteStampsNow() {
+    if (!_open || _readOnly || _disabled.load(std::memory_order_acquire)) return;
+    WriteUsedList();
 }
 
 // The stamps and the session counter of the sessions before (derived.used). A file that is missing
@@ -977,6 +994,7 @@ void Store::ReadUsedList() {
 }
 
 void Store::WriteUsedList() {
+    std::lock_guard<std::mutex> file(_usedFileMutex);   // the writer and WriteStampsNow share the .tmp
     std::vector<uint8_t> bytes;
     {
         std::lock_guard<std::mutex> lock(_mutex);

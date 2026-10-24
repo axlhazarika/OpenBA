@@ -12,6 +12,7 @@
 #include "io/settings_store.h"
 
 #include <cstdio>
+#include <cstdlib>   // std::atexit
 #include <mutex>
 
 namespace Ext {
@@ -23,6 +24,17 @@ std::mutex g_mutex;
 Store*     g_store       = nullptr;   // made once, never destroyed (its writer runs until exit)
 bool       g_tried       = false;
 bool       g_clearPending = false;
+
+// At exit: the shared store is never closed, so its usage stamps are written here (a run that ends
+// inside the quiet spell after its last load would otherwise lose them).
+void WriteStampsAtExit() {
+    Store* s = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        s = g_store;
+    }
+    if (s != nullptr) s->WriteStampsNow();
+}
 
 }  // namespace
 
@@ -53,6 +65,7 @@ Store* OpenShared() {
         return nullptr;
     }
     g_store = s;
+    if (status == Store::OpenStatus::Opened) std::atexit(&WriteStampsAtExit);
     return g_store;
 }
 

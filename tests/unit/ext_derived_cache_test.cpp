@@ -711,6 +711,69 @@ UNIT_TEST(ext_derived_cache_rewrite_runs_beside_finds) {
                  static_cast<unsigned long long>(finds.load()), static_cast<unsigned long long>(wrong.load()));
 }
 
+namespace {
+
+// derived.used's stamp for `key`, or -1 when the file or the key is absent.
+long long UsedStamp(const TempDir& t, const Key& key) {
+    std::ifstream f(t.File("derived.used"), std::ios::binary);
+    std::vector<char> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const uint64_t id = KeyId(key);
+    for (size_t at = 32; at + 16 <= b.size(); at += 16) {
+        uint64_t got = 0;
+        uint32_t stamp = 0;
+        std::memcpy(&got, b.data() + at, 8);
+        std::memcpy(&stamp, b.data() + at + 8, 4);
+        if (got == id) return stamp;
+    }
+    return -1;
+}
+
+}  // namespace
+
+// A consumer that only reads (ext.package_cache on a warm start: a Find hit, no Put, no RequestFlush)
+// still gets its stamps on disk: after a Flush, after the quiet spell with no flush at all, and from
+// WriteStampsNow (the exe's exit hook) while the store stays open.
+UNIT_TEST(ext_derived_cache_stamps_of_a_reader_only_session_reach_the_disk) {
+    TempDir t;
+    {
+        Store w;
+        CHECK(w.Open(t.Path(), kBig) == Store::OpenStatus::Opened);   // session 1 stores 1, 2, 3
+        for (uint64_t k = 1; k <= 3; ++k)
+            w.Put(MakeKey(k), Payload(100, static_cast<uint8_t>(k)));
+    }
+    std::vector<uint8_t> out;
+    {
+        Store s;   // session 2: Find only, then Flush
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        CHECK(s.Find(MakeKey(1), out));
+        s.Flush();
+        CHECK_EQ(UsedStamp(t, MakeKey(1)), 2ll);
+        CHECK_EQ(UsedStamp(t, MakeKey(2)), 1ll);
+        CHECK_EQ(s.GetStats().stored, 0ull);
+    }
+    SetQuietSpellForTest(100);
+    {
+        Store s;   // session 3: Find only, no flush: the quiet spell writes them
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        CHECK(s.Find(MakeKey(2), out));
+        bool written = false;
+        for (int i = 0; i < 100 && !written; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            written = UsedStamp(t, MakeKey(2)) == 3;
+        }
+        CHECK(written);
+        CHECK_EQ(UsedStamp(t, MakeKey(1)), 2ll);   // the earlier session's stamp is kept
+    }
+    SetQuietSpellForTest(10000);
+    {
+        Store s;   // session 4: Find only, then the exit hook's call, store still open
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        CHECK(s.Find(MakeKey(3), out));
+        s.WriteStampsNow();
+        CHECK_EQ(UsedStamp(t, MakeKey(3)), 4ll);
+    }
+}
+
 UNIT_TEST(ext_derived_cache_unknown_format_starts_empty) {
     TempDir t;
     {

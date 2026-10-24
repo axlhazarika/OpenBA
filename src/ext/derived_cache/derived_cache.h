@@ -170,6 +170,10 @@ public:
     // Runs the rewrite the files need (THE REWRITE) as soon as the writer's queue is empty, without
     // waiting for the quiet spell; a later Flush waits for it. The exe: the boot's last load.
     void RequestCompact();
+    // Writes the usage stamps (derived.used) now, on the calling thread. The exe: at exit (the
+    // shared store is never closed). Also written by the writer after a Flush / RequestFlush and
+    // after the quiet spell, so a consumer that never sends either (ext.package_cache) persists them.
+    void WriteStampsNow();
     // Unmaps derived.dat: later reads go through the file handle. The mapping's pages count in the
     // process's working set while it is held (file-backed, ~1 GB after a MegaMod boot), so the exe
     // drops it once the load that read the cache is over.
@@ -213,6 +217,7 @@ private:
     Platform::FileHandle  _dat  = Platform::kInvalidFileHandle;
     Platform::FileHandle  _idx  = Platform::kInvalidFileHandle;
     Platform::FileMapping _map;     // derived.dat as it was at Open (until ReleaseMapping / Close)
+    std::mutex            _usedFileMutex;   // derived.used's writes (the writer, WriteStampsNow)
     std::mutex            _fileMutex;   // the two handles, their file positions, and the mapping; taken
                                         // before _mutex when both are held
 
@@ -250,6 +255,9 @@ uint64_t KeyId(const Key& key);
 // The unit test's crash injection: a rewrite stops right after replacing derived.dat, its store
 // disabled and its files left as a killed process would leave them.
 void SetCrashBetweenReplacesForTest(bool on);
+// The unit test's quiet spell (default 10000 ms): the idle time after which the stamps are written
+// and the rewrite runs.
+void SetQuietSpellForTest(int ms);
 
 // The Options dialog's "Clear cache": writes `dir`\derived.clear (the next Open deletes the cache).
 bool RequestClear(const std::string& dir);
