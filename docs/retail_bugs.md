@@ -394,6 +394,10 @@ and crashed at the same READ of 0x58 with the fix off.
 **Lever.** The two walks: skip them while no SaveLoad exists (there are no save thumbnails to
 drop or rebuild yet).
 
-Fix: `fix.boot_device_lost` (tier 1), default on: `OnVideoError` step 5 and `OnVideoRestart`
-step 3 are skipped while `Save::SaveLoad::_singleton` is null (seam
-`Engine::MainLoop::_extFixBootDeviceLost`); with a SaveLoad both run as retail.
+Fix: `fix.boot_device_lost` (tier 1), default on, two seams. `OnVideoError` step 5 and
+`OnVideoRestart` step 3 are skipped while `Save::SaveLoad::_singleton` is null (seam
+`Engine::MainLoop::_extFixBootDeviceLost`); with a SaveLoad both run as retail. And the DX11
+backend's `ContextData::BeginCommands` runs the device-lost recovery when a swap-chain reset
+fails on a removed device (retail recovers only from Present, which such a reset never reaches;
+seam `BootDeviceLostBackend::SetFixFlag`, `src/render/common/boot_device_lost/`). Off under
+`/profile:faithful`: retail's spin in the reset, or the crash above.
