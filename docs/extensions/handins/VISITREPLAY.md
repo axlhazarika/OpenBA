@@ -178,8 +178,8 @@ cache one unsampled boot had just filled (`[StreamCache] hits 361837 ... misses 
 1,184,516 samples, loader thread only, `tools/sample_report.py --thread loader`. The sampled boot ran close to the
 unsampled numbers (big load 7.66 s, menu 13.2 s, first game frame 15.65 s). Two of the five sampled attempts hung at
 boot (`engine.videomodes`, main thread in an ntdll loader-lock wait: the 2000 Hz suspension, not this change; the
-watchdog's exit could not complete either, the harness timeout killed them). Samples and log: scratchpad
-`t-visitpass/` and `build/samples_mm_warm.txt` in the worktree (not committed: 180 MB).
+watchdog's exit could not complete either, the harness timeout killed them). Samples and log: session scratchpad
+`t-visitpass/logs/samples_mm_warm.txt` (180 MB, not committed) and `samples_mm_warm_err.log`.
 
 Big load (InnerLoaderLoop, 9,152 loader samples), self time: unsymbolized static-CRT copy code at exe+0x420e88
 17.8 %, ntdll 11.7 %, ucrtbase 8.8 %, KERNEL32 4.6 %, `Compression::Decompress` 4.1 %, `CompressedStream::ReadArray`
