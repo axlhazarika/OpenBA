@@ -106,6 +106,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/engine/system/compression.cpp       # ext_decode_ahead_test.cpp: the real Decompress
   ${CMAKE_SOURCE_DIR}/src/ext/stream_cache/stream_record.cpp   # ext_stream_cache_test.cpp (STREAMCACHE)
   ${CMAKE_SOURCE_DIR}/src/ext/stream_cache/segment_stream.cpp  #   the record stream and its fallback
+  ${CMAKE_SOURCE_DIR}/src/ext/heap_slack/heap_slack.cpp   # ext_heap_slack_test.cpp (HEAPSLACK)
   ${CMAKE_SOURCE_DIR}/src/platform/common/window_messages.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/common/display_geometry.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/common/cursor_planes.cpp

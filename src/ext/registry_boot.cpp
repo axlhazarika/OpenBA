@@ -31,6 +31,7 @@
 #include "ext/stream_cache/stream_cache.h"           // ext.stream_cache: the resource-record seams, at boot
 #include "ext/visit_replay/visit_replay.h"         // ext.visit_replay: the ExternalFactory::_extVisitReplay seam, at boot
 #include "ext/find_fastpath/find_fastpath.h"       // ext.find_fastpath: the ExternalFactory::_extFindFast seam, at boot
+#include "ext/heap_slack/heap_slack.h"             // ext.heap_slack: the MemoryAllocator::_extCommitSeam seam, at boot
 #include "ext/resources/text_provider.h"        // the Extensions dialog / Enhanced tab resources from the exe's text (KITFREE)
 #include "rsc_text_check.h"                      // src/diag: the kit cross-check, /rsccheck:1 on the command line
 #include "ext/resources/font_provider.h"         // KITFREE RSCFONT: ext.sharp_ui's font variants, provided at run time
@@ -179,6 +180,10 @@ void InitFromSettings() {
     // row off) or with the row off: the decode pays one null test and its PCM is the plain decode.
     ::Audio::SoundBuffer::_extLoopSeam =
         Ext().seamless_loops ? &SeamlessLoops::ApplyToLoopingBuffer : nullptr;
+    // ext.heap_slack (class A, next start): the System::MemoryAllocator::_extCommitSeam seam, set ONCE
+    // here under the allocator lock. Null under the faithful profile or with the row off: a commit or
+    // decommit pays one null test. Ranges already committed are taken over at their next mark move.
+    HeapSlack::Sync();
     // ext.decode_ahead (class A, next start): the IO::CompressedStream::_extDecodeAhead seam, set ONCE
     // here (boot, before the loader's first resource). Null under the faithful profile or with the row
     // off: DecompressFromSource and Release pay one null test each.

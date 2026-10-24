@@ -111,6 +111,7 @@ struct Extensions {
     bool stream_cache = false; // class A, next start: src/ext/stream_cache/, seams Object::ExternalFactory::_extLoadBegin/_extLoadEnd, IO::CompressedStream::_extReadTap, Engine::LoaderLoop::_extLoadDone, CreateOnDemand::g_altLocate/g_altSkip + the derived cache (docs/extensions/handins/STREAMCACHE.md)
     bool visit_replay = false; // class A, next start: src/ext/visit_replay/, seam Object::ExternalFactory::_extVisitReplay (docs/extensions/handins/VISITREPLAY.md)
     bool find_fastpath = false; // class A, next start: src/ext/find_fastpath/, seam Object::ExternalFactory::_extFindFast (docs/extensions/handins/VISITREPLAY.md)
+    bool heap_slack = false; // class A, next start: src/ext/heap_slack/, seam System::MemoryAllocator::_extCommitSeam (docs/extensions/handins/HEAPSLACK.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.
