@@ -6,6 +6,7 @@
 #include "ext/derived_cache/derived_cache.h"
 
 #include "ext/derived_cache/hash64.h"
+#include "platform_thread.h"   // ThreadBackgroundMode: the rewrite
 
 #include <algorithm>
 #include <chrono>
@@ -277,8 +278,8 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
         std::fprintf(stderr, "[DerivedCache] cleared (requested from the Options dialog)\n");
     }
     ReadUsedList();
-    _dat = Platform::FileOpenWriteShared(FilePath(dir, "derived.dat").c_str());
-    _idx = Platform::FileOpenWriteShared(FilePath(dir, "derived.idx").c_str());
+    _dat = Platform::FileOpenWriteShared(FilePath(dir, "derived.dat").c_str(), true);
+    _idx = Platform::FileOpenWriteShared(FilePath(dir, "derived.idx").c_str(), false);
     if (!Valid(_dat) || !Valid(_idx) || !LoadIndex()) {
         CloseHandle(_dat);
         CloseHandle(_idx);
@@ -362,7 +363,7 @@ bool Store::FinishInterruptedRewrite(uint64_t datGeneration) {
     const std::u16string idx = FilePath(_dir, "derived.idx");
     CloseHandle(_idx);
     const bool replaced = Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
-    _idx = Platform::FileOpenWriteShared(idx.c_str());
+    _idx = Platform::FileOpenWriteShared(idx.c_str(), false);
     return replaced && Valid(_idx);
 }
 
@@ -620,8 +621,8 @@ bool Store::Compact() {
         return false;
     }
     const bool idxReplaced = datReplaced && Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
-    _dat = Platform::FileOpenWriteShared(dat.c_str());
-    _idx = Platform::FileOpenWriteShared(idx.c_str());
+    _dat = Platform::FileOpenWriteShared(dat.c_str(), true);
+    _idx = Platform::FileOpenWriteShared(idx.c_str(), false);
     std::lock_guard<std::mutex> lock(_mutex);
     if (!Valid(_dat) || !Valid(_idx) || (datReplaced && !idxReplaced)) {
         // A new data file beside the old index (or no files): nothing more this run. The next Open
@@ -873,8 +874,12 @@ void Store::WriterMain() {
         if (wanted && (_compactNow || (waiting && std::chrono::steady_clock::now() >= deadline))) {
             _writing = true;
             lock.unlock();
+            // Background mode (Windows: low I/O and memory priority) for the rewrite only: the
+            // appends are on the loader's path once the queue fills, and must not be starved.
+            Platform::ThreadBackgroundMode(true);
             // The evicted entries' stamps go with them (derived.used lists the live entries only).
             if (Compact() && !_disabled.load(std::memory_order_acquire)) WriteUsedList();
+            Platform::ThreadBackgroundMode(false);
             lock.lock();
             _writing     = false;
             _compactNow  = false;

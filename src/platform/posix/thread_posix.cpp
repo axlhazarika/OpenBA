@@ -104,6 +104,7 @@ bool ThreadSetNormalPriority(ThreadHandle) { return true; }
 // NOT RETAIL (CPULIMIT): a no-op (platform_thread.h says why); the path workers run at the
 // default priority on Linux.
 bool ThreadSetBelowNormalPriority(ThreadHandle) { return false; }
+bool ThreadBackgroundMode(bool) { return false; }   // NOT RETAIL: platform_thread.h
 
 uint32_t ThreadResume(ThreadHandle t) {
     pthread_mutex_lock(&t->latchLock);

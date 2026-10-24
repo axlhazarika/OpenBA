@@ -26,6 +26,10 @@ bool ThreadSetNormalPriority(ThreadHandle t) {
 bool ThreadSetBelowNormalPriority(ThreadHandle t) {   // NOT RETAIL: ext.path_workers (CPULIMIT)
     return SetThreadPriority(t, THREAD_PRIORITY_BELOW_NORMAL) != FALSE;
 }
+bool ThreadBackgroundMode(bool on) {   // NOT RETAIL: the derived cache's rewrite
+    return SetThreadPriority(GetCurrentThread(), on ? THREAD_MODE_BACKGROUND_BEGIN : THREAD_MODE_BACKGROUND_END) !=
+           FALSE;
+}
 uint32_t ThreadResume(ThreadHandle t) { return ResumeThread(t); }
 uint32_t ThreadJoin(ThreadHandle t)   { return WaitForSingleObject(t, INFINITE); }
 bool ThreadClose(ThreadHandle t)      { return CloseHandle(t) != FALSE; }

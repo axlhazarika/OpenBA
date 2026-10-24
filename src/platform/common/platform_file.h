@@ -201,7 +201,9 @@ int32_t    FileTruncate(FileHandle h, int64_t size);
 // allows this handle's writes), which may also rename over or delete them. A second writer is
 // refused. Windows: CreateFileW(GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE,
 // OPEN_ALWAYS, NORMAL). POSIX: open(O_RDWR | O_CREAT, 0644) and no flock: derived.lock is the
-// writers' exclusion, and a reader keeps the inode it opened across a rename.
-FileHandle FileOpenWriteShared(const PathChar* path);
+// writers' exclusion, and a reader keeps the inode it opened across a rename. `sequentialScan`
+// (derived.dat: appended to, read in whole payloads) adds FILE_FLAG_SEQUENTIAL_SCAN (POSIX:
+// posix_fadvise(POSIX_FADV_SEQUENTIAL) where the platform has it; macOS has not).
+FileHandle FileOpenWriteShared(const PathChar* path, bool sequentialScan);
 
 }  // namespace Platform

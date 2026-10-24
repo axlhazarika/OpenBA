@@ -35,6 +35,12 @@ bool ThreadSetNormalPriority(ThreadHandle t);   // SetThreadPriority(t, THREAD_P
 // (its static priority must be 0), and a per-thread nice needs the kernel tid, which a
 // ThreadHandle does not carry.
 bool ThreadSetBelowNormalPriority(ThreadHandle t);
+// NOT RETAIL (the derived cache's rewrite, src/ext/derived_cache/derived_cache.cpp): the CALLING
+// thread's background processing mode on (`on`) or off. Windows: SetThreadPriority(GetCurrentThread(),
+// THREAD_MODE_BACKGROUND_BEGIN / _END), which lowers its I/O and memory priority so a long disk job
+// stays out of the foreground's way. POSIX: a no-op that returns false (no per-thread I/O priority
+// through a portable call).
+bool ThreadBackgroundMode(bool on);
 uint32_t ThreadResume(ThreadHandle t);          // ResumeThread: the previous suspend count
 uint32_t ThreadJoin(ThreadHandle t);            // WaitForSingleObject(t, INFINITE)
 bool ThreadClose(ThreadHandle t);               // CloseHandle
