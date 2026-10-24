@@ -8,12 +8,18 @@
 //   * a payload whose bytes were damaged is a miss, and is stored again; the next Open serves the
 //     good copy and rewrites the files without the bad one (a key's newest record wins);
 //   * a new encoder version, or a key equal in hash but not in shape / size, misses;
-//   * the cap refuses a payload past it; an over-cap cache keeps what the last run used;
-//   * a second Store on the same folder gets InUse; a clear request empties the next Open;
+//   * the cap refuses a payload past it; a full cache evicts the least recently used, the stamps of
+//     every session merged, and a lost derived.used does not empty it;
+//   * a second Store on the same folder reads the first one's entries (ReadOnly) and writes
+//     nothing; a rewrite or a clear with that reader open; a clear request empties the next Open;
+//   * the rewrite runs on the writer thread beside Finds; a crash between its two replaces is
+//     finished at the next Open, and a mismatched pair keeps the prefix whose bytes match;
+//   * the folder's missing parents are created;
 //   * a damaged header starts the cache empty.
 // ============================================================================
 #include "unit.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstddef>
@@ -21,7 +27,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ext/derived_cache/derived_cache.h"
@@ -202,10 +210,16 @@ UNIT_TEST(ext_derived_cache_restored_payload_survives_reopen) {
         CHECK_EQ(s.BytesOnDisk(), 64ull + 2 * a.size() + 2 * sizeof(IndexRecord));
     }
     // The next start serves the good copy, and the files no longer hold the bad one.
+    // (The first start's writer rewrites the files; the second finds them rewritten.)
     for (int run = 0; run < 2; ++run) {
         Store s;
         CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
         CHECK_EQ(s.GetStats().entries, 1ull);
+        if (run == 0) {
+            CHECK_EQ(s.BytesOnDisk(), 64ull + 2 * a.size() + 2 * sizeof(IndexRecord));   // not in Open
+            s.RequestCompact();
+            s.Flush();
+        }
         CHECK_EQ(s.BytesOnDisk(), 64ull + a.size() + sizeof(IndexRecord));
         std::vector<uint8_t> out;
         CHECK(s.Find(MakeKey(9), out));
@@ -248,9 +262,13 @@ UNIT_TEST(ext_derived_cache_newest_record_wins_and_old_is_dropped) {
     Store s;
     CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
     CHECK_EQ(s.GetStats().entries, 2ull);
-    // The Open's rewrite dropped the old record and its bytes: key 6, then key 5's newest.
-    CHECK_EQ(s.BytesOnDisk(), 64ull + c.size() + b.size() + 2 * sizeof(IndexRecord));
     std::vector<uint8_t> out;
+    CHECK(s.Find(MakeKey(5), out));   // the newest copy, before the rewrite too
+    CHECK(out == b);
+    s.RequestCompact();
+    s.Flush();
+    // The writer's rewrite dropped the old record and its bytes: key 6, then key 5's newest.
+    CHECK_EQ(s.BytesOnDisk(), 64ull + c.size() + b.size() + 2 * sizeof(IndexRecord));
     CHECK(s.Find(MakeKey(5), out));
     CHECK(out == b);
     CHECK(s.Find(MakeKey(6), out));
@@ -312,6 +330,9 @@ UNIT_TEST(ext_derived_cache_cap_refuses_then_keeps_the_used) {
     Store s;
     CHECK(s.Open(t.Path(), 32 + 3500) == Store::OpenStatus::Opened);
     std::vector<uint8_t> out;
+    CHECK_EQ(s.GetStats().entries, 4ull);   // evicted by the writer, not in Open
+    s.RequestCompact();
+    s.Flush();
     CHECK_EQ(s.GetStats().entries, 3ull);
     CHECK(!s.Find(MakeKey(1), out));
     CHECK(s.Find(MakeKey(2), out));
@@ -347,6 +368,8 @@ UNIT_TEST(ext_derived_cache_eviction_merges_sessions_and_survives_a_lost_used_li
     {
         Store s;
         CHECK(s.Open(t.Path(), 32 + 3500) == Store::OpenStatus::Opened);
+        s.RequestCompact();   // the exe: the boot's end
+        s.Flush();
         std::vector<uint8_t> out;
         CHECK_EQ(s.GetStats().entries, 3ull);
         CHECK(s.Find(MakeKey(10), out));
@@ -355,11 +378,14 @@ UNIT_TEST(ext_derived_cache_eviction_merges_sessions_and_survives_a_lost_used_li
         CHECK(s.Find(MakeKey(21), out));
     }
     // Set B again, at the same cap: 21 hits, 20 is derived anew and refused (the cache is full); the
-    // next Open evicts down to 90% again, A's least recent first, and 20 fits the session after.
+    // next session evicts down to 90% again (less the 1000 bytes refused), A's least recent first,
+    // and 20 fits.
     CHECK_EQ(session(32 + 3500, { 20, 21 }), 3ull);
     {
         Store s;
         CHECK(s.Open(t.Path(), 32 + 3500) == Store::OpenStatus::Opened);
+        s.RequestCompact();
+        s.Flush();
         std::vector<uint8_t> out;
         CHECK_EQ(s.GetStats().entries, 2ull);   // 10 (stamped longest ago) evicted
         CHECK(!s.Find(MakeKey(10), out));
@@ -372,6 +398,8 @@ UNIT_TEST(ext_derived_cache_eviction_merges_sessions_and_survives_a_lost_used_li
     fs::remove(t.File("derived.used"));
     Store s;
     CHECK(s.Open(t.Path(), 32 + 2500) == Store::OpenStatus::Opened);   // 90% = 2278: two payloads
+    s.RequestCompact();
+    s.Flush();
     std::vector<uint8_t> out;
     CHECK_EQ(s.GetStats().entries, 2ull);
     CHECK(!s.Find(MakeKey(11), out));
@@ -422,8 +450,8 @@ UNIT_TEST(ext_derived_cache_second_instance_and_clear) {
     a.Flush();
     CHECK(a.Find(MakeKey(4), out));
     CHECK(b.Find(MakeKey(1), out));
-    b.Close();
 
+    // A clear carried out while the reader still holds the files.
     CHECK(RequestClear(t.Path()));
     CHECK(ClearRequested(t.Path()));
     a.Disable();
@@ -433,6 +461,9 @@ UNIT_TEST(ext_derived_cache_second_instance_and_clear) {
     CHECK(!ClearRequested(t.Path()));
     CHECK_EQ(a.GetStats().entries, 0ull);
     CHECK_EQ(a.BytesOnDisk(), 64ull);
+    CHECK(b.Find(MakeKey(1), out));   // the reader keeps what it had open
+    CHECK(out == p1);
+    b.Close();
 }
 
 UNIT_TEST(ext_derived_cache_open_creates_missing_parents) {
@@ -449,7 +480,7 @@ UNIT_TEST(ext_derived_cache_open_creates_missing_parents) {
     CHECK(fs::exists(deep / "derived.dat"));
 }
 
-// The holder rewrites the files (here: the Open that drops a superseded record) while a read-only
+// The holder rewrites the files (here: to drop a superseded record) while a read-only
 // store holds them open. Windows: the reader's FILE_SHARE_DELETE lets the replace go through; the
 // reader keeps the old bytes until it closes. POSIX: the reader keeps the old inode.
 UNIT_TEST(ext_derived_cache_rewrite_with_a_reader_open) {
@@ -489,6 +520,8 @@ UNIT_TEST(ext_derived_cache_rewrite_with_a_reader_open) {
     const uint64_t rewritten = 64ull + b.size() + b.size() + 2 * sizeof(IndexRecord);
     const uint64_t asItWas   = 64ull + a.size() + b.size() + b.size() + 3 * sizeof(IndexRecord);
     CHECK(holder.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    holder.RequestCompact();
+    holder.Flush();
     // POSIX: the rewrite went through (the files hold key 6 and key 5's newest copy only). Windows
     // 10: MoveFileExW refuses to replace a file another handle holds, FILE_SHARE_DELETE or not, so
     // the files stay as they were. Either way the holder serves the newest copy and leaves no
@@ -510,10 +543,172 @@ UNIT_TEST(ext_derived_cache_rewrite_with_a_reader_open) {
     holder.Close();
     // With the reader gone the rewrite goes through.
     CHECK(holder.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    holder.RequestCompact();
+    holder.Flush();
     CHECK(holder.Find(MakeKey(5), out));
     CHECK(out == b);
     holder.Close();
     CHECK_EQ(BytesInDir(t.Path()), rewritten);
+}
+
+namespace {
+
+// Three 1000-byte entries (keys 1, 2, 3, each its own bytes), then a session that uses `fresh` (two
+// of them), then a store opened at a two-payload cap (90% = 2278 bytes): its rewrite evicts the
+// third key, the one `fresh` leaves out. The store is returned open, the rewrite not yet run.
+void ThreeThenTwoFresh(const TempDir& t, std::initializer_list<uint64_t> fresh, Store& s) {
+    {
+        Store w;
+        CHECK(w.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        for (uint64_t k = 1; k <= 3; ++k)
+            w.Put(MakeKey(k), Payload(1000, static_cast<uint8_t>(40 + k)));
+    }
+    {
+        Store u;
+        CHECK(u.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        std::vector<uint8_t> out;
+        for (uint64_t k : fresh)
+            CHECK(u.Find(MakeKey(k), out));
+    }
+    CHECK(s.Open(t.Path(), 32 + 2500) == Store::OpenStatus::Opened);
+    CHECK_EQ(s.GetStats().entries, 3ull);
+}
+
+uint64_t HeaderGeneration(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    char h[32] = {};
+    f.read(h, sizeof(h));
+    uint64_t g = 0;
+    std::memcpy(&g, h + 16, 8);
+    return g;
+}
+
+}  // namespace
+
+// A crash between the rewrite's two replaces: the new derived.dat beside the old derived.idx. The
+// next Open sees the generations differ and finishes the rewrite from derived.idx.new: every entry
+// the rewrite kept survives, though their offsets moved (key 1 was evicted from the front).
+UNIT_TEST(ext_derived_cache_crash_between_the_replaces_is_finished) {
+    TempDir t;
+    {
+        Store s;
+        ThreeThenTwoFresh(t, { 2, 3 }, s);
+        SetCrashBetweenReplacesForTest(true);
+        s.RequestCompact();
+        s.Flush();
+        SetCrashBetweenReplacesForTest(false);
+        std::vector<uint8_t> out;
+        CHECK(!s.Find(MakeKey(2), out));   // the "dead" store serves nothing more
+    }
+    CHECK(fs::exists(t.File("derived.idx.new")));
+    CHECK(HeaderGeneration(t.File("derived.dat")) == HeaderGeneration(t.File("derived.idx")) + 1);
+    Store s;
+    CHECK(s.Open(t.Path(), 32 + 2500) == Store::OpenStatus::Opened);
+    CHECK_EQ(s.GetStats().entries, 2ull);
+    CHECK_EQ(s.BytesOnDisk(), 64ull + 2000 + 2 * sizeof(IndexRecord));
+    std::vector<uint8_t> out;
+    CHECK(!s.Find(MakeKey(1), out));
+    CHECK(s.Find(MakeKey(2), out));
+    CHECK(out == Payload(1000, 42));
+    CHECK(s.Find(MakeKey(3), out));
+    CHECK(out == Payload(1000, 43));
+    CHECK_EQ(s.GetStats().badPayloads, 0ull);
+    CHECK(!fs::exists(t.File("derived.idx.new")));
+    CHECK(HeaderGeneration(t.File("derived.dat")) == HeaderGeneration(t.File("derived.idx")));
+}
+
+// The same pair with derived.idx.new gone (put together by hand): nothing to finish, so Open keeps
+// the index prefix whose payloads match their hashes, deterministically. Key 3 was evicted from the
+// back, so the new data file starts like the old one: keys 1 and 2 survive.
+UNIT_TEST(ext_derived_cache_new_data_old_index_keeps_the_matching_prefix) {
+    TempDir t;
+    {
+        Store s;
+        ThreeThenTwoFresh(t, { 1, 2 }, s);
+        SetCrashBetweenReplacesForTest(true);
+        s.RequestCompact();
+        s.Flush();
+        SetCrashBetweenReplacesForTest(false);
+    }
+    fs::remove(t.File("derived.idx.new"));
+    for (int run = 0; run < 2; ++run) {   // the second Open finds a consistent pair
+        Store s;
+        CHECK(s.Open(t.Path(), 32 + 2500) == Store::OpenStatus::Opened);
+        CHECK_EQ(s.GetStats().entries, 2ull);
+        CHECK_EQ(s.BytesOnDisk(), 64ull + 2000 + 2 * sizeof(IndexRecord));
+        std::vector<uint8_t> out;
+        CHECK(s.Find(MakeKey(1), out));
+        CHECK(out == Payload(1000, 41));
+        CHECK(s.Find(MakeKey(2), out));
+        CHECK(out == Payload(1000, 42));
+        CHECK(!s.Find(MakeKey(3), out));
+        CHECK_EQ(s.GetStats().badPayloads, 0ull);
+    }
+}
+
+// The rewrite runs on the writer thread while other threads go on reading: every Find before,
+// during and after the swap returns its key's own bytes.
+UNIT_TEST(ext_derived_cache_rewrite_runs_beside_finds) {
+    TempDir t;
+    constexpr uint64_t kKeys = 64;
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        for (uint64_t k = 0; k < kKeys; ++k)
+            s.Put(MakeKey(100 + k), Payload(20000, static_cast<uint8_t>(k)));
+    }
+    {
+        // A second record for every even key: half the data file is superseded copies.
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    }
+    {
+        std::ifstream i(t.File("derived.idx"), std::ios::binary);
+        std::vector<char> idx((std::istreambuf_iterator<char>(i)), std::istreambuf_iterator<char>());
+        std::ofstream d(t.File("derived.dat"), std::ios::binary | std::ios::app);
+        std::ofstream o(t.File("derived.idx"), std::ios::binary | std::ios::app);
+        uint64_t at = 32 + kKeys * 20000;
+        for (uint64_t k = 0; k < kKeys; k += 2) {
+            IndexRecord r;
+            std::memcpy(&r, idx.data() + 32 + k * sizeof(IndexRecord), sizeof(r));
+            const std::vector<uint8_t> p = Payload(20000, static_cast<uint8_t>(k));
+            r.offset = at;
+            r.check  = Hash64(&r, offsetof(IndexRecord, check));
+            d.write(reinterpret_cast<const char*>(p.data()), static_cast<std::streamsize>(p.size()));
+            o.write(reinterpret_cast<const char*>(&r), sizeof(r));
+            at += p.size();
+        }
+    }
+    Store s;
+    CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    CHECK_EQ(s.GetStats().entries, kKeys);
+    std::atomic<bool> done{false};
+    std::atomic<uint64_t> finds{0};
+    std::atomic<uint64_t> wrong{0};
+    std::vector<std::thread> readers;
+    for (int r = 0; r < 3; ++r) {
+        readers.emplace_back([&, r] {
+            std::vector<uint8_t> out;
+            uint64_t k = static_cast<uint64_t>(r);
+            while (!done.load()) {
+                const uint64_t key = k % kKeys;
+                if (!s.Find(MakeKey(100 + key), out) || out != Payload(20000, static_cast<uint8_t>(key)))
+                    wrong.fetch_add(1);
+                finds.fetch_add(1);
+                ++k;
+            }
+        });
+    }
+    s.RequestCompact();
+    s.Flush();
+    done.store(true);
+    for (std::thread& th : readers)
+        th.join();
+    CHECK_EQ(wrong.load(), 0ull);
+    CHECK(finds.load() > 0);
+    CHECK_EQ(s.BytesOnDisk(), 64ull + kKeys * 20000 + kKeys * sizeof(IndexRecord));
+    std::fprintf(stderr, "  rewrite beside finds: %llu finds, %llu wrong\n",
+                 static_cast<unsigned long long>(finds.load()), static_cast<unsigned long long>(wrong.load()));
 }
 
 UNIT_TEST(ext_derived_cache_unknown_format_starts_empty) {
