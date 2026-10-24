@@ -123,7 +123,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 45);
+    CHECK(strings && strings->blocks.size() == 46);
     if (strings && strings->blocks.size() == 45) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
@@ -209,7 +209,7 @@ UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
     const Object* up = f.Find("buttonItemPriorityUp");
     CHECK(up && up->base == "Mod.rsc:buttonMod");
     const Object* rank = f.Find("textItemPriorityRank");
-    CHECK(rank && rank->body.Find("_minWidth") && rank->body.Find("_maxWidth") && rank->body.Find("_justify"));
+    CHECK(rank && rank->body.Find("_minWidth") && rank->body.Find("_text"));
     CheckKnownTypes(f, "ItemPriorityPage.rsc");
 }
 

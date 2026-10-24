@@ -4,8 +4,8 @@
 // docs/extensions/handins/ITEMPRIO.md, src/ext/toolbar/toolbar.h. The town ranks the items its citizens fetch
 // from a storage, per category: a tab strip chooses the category (tools, fuel, clothing, health), and the
 // showing tab's list shows the items of that category, one cell each: a check box (ranked or not), the item's
-// icon and name, its place in the ranking, and Up / Down. Checking an item ranks it at the bottom, unchecking removes
-// it; Up / Down move a ranked item past its neighbour. Every change applies at once (live: no Apply). Ranked
+// icon and name, its place in the ranking, and Top / Up / Down. Checking an item ranks it at the bottom, unchecking removes
+// it; Up / Down move a ranked item past its neighbour, Top to the front. Every change applies at once (live: no Apply). Ranked
 // items come first, in rank order, then the rest by name. A "Show all items" check box under the list is off
 // by default (the items the town has made or stored, and the ranked ones) and is the player's choice for the
 // current town.
@@ -18,6 +18,7 @@
 
 // The runtime type headers first (moddialog.cpp's note: Volume.h's Rectangle).
 #include "ui/TextElement.h"
+#include "ui/Font.h"
 #include "ui/ImageElement.h"
 #include "ui/ButtonElement.h"
 #include "ui/CheckElement.h"
@@ -63,11 +64,11 @@ namespace {
 
 // Local element ids (the host adds `idBase`): the category tab buttons 10 + their place in the strip, the check
 // box
-// 20, the cells 100 + 3 * their position (+ 0 check, + 1 up, + 2 down).
+// 20, the cells 100 + 4 * their position (+ 0 check, + 1 top, + 2 up, + 3 down).
 constexpr int32_t kCategoryId = 10;
 constexpr int32_t kShowAllId = 20;
 constexpr int32_t kCellId = 100;
-constexpr int32_t kMaxCells = (Toolbar::kPageIdSpan - kCellId) / 3;
+constexpr int32_t kMaxCells = (Toolbar::kPageIdSpan - kCellId) / 4;
 constexpr int kButtonCount = 4;
 constexpr int kCategoryOrder[kButtonCount] = { kTool, kFuel, kClothing, kHealth };   // the order in the .rsc
 
@@ -84,6 +85,21 @@ UI::TextElement* AsText(UI::Element* e) {
 void SetParameterText(UI::Element* e, const char* text) {
     if (UI::TextElement* t = AsText(e)) {
         t->SetParameter(0, System::String(text));
+    }
+}
+
+// The rank number ends at the right of its box: the text is moved right by the box width less its own width.
+constexpr int32_t kRankWidth = 30;   // textItemPriorityRank's _minWidth
+void SetRankText(UI::Element* e, const char* text) {
+    SetParameterText(e, text);
+    if (UI::TextElement* t = AsText(e)) {
+        int32_t w = 0;
+        int32_t h = 0;
+        if (t->_font != nullptr) {
+            t->_font->ComputeStringLayout(System::String(text), false, 0, -1, static_cast<UI::Font::Justify>(0), w, h,
+                                          nullptr);
+        }
+        t->_leftPad = std::max<int32_t>(0, kRankWidth - w);
     }
 }
 
@@ -228,7 +244,7 @@ std::vector<Item> CollectItems(int category) {
 // The page's state: one page at a time (the extension window is one dialog)
 // -----------------------------------------------------------------------------------------------------------
 // A control inside a cell is handled while the dialog is still dispatching ITS event, so a click on a check
-// box or on Up / Down never destroys cells: it edits the list and re-fills the cells that exist (Resort).
+// box or on Top / Up / Down never destroys cells: it edits the list and re-fills the cells that exist (Resort).
 // Cells are created or destroyed only from the category buttons and the "Show all items" check box, which sit
 // outside the table.
 struct Row {
@@ -320,9 +336,9 @@ void BindCell(size_t k) {
     }
     if (cell.rankText.Get() != nullptr) {
         if (r.rank != kUnranked) {
-            SetParameterText(cell.rankText.Get(), std::to_string(r.shownRank).c_str());
+            SetRankText(cell.rankText.Get(), std::to_string(r.shownRank).c_str());
         } else {
-            SetParameterText(cell.rankText.Get(), "-");
+            SetRankText(cell.rankText.Get(), "-");
         }
     }
     // Tinted while the item is ranked, the Mods list's white otherwise.
@@ -411,15 +427,16 @@ void BuildRows() {
         c.check = Object::InternalPtr<UI::Element>(
             Ext::FindElement<UI::CheckElement>(cell.Get(), "checkItemPriorityRow"));
         // by position: ids never change
-        const int32_t base = g_idBase + kCellId + 3 * static_cast<int32_t>(k);
+        const int32_t base = g_idBase + kCellId + 4 * static_cast<int32_t>(k);
         if (c.check.Get() != nullptr) {
             c.check->SetElementId(base);
         }
         UI::RibbonElement* moves = Ext::FindElement<UI::RibbonElement>(cell.Get(), "ribbonItemPriorityMoves");
         if (moves != nullptr) {
-            if (moves->ChildCount() >= 2) {
-                moves->Child(0).Get()->SetElementId(base + 1);   // Up
-                moves->Child(1).Get()->SetElementId(base + 2);   // Down
+            if (moves->ChildCount() >= 3) {
+                moves->Child(0).Get()->SetElementId(base + 1);   // Top
+                moves->Child(1).Get()->SetElementId(base + 2);   // Up
+                moves->Child(2).Get()->SetElementId(base + 3);   // Down
             }
         }
         Object::InternalPtr<UI::Element> border;
@@ -445,7 +462,7 @@ void Rebuild() {
 
 // One cell's control was used: edit the town's list for the shown category, live, and re-fill the cells in
 // place.
-void ApplyCellAction(size_t position, int action) {   // action 0 = check box, 1 = up, 2 = down
+void ApplyCellAction(size_t position, int action) {   // action 0 = check box, 1 = top, 2 = up, 3 = down
     if (position >= g_order.size()) {
         return;
     }
@@ -462,7 +479,22 @@ void ApplyCellAction(size_t position, int action) {   // action 0 = check box, 1
         // Move past the neighbouring ranked item that is loaded in this game (a path the game no longer has
         // stays where it is in the list and is stepped over).
         std::vector<std::string>& l = lists.Of(g_category);
-        const int step = action == 1 ? -1 : +1;
+        if (action == 1) {   // Top: to the front of the list, the others keep their order
+            if (r.rank > 0) {
+                const std::string path = l[static_cast<size_t>(r.rank)];
+                l.erase(l.begin() + r.rank);
+                l.insert(l.begin(), path);
+                changed = true;
+            }
+            if (changed) {
+                Apply(lists);
+            }
+            std::fprintf(stderr, "[ItemPriority] %s action 1 -> %s\n", r.item.path.c_str(),
+                         changed ? "changed" : "no change");
+            Resort();
+            return;
+        }
+        const int step = action == 2 ? -1 : +1;
         const int from = r.rank;
         int to = from + step;
         while (to >= 0 && to < static_cast<int>(l.size())) {
@@ -556,9 +588,9 @@ bool PageChanged(UI::Element* /*page*/, int32_t id) {
         BuildRows();   // the same items, a different set of cells
         return true;
     }
-    if (id >= kCellId && id < kCellId + 3 * static_cast<int32_t>(g_cells.size())) {
+    if (id >= kCellId && id < kCellId + 4 * static_cast<int32_t>(g_cells.size())) {
         const int32_t rel = id - kCellId;
-        ApplyCellAction(static_cast<size_t>(rel / 3), static_cast<int>(rel % 3));
+        ApplyCellAction(static_cast<size_t>(rel / 4), static_cast<int>(rel % 4));
         return true;
     }
     return false;

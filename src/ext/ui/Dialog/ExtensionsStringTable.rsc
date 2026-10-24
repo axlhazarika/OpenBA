@@ -55,6 +55,7 @@ StringTable resource
 		{ String _name = "ItemPriorityCatHealth";	String _text = "Health"; }
 		{ String _name = "ItemPriorityParam";		String _text = "@0"; }
 		{ String _name = "ItemPriorityCheckTip";	String _text = "Check to rank this item (it goes to the bottom of the ranking)."; }
+		{ String _name = "ItemPriorityTop";			String _text = "Top"; }
 		{ String _name = "ItemPriorityUp";			String _text = "Up"; }
 		{ String _name = "ItemPriorityDown";		String _text = "Down"; }
 		// the filter button names what a click does, under the key of the mode being shown

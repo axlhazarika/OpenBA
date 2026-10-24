@@ -83,7 +83,7 @@ namespace {
 // ---------------------------------------------------------------------------
 enum class K { Int, UInt, Bool, Float, String, Ext, ExtArray, Records };
 
-enum Enum { kNoEnum, kAlignment, kLabelPosition, kLayoutH, kLayoutV, kDialogFlags, kJustify };
+enum Enum { kNoEnum, kAlignment, kLabelPosition, kLayoutH, kLayoutV, kDialogFlags };
 
 struct FieldDesc {
     const char*      name;   // the kit's field name ("" = unnamed / not settable from text)
@@ -124,8 +124,8 @@ const FieldDesc kText[] = {
     F("", Bool),                 // 1st: _drawShadow (not set from text)
     F("_wordWrap", Bool),        // 2nd: _wrap
     F("_wordWrapSize", Int),     // 3rd: _wordWrapSize
-    FE("_justify", kJustify),    // 4th: _justify (UI::Font::Justify)
-    F("_maxWidth", Int),         // 5th: _maxWidth (-1: none)
+    F("", UInt),                 // 4th: _justify (not set from text)
+    F("", Int),                  // 5th: _maxWidth (not set from text)
 };
 // UI::LabelDescription::Serialize: the sprite pair, then the six dwords.
 const FieldDesc kLabel[] = {
@@ -226,8 +226,6 @@ const EnumValue kEnumValues[] = {
     { kAlignment, "TopLeft", 0 },    { kAlignment, "TopCenter", 1 },    { kAlignment, "TopRight", 2 },
     { kAlignment, "MidLeft", 3 },    { kAlignment, "MidCenter", 4 },    { kAlignment, "MidRight", 5 },
     { kAlignment, "BottomLeft", 6 }, { kAlignment, "BottomCenter", 7 }, { kAlignment, "BottomRight", 8 },
-    // UI::Font::Justify (RtUI::FontJustify, Font.h).
-    { kJustify, "Left", 0 }, { kJustify, "Center", 1 }, { kJustify, "Right", 2 },
     // Dialog::PausesGame / IsModal / IsFirstDraw (retail 0x180038810 / 0x180038800 / 0x180038840).
     { kDialogFlags, "PauseGame", 1 }, { kDialogFlags, "Modal", 2 }, { kDialogFlags, "FirstDraw", 0x10 },
     // The compiled output of our own files (EnhancedOptions.rsc:labelEnhanced, Extensions.rsc:entryRow).

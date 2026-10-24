@@ -4,7 +4,7 @@
 // docs/extensions/handins/ITEMPRIO.md, src/ext/item_priority/toolbar_page.cpp. The town ranks the items its
 // citizens fetch from a storage, per category (tools, fuel, clothing, health): a tab strip chooses the category
 // and each tab holds that category's list, a row per item: a check box to rank it (it goes to the bottom of the
-// ranking), a number (its rank, best first) and Up / Down to move it. A citizen takes the best-ranked item the
+// ranking), a number (its rank, best first) and Top / Up / Down to move it. A citizen takes the best-ranked item the
 // storages hold; an item that is not ranked comes after every ranked one. The window around the page is
 // Dialog/ExtensionsWindow.rsc (one tab per active extension page); this file is only the page.
 //
@@ -200,7 +200,7 @@ TableDescription tableItemPriorityHealth
 	TableItem _items [ { int _x = -1; int _y = -1; ElementDescription _element = "ribbonItemPriorityCell"; } ]
 }
 
-// One item: the check box, the compact label, its rank, and Up / Down. The border is the Mods list's row border,
+// One item: the check box, the compact label, its rank, and Top / Up / Down. The border is the Mods list's row border,
 // tinted by the controller while the item is ranked. The cell is as wide as the list's rows (the Foods page's
 // four cells and their gaps: 4 x 140 + 3 x 4), and the label takes what the rank and the buttons leave.
 RibbonDescription ribbonItemPriorityCell
@@ -223,19 +223,17 @@ CheckDescription checkItemPriorityRow : "Extensions.rsc:checkLoaded"
 // The Town Hall's inventory item label (20 px icon, small font, 132 px wide), its text from our table's "@0".
 LabelDescription labelItemPriorityRow : "TownHall.rsc:storageItem"
 {
-	int _minWidth = 400;		// fills the row: the rank and Up / Down follow at its right
+	int _minWidth = 360;		// fills the row: the rank and Top / Up / Down follow at its right
 	StringTable _stringTable = "ExtensionsStringTable.rsc";
 	String _text = "ItemPriorityParam";
 }
 
 // The item's place in the ranking ("1" for the best), or a dash while it is not ranked; the controller sets it.
-// A fixed width, right-aligned: "1", "10" and "-" end at the same place, so Up / Down stay in line. The text
-// lines up inside its _maxWidth, so that is the width (and the box is no wider than it).
+// A fixed width; the controller pads its left so "1", "10" and "-" end at the same place and the buttons stay in
+// line (the engine justifies only wrapped text, and only against its other lines).
 TextDescription textItemPriorityRank : "Extensions.rsc:textProfile"
 {
 	int _minWidth = 30;
-	int _maxWidth = 30;
-	Justify _justify = Right;
 	String _text = "ItemPriorityParam";
 }
 
@@ -243,14 +241,20 @@ RibbonDescription ribbonItemPriorityMoves
 {
 	Alignment _alignment = MidLeft;
 	int _cellPad = 2;
-	ElementDescription _elements [ "buttonItemPriorityUp" "buttonItemPriorityDown" ]
+	ElementDescription _elements [ "buttonItemPriorityTop" "buttonItemPriorityUp" "buttonItemPriorityDown" ]
 }
 
 // The small button of the Mods list and the tab strip (not the dialog's large OK button): a row is as tall as
 // its label.
+ButtonDescription buttonItemPriorityTop : "Mod.rsc:buttonMod" { ElementDescription _content = "textItemPriorityTop"; }
 ButtonDescription buttonItemPriorityUp : "Mod.rsc:buttonMod" { ElementDescription _content = "textItemPriorityUp"; }
 ButtonDescription buttonItemPriorityDown : "Mod.rsc:buttonMod" { ElementDescription _content = "textItemPriorityDown"; }
 
+TextDescription textItemPriorityTop : "Mod.rsc:labelMod"
+{
+	StringTable _stringTable = "ExtensionsStringTable.rsc";
+	String _text = "ItemPriorityTop";
+}
 TextDescription textItemPriorityUp : "Mod.rsc:labelMod"
 {
 	StringTable _stringTable = "ExtensionsStringTable.rsc";
