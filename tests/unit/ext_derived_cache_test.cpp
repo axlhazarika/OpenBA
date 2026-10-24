@@ -307,8 +307,8 @@ UNIT_TEST(ext_derived_cache_cap_refuses_then_keeps_the_used) {
         s.Flush();
         CHECK_EQ(s.GetStats().entries, 4ull);
     }
-    // Back under a 3-payload cap: 4000 bytes are over it, so the cache keeps what the last run used
-    // (2, 3, 4), in their order, and drops 1.
+    // Back under a 3-payload cap: 4000 bytes are over it, so the cache evicts the least recently
+    // used (1: stamped by the first run only) down to 90% of the cap and keeps 2, 3, 4 in order.
     Store s;
     CHECK(s.Open(t.Path(), 32 + 3500) == Store::OpenStatus::Opened);
     std::vector<uint8_t> out;
@@ -320,6 +320,64 @@ UNIT_TEST(ext_derived_cache_cap_refuses_then_keeps_the_used) {
     CHECK(s.Find(MakeKey(4), out));
     CHECK(out == p);
     CHECK(!fs::exists(t.File("derived.dat.new")));
+}
+
+// Two key sets used in alternate sessions (vanilla, then a mod set, then vanilla again) share one
+// cache: the stamps of every session are merged, so going over the cap evicts the set used longest
+// ago, not everything the last session did not touch. A deleted derived.used evicts the oldest
+// entries in the file, not all of them.
+UNIT_TEST(ext_derived_cache_eviction_merges_sessions_and_survives_a_lost_used_list) {
+    TempDir t;
+    const std::vector<uint8_t> p = Payload(1000, 19);
+    const auto session = [&](uint64_t cap, std::initializer_list<uint64_t> keys) {
+        Store s;
+        CHECK(s.Open(t.Path(), cap) != Store::OpenStatus::Failed);
+        std::vector<uint8_t> out;
+        for (uint64_t k : keys) {
+            if (!s.Find(MakeKey(k), out)) s.Put(MakeKey(k), p);
+        }
+        s.Flush();
+        return s.GetStats().entries;
+    };
+    CHECK_EQ(session(kBig, { 10, 11 }), 2ull);   // set A
+    CHECK_EQ(session(kBig, { 20, 21 }), 4ull);   // set B
+    CHECK_EQ(session(kBig, { 10, 11 }), 4ull);   // set A again: both hits
+    // A 3-payload cap (90% = 3178 bytes): over it at 4032, B's older entry goes first; A's both stay.
+    // (The old keep list held only the last session's keys: it kept A and dropped both of B.)
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), 32 + 3500) == Store::OpenStatus::Opened);
+        std::vector<uint8_t> out;
+        CHECK_EQ(s.GetStats().entries, 3ull);
+        CHECK(s.Find(MakeKey(10), out));
+        CHECK(s.Find(MakeKey(11), out));
+        CHECK(!s.Find(MakeKey(20), out));
+        CHECK(s.Find(MakeKey(21), out));
+    }
+    // Set B again, at the same cap: 21 hits, 20 is derived anew and refused (the cache is full); the
+    // next Open evicts down to 90% again, A's least recent first, and 20 fits the session after.
+    CHECK_EQ(session(32 + 3500, { 20, 21 }), 3ull);
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), 32 + 3500) == Store::OpenStatus::Opened);
+        std::vector<uint8_t> out;
+        CHECK_EQ(s.GetStats().entries, 2ull);   // 10 (stamped longest ago) evicted
+        CHECK(!s.Find(MakeKey(10), out));
+        CHECK(s.Find(MakeKey(21), out));
+        s.Put(MakeKey(20), p);
+        s.Flush();
+        CHECK_EQ(s.GetStats().stored, 1ull);
+    }
+    // derived.used lost: every entry is equally old, and the oldest in the file go first.
+    fs::remove(t.File("derived.used"));
+    Store s;
+    CHECK(s.Open(t.Path(), 32 + 2500) == Store::OpenStatus::Opened);   // 90% = 2278: two payloads
+    std::vector<uint8_t> out;
+    CHECK_EQ(s.GetStats().entries, 2ull);
+    CHECK(!s.Find(MakeKey(11), out));
+    CHECK(s.Find(MakeKey(21), out));
+    CHECK(s.Find(MakeKey(20), out));
+    CHECK(out == p);
 }
 
 UNIT_TEST(ext_derived_cache_second_instance_and_clear) {

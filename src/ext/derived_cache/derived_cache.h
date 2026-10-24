@@ -23,8 +23,9 @@
 //                  running instance gets OpenStatus::ReadOnly (below)
 //   derived.dat    32-byte header, then the payloads back to back, append-only
 //   derived.idx    32-byte header, then one 80-byte IndexRecord per payload, in payload order
-//   derived.used   the key ids the last session read or wrote (the cap's keep list), rewritten
-//                  at every Flush / RequestFlush (the exe: each load's end) and at Close
+//   derived.used   per entry, the session that last read or wrote it (the cap's eviction order),
+//                  and the session counter; rewritten at every Flush / RequestFlush (the exe: each
+//                  load's end) and at Close
 //   derived.clear  the Options dialog's "Clear cache": the next Open deletes the cache first
 // Little-endian on disk (x86-64 and arm64 both are). The header's format word changing resets both
 // files.
@@ -38,8 +39,13 @@
 // ones, so the bad payload is read and rejected once, not at every start.
 //
 // THE CAP. Open with `capBytes`: a payload that would take the data file past it is not stored (one
-// log line). At the next Open a cache past its cap is rewritten keeping only the entries the
-// previous session used, in their order, up to the cap; with no keep list it is emptied.
+// log line). Every holder Open is a new session (a counter in derived.used); a Find hit or a store
+// stamps the entry with it, and the stamps of earlier sessions are kept (merged, not replaced). A
+// cache past its cap, or one that refused a payload in the session before, is rewritten without
+// its least recently used entries (the oldest stamp first, then the oldest in the file; an entry
+// with no stamp counts as the oldest) until it is at 90% of the cap (lower by what the session
+// before refused, so that fits; never below half the cap), the rest in their order. A missing
+// derived.used therefore evicts the oldest-written entries, not all of them.
 //
 // A SECOND INSTANCE. The lock holder opens derived.dat / derived.idx so that others may read them
 // (Platform::FileOpenWriteShared). The instance that loses the lock opens them read-only
@@ -112,6 +118,7 @@ struct Stats {
     uint64_t misses      = 0;
     uint64_t stored      = 0;   // payloads this run appended
     uint64_t refusedFull = 0;   // payloads not stored: the cap
+    uint64_t refusedBytes = 0;  // their bytes
     uint64_t badPayloads = 0;   // reads whose bytes did not match their record
     bool     writeFailed = false;
 };
@@ -163,7 +170,9 @@ private:
 
     OpenStatus OpenReadOnly(const std::string& dir);
     bool LoadIndex(uint64_t capBytes);
-    bool Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly);
+    bool Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool evict);
+    void ReadUsedList();
+    void Stamp(uint64_t id);   // under _mutex
     void ResetFiles();
     void WriterMain();
     void WriteOne(Pending& p);
@@ -186,7 +195,9 @@ private:
     mutable std::mutex                             _mutex;   // everything below
     std::condition_variable                        _cv;
     std::unordered_multimap<uint64_t, IndexRecord> _records;   // by sourceHash
-    std::unordered_set<uint64_t>                   _used;      // KeyId()s read or written this run
+    std::unordered_map<uint64_t, uint32_t>         _stamps;    // KeyId() -> the session that last used it
+    uint32_t                                       _session = 0;       // this Open's session number
+    uint64_t                                       _lastRefusedBytes = 0;   // the bytes the previous session refused
     std::deque<Pending>                            _queue;
     uint64_t _queuedBytes = 0;
     uint64_t _dataEnd     = 0;

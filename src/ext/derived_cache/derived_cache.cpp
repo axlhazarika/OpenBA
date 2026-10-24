@@ -7,6 +7,7 @@
 
 #include "ext/derived_cache/hash64.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -19,13 +20,22 @@ constexpr uint32_t kRecordMagic = 0x31454344u;            // "DCE1"
 constexpr uint64_t kHeaderSize  = 32;
 constexpr uint64_t kMaxQueued   = 256ull * 1024 * 1024;   // Put waits past this
 constexpr uint32_t kChunk       = 1u << 20;               // one FileRead / FileWrite at most
+constexpr uint32_t kUsedRecord  = 16;                     // derived.used: KeyId, stamp, 0
+
+// What an eviction brings derived.dat down to: 90% of the cap, lower when the session before refused
+// more than the other 10% (room for what it derived anew), but never below half the cap.
+uint64_t EvictTarget(uint64_t capBytes, uint64_t refusedBytes) {
+    uint64_t target = capBytes - capBytes / 10;
+    if (refusedBytes < capBytes && capBytes - refusedBytes < target) target = capBytes - refusedBytes;
+    return std::max(target, capBytes / 2);
+}
 
 // Both files start with this.
 struct FileHeader {
     char     magic[8];     // "OBADCDAT" / "OBADCIDX" / "OBADCUSE"
     uint32_t format;       // kFormatVersion
-    uint32_t recordSize;   // 80 for the index, 8 for the keep list, 0 for the data
-    uint64_t reserved[2];
+    uint32_t recordSize;   // 80 for the index, kUsedRecord for derived.used, 0 for the data
+    uint64_t reserved[2];  // derived.used: [0] its session, [1] the payloads that session refused
 };
 static_assert(sizeof(FileHeader) == kHeaderSize, "a cache file header is 32 bytes");
 
@@ -251,6 +261,7 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
         Platform::FileDelete(FilePath(dir, "derived.clear").c_str());
         std::fprintf(stderr, "[DerivedCache] cleared (requested from the Options dialog)\n");
     }
+    ReadUsedList();   // before LoadIndex: an over-cap rewrite evicts by the stamps
     _dat = Platform::FileOpenWriteShared(FilePath(dir, "derived.dat").c_str());
     _idx = Platform::FileOpenWriteShared(FilePath(dir, "derived.idx").c_str());
     if (!Valid(_dat) || !Valid(_idx) || !LoadIndex(capBytes)) {
@@ -371,8 +382,10 @@ bool Store::LoadIndex(uint64_t capBytes) {
     if (superseded != 0)
         std::fprintf(stderr, "[DerivedCache] %llu entries were stored again since: dropping the old copies\n",
                      static_cast<unsigned long long>(superseded));
-    const bool overCap = _dataEnd > capBytes;
-    if ((overCap || superseded != 0) && !Compact(capBytes, records, overCap)) return false;
+    // Full: past the cap (it was lowered), or the session before refused a payload at it. Evicting
+    // brings it to 90%, so the next sessions have room for what they derive anew.
+    const bool full  = _dataEnd > capBytes || (_lastRefusedBytes != 0 && _dataEnd > EvictTarget(capBytes, _lastRefusedBytes));
+    if ((full || superseded != 0) && !Compact(capBytes, records, full)) return false;
     for (const IndexRecord& r : records)
         _records.emplace(r.sourceHash, r);
     _stats.entries   = _records.size();
@@ -380,20 +393,36 @@ bool Store::LoadIndex(uint64_t capBytes) {
     return true;
 }
 
-// Rewrites the files with `records`, in their order, up to the cap. Over the cap only the entries
-// the last session used are kept (`usedOnly`); after DropSuperseded alone, every record left is.
-bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly) {
-    std::unordered_set<uint64_t> keep;
-    std::vector<uint8_t> used;
-    if (usedOnly && ReadWhole(FilePath(_dir, "derived.used"), used) && used.size() >= kHeaderSize) {
-        FileHeader h = {};
-        std::memcpy(&h, used.data(), sizeof(h));
-        if (HeaderIs(h, "OBADCUSE", 8)) {
-            for (size_t at = kHeaderSize; at + 8 <= used.size(); at += 8) {
-                uint64_t id = 0;
-                std::memcpy(&id, used.data() + at, 8);
-                keep.insert(id);
-            }
+// Rewrites the files with `records`, in their order, up to the cap. With `evict` the least recently
+// used entries are left out first (derived_cache.h, "THE CAP") until the rest fit in 90% of the cap;
+// after DropSuperseded alone, every record left is kept.
+bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool evict) {
+    std::vector<bool> evicted(records.size(), false);
+    size_t evictedCount = 0;
+    if (evict) {
+        uint64_t total = 0;
+        for (const IndexRecord& r : records)
+            total += r.size;
+        struct Age {
+            uint32_t stamp;
+            size_t   at;   // the record's place in the file
+        };
+        std::vector<Age> order;
+        order.reserve(records.size());
+        for (size_t i = 0; i < records.size(); ++i) {
+            const auto it = _stamps.find(KeyId(RecordKey(records[i])));
+            order.push_back(Age{ it == _stamps.end() ? 0u : it->second, i });
+        }
+        std::sort(order.begin(), order.end(), [](const Age& x, const Age& y) {
+            return x.stamp != y.stamp ? x.stamp < y.stamp : x.at < y.at;
+        });
+        const uint64_t limit  = EvictTarget(capBytes, _lastRefusedBytes);
+        const uint64_t target = limit > kHeaderSize ? limit - kHeaderSize : 0;   // payload bytes
+        for (const Age& age : order) {
+            if (total <= target) break;
+            evicted[age.at] = true;
+            total -= records[age.at].size;
+            ++evictedCount;
         }
     }
     const std::u16string datNew = FilePath(_dir, "derived.dat.new");
@@ -413,9 +442,10 @@ bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool u
     std::vector<IndexRecord> kept;
     uint64_t end = kHeaderSize;
     std::vector<uint8_t> payload;
-    for (const IndexRecord& r : records) {
+    for (size_t i = 0; i < records.size(); ++i) {
+        const IndexRecord& r = records[i];
         if (!ok) break;
-        if (usedOnly && keep.find(KeyId(RecordKey(r))) == keep.end()) continue;
+        if (evicted[i]) continue;
         if (end + r.size > capBytes) continue;
         payload.resize(static_cast<size_t>(r.size));
         if (!ReadAt(_dat, r.offset, payload.data(), r.size)) continue;
@@ -455,10 +485,11 @@ bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool u
         records.clear();
         return true;
     }
-    if (usedOnly)
-        std::fprintf(stderr, "[DerivedCache] over the cap (%llu MB): kept %llu of %llu entries the last run used\n",
-                     static_cast<unsigned long long>(capBytes >> 20), static_cast<unsigned long long>(kept.size()),
-                     static_cast<unsigned long long>(records.size()));
+    if (evict)
+        std::fprintf(stderr, "[DerivedCache] at the cap (%llu MB): evicted the %llu least recently used of %llu entries, "
+                             "%.1f MB kept\n",
+                     static_cast<unsigned long long>(capBytes >> 20), static_cast<unsigned long long>(evictedCount),
+                     static_cast<unsigned long long>(records.size()), static_cast<double>(end) / 1048576.0);
     else
         std::fprintf(stderr, "[DerivedCache] rewritten without the old copies: %llu entries, %.1f MB\n",
                      static_cast<unsigned long long>(kept.size()), static_cast<double>(end) / 1048576.0);
@@ -483,7 +514,9 @@ void Store::Close() {
     CloseHandle(_lock);
     std::lock_guard<std::mutex> lock(_mutex);
     _records.clear();
-    _used.clear();
+    _stamps.clear();
+    _session     = 0;
+    _lastRefusedBytes = 0;
     _queue.clear();
     _queuedBytes = 0;
     _usedDirty   = false;
@@ -546,7 +579,7 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
         return false;
     }
     ++_stats.hits;
-    if (_used.insert(KeyId(key)).second) _usedDirty = true;
+    Stamp(KeyId(key));
     return true;
 }
 
@@ -650,6 +683,8 @@ void Store::WriteOne(Pending& p) {
         if (_stats.writeFailed || Lookup(p.key) != nullptr) return;
         if (_dataEnd + size > _cap) {
             ++_stats.refusedFull;
+            _stats.refusedBytes += size;
+            _usedDirty = true;   // derived.used carries the refusal: the next Open evicts
             if (!_loggedFull) {
                 _loggedFull = true;
                 std::fprintf(stderr, "[DerivedCache] the cache is at its cap (%llu MB): new entries are not stored "
@@ -684,7 +719,38 @@ void Store::WriteOne(Pending& p) {
     _indexEnd = indexAt + sizeof(rec);
     _records.emplace(rec.sourceHash, rec);
     ++_stats.stored;
-    if (_used.insert(KeyId(p.key)).second) _usedDirty = true;
+    Stamp(KeyId(p.key));
+}
+
+void Store::Stamp(uint64_t id) {
+    if (_readOnly) return;   // the holder's stamps are not ours to write
+    uint32_t& stamp = _stamps[id];
+    if (stamp == _session) return;
+    stamp      = _session;
+    _usedDirty = true;
+}
+
+// The stamps and the session counter of the sessions before (derived.used). A file that is missing
+// or not in this format is no stamps: session 1, every entry as old as the oldest.
+void Store::ReadUsedList() {
+    _stamps.clear();
+    _session     = 1;
+    _lastRefusedBytes = 0;
+    std::vector<uint8_t> used;
+    if (!ReadWhole(FilePath(_dir, "derived.used"), used) || used.size() < kHeaderSize) return;
+    FileHeader h = {};
+    std::memcpy(&h, used.data(), sizeof(h));
+    if (!HeaderIs(h, "OBADCUSE", kUsedRecord)) return;
+    for (size_t at = kHeaderSize; at + kUsedRecord <= used.size(); at += kUsedRecord) {
+        uint64_t id = 0;
+        uint32_t stamp = 0;
+        std::memcpy(&id, used.data() + at, 8);
+        std::memcpy(&stamp, used.data() + at + 8, 4);
+        _stamps[id] = stamp;
+    }
+    const uint64_t last = h.reserved[0];
+    _session     = last < 0xFFFFFFFEull ? static_cast<uint32_t>(last) + 1 : 0xFFFFFFFFu;
+    _lastRefusedBytes = h.reserved[1];
 }
 
 void Store::WriteUsedList() {
@@ -692,13 +758,22 @@ void Store::WriteUsedList() {
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _usedDirty = false;
-        bytes.resize(kHeaderSize + _used.size() * 8);
-        const FileHeader h = MakeHeader("OBADCUSE", 8);
+        // Every entry the index still holds that a session stamped, this one's and the earlier ones'
+        // merged; an evicted entry's stamp goes with it.
+        bytes.reserve(kHeaderSize + _records.size() * kUsedRecord);
+        bytes.resize(kHeaderSize);
+        FileHeader h = MakeHeader("OBADCUSE", kUsedRecord);
+        h.reserved[0] = _session;
+        h.reserved[1] = _stats.refusedBytes;
         std::memcpy(bytes.data(), &h, sizeof(h));
-        size_t at = kHeaderSize;
-        for (uint64_t id : _used) {
-            std::memcpy(bytes.data() + at, &id, 8);
-            at += 8;
+        for (const auto& kv : _records) {
+            const uint64_t id = KeyId(RecordKey(kv.second));
+            const auto it = _stamps.find(id);
+            if (it == _stamps.end()) continue;
+            uint8_t rec[kUsedRecord] = {};
+            std::memcpy(rec, &id, 8);
+            std::memcpy(rec + 8, &it->second, 4);
+            bytes.insert(bytes.end(), rec, rec + kUsedRecord);
         }
     }
     WriteWhole(FilePath(_dir, "derived.used"), bytes.data(), bytes.size());
