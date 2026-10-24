@@ -324,15 +324,47 @@ UNIT_TEST(ext_derived_cache_cap_refuses_then_keeps_the_used) {
 
 UNIT_TEST(ext_derived_cache_second_instance_and_clear) {
     TempDir t;
+    const std::vector<uint8_t> p1 = Payload(100, 8);
+    const std::vector<uint8_t> p3 = Payload(300, 16);
     Store a;
     CHECK(a.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
-    a.Put(MakeKey(1), Payload(100, 8));
+    a.Put(MakeKey(1), p1);
     a.Flush();
+    // The lock loser reads what the holder had stored, and writes nothing.
     Store b;
-    CHECK(b.Open(t.Path(), kBig) == Store::OpenStatus::InUse);
+    CHECK(b.Open(t.Path(), kBig) == Store::OpenStatus::ReadOnly);
+    CHECK(b.IsReadOnly());
     std::vector<uint8_t> out;
-    CHECK(!b.Find(MakeKey(1), out));
+    CHECK(b.Find(MakeKey(1), out));
+    CHECK(out == p1);
+    const uint64_t before = BytesInDir(t.Path());
     b.Put(MakeKey(2), Payload(100, 9));   // a no-op
+    b.Flush();                            // returns at once: no writer
+    CHECK_EQ(BytesInDir(t.Path()), before);
+    CHECK(!b.Find(MakeKey(2), out));
+    // The holder appends while the reader is open: the reader's index is the prefix it loaded; a
+    // reader opened after the append sees it.
+    a.Put(MakeKey(3), p3);
+    a.Flush();
+    CHECK(a.Find(MakeKey(3), out));
+    CHECK(!b.Find(MakeKey(3), out));
+    {
+        Store c;
+        CHECK(c.Open(t.Path(), kBig) == Store::OpenStatus::ReadOnly);
+        CHECK_EQ(c.GetStats().entries, 2ull);
+        CHECK(c.Find(MakeKey(3), out));
+        CHECK(out == p3);
+    }
+    // The holder closes while the reader still reads; the next opener takes the lock and the files.
+    a.Close();
+    CHECK(b.Find(MakeKey(1), out));
+    CHECK(out == p1);
+    CHECK(a.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    a.Put(MakeKey(4), p1);
+    a.Flush();
+    CHECK(a.Find(MakeKey(4), out));
+    CHECK(b.Find(MakeKey(1), out));
+    b.Close();
 
     CHECK(RequestClear(t.Path()));
     CHECK(ClearRequested(t.Path()));
@@ -357,6 +389,73 @@ UNIT_TEST(ext_derived_cache_open_creates_missing_parents) {
     CHECK_EQ(s.GetStats().stored, 1ull);
     s.Close();
     CHECK(fs::exists(deep / "derived.dat"));
+}
+
+// The holder rewrites the files (here: the Open that drops a superseded record) while a read-only
+// store holds them open. Windows: the reader's FILE_SHARE_DELETE lets the replace go through; the
+// reader keeps the old bytes until it closes. POSIX: the reader keeps the old inode.
+UNIT_TEST(ext_derived_cache_rewrite_with_a_reader_open) {
+    TempDir t;
+    const std::vector<uint8_t> a = Payload(600, 17);
+    const std::vector<uint8_t> b = Payload(700, 18);
+    {
+        Store s;
+        CHECK(s.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+        s.Put(MakeKey(5), a);
+        s.Put(MakeKey(6), b);
+    }
+    Store holder;
+    CHECK(holder.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    Store reader;
+    CHECK(reader.Open(t.Path(), kBig) == Store::OpenStatus::ReadOnly);
+    holder.Close();
+    // A second record for key 5 (what a re-store leaves), appended while the reader holds the files.
+    {
+        IndexRecord r = {};
+        r.magic = 0x31454344u;   // "DCE1"
+        const Key k = MakeKey(5);
+        r.producer = k.producer;
+        r.version  = k.version;
+        std::memcpy(r.shape, k.shape, sizeof(r.shape));
+        r.sourceSize  = k.sourceSize;
+        r.sourceHash  = k.sourceHash;
+        r.offset      = 32 + a.size() + b.size();
+        r.size        = b.size();
+        r.payloadHash = Hash64(b.data(), b.size());
+        r.check       = Hash64(&r, offsetof(IndexRecord, check));
+        std::ofstream d(t.File("derived.dat"), std::ios::binary | std::ios::app);
+        d.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
+        std::ofstream i(t.File("derived.idx"), std::ios::binary | std::ios::app);
+        i.write(reinterpret_cast<const char*>(&r), sizeof(r));
+    }
+    const uint64_t rewritten = 64ull + b.size() + b.size() + 2 * sizeof(IndexRecord);
+    const uint64_t asItWas   = 64ull + a.size() + b.size() + b.size() + 3 * sizeof(IndexRecord);
+    CHECK(holder.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    // POSIX: the rewrite went through (the files hold key 6 and key 5's newest copy only). Windows
+    // 10: MoveFileExW refuses to replace a file another handle holds, FILE_SHARE_DELETE or not, so
+    // the files stay as they were. Either way the holder serves the newest copy and leaves no
+    // half-made rewrite behind.
+    const uint64_t onDisk = holder.BytesOnDisk();
+    CHECK(onDisk == rewritten || onDisk == asItWas);
+    std::fprintf(stderr, "  rewrite with a reader open: %s\n", onDisk == rewritten ? "replaced" : "kept as it was");
+    std::vector<uint8_t> out;
+    CHECK(holder.Find(MakeKey(5), out));
+    CHECK(out == b);
+    CHECK(!fs::exists(t.File("derived.dat.new")));
+    CHECK(!fs::exists(t.File("derived.idx.new")));
+    // The reader still serves what it loaded.
+    CHECK(reader.Find(MakeKey(5), out));
+    CHECK(out == a);
+    CHECK(reader.Find(MakeKey(6), out));
+    CHECK(out == b);
+    reader.Close();
+    holder.Close();
+    // With the reader gone the rewrite goes through.
+    CHECK(holder.Open(t.Path(), kBig) == Store::OpenStatus::Opened);
+    CHECK(holder.Find(MakeKey(5), out));
+    CHECK(out == b);
+    holder.Close();
+    CHECK_EQ(BytesInDir(t.Path()), rewritten);
 }
 
 UNIT_TEST(ext_derived_cache_unknown_format_starts_empty) {

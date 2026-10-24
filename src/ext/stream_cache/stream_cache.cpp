@@ -423,8 +423,8 @@ void Boot() {
     if (!Ext().stream_cache) return;
     g_store = DerivedCache::OpenShared();
     if (g_store == nullptr) {
-        std::fprintf(stderr, "[StreamCache] no derived cache (faithful profile, no documents folder, or another "
-                     "instance holds it): off for this run\n");
+        std::fprintf(stderr, "[StreamCache] no derived cache (faithful profile, no documents folder, or the cache "
+                     "cannot be opened): off for this run\n");
         return;
     }
     g_payloadsSkipped = Ext().create_on_demand;

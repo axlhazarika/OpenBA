@@ -242,8 +242,7 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
     _lock = Platform::FileOpenExclusive(FilePath(dir, "derived.lock").c_str());
     if (!Valid(_lock)) {
         _lock = Platform::kInvalidFileHandle;
-        std::fprintf(stderr, "[DerivedCache] %s is in use by another instance: no cache this run\n", dir.c_str());
-        return OpenStatus::InUse;
+        return OpenReadOnly(dir);
     }
     if (ClearRequested(dir)) {
         Platform::FileDelete(FilePath(dir, "derived.dat").c_str());
@@ -252,8 +251,8 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
         Platform::FileDelete(FilePath(dir, "derived.clear").c_str());
         std::fprintf(stderr, "[DerivedCache] cleared (requested from the Options dialog)\n");
     }
-    _dat = Platform::FileOpenExclusive(FilePath(dir, "derived.dat").c_str());
-    _idx = Platform::FileOpenExclusive(FilePath(dir, "derived.idx").c_str());
+    _dat = Platform::FileOpenWriteShared(FilePath(dir, "derived.dat").c_str());
+    _idx = Platform::FileOpenWriteShared(FilePath(dir, "derived.idx").c_str());
     if (!Valid(_dat) || !Valid(_idx) || !LoadIndex(capBytes)) {
         CloseHandle(_dat);
         CloseHandle(_idx);
@@ -271,6 +270,29 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
                  static_cast<double>(_dataEnd + _indexEnd) / 1048576.0,
                  static_cast<unsigned long long>(capBytes >> 20));
     return OpenStatus::Opened;
+}
+
+// The lock is another instance's: read what it has stored, write nothing (derived_cache.h, "A
+// SECOND INSTANCE"). A clear request is the holder's to carry out.
+Store::OpenStatus Store::OpenReadOnly(const std::string& dir) {
+    _readOnly = true;
+    _dat = Platform::FileOpenReadShared(FilePath(dir, "derived.dat").c_str());
+    _idx = Platform::FileOpenReadShared(FilePath(dir, "derived.idx").c_str());
+    if (!Valid(_dat) || !Valid(_idx) || !LoadIndex(_cap)) {
+        CloseHandle(_dat);
+        CloseHandle(_idx);
+        _readOnly = false;
+        std::fprintf(stderr, "[DerivedCache] %s is in use by another instance and cannot be read: no cache this run\n",
+                     dir.c_str());
+        return OpenStatus::InUse;
+    }
+    _open     = true;
+    _disabled = false;
+    std::fprintf(stderr, "[DerivedCache] %s is in use by another instance: reading its %llu entries (%.1f MB), "
+                         "storing nothing this run\n",
+                 dir.c_str(), static_cast<unsigned long long>(_records.size()),
+                 static_cast<double>(_dataEnd) / 1048576.0);
+    return OpenStatus::ReadOnly;
 }
 
 void Store::ResetFiles() {
@@ -297,6 +319,12 @@ bool Store::LoadIndex(uint64_t capBytes) {
                            ReadAt(_idx, 0, &ih, sizeof(ih)) && HeaderIs(dh, "OBADCDAT", 0) &&
                            HeaderIs(ih, "OBADCIDX", sizeof(IndexRecord));
     if (!headersOk) {
+        if (_readOnly) {
+            // The holder's files as they are; an empty or foreign cache is simply no entries.
+            _dataEnd  = 0;
+            _indexEnd = 0;
+            return true;
+        }
         if (datSize != 0 || idxSize != 0)
             std::fprintf(stderr, "[DerivedCache] unknown or damaged cache format: starting empty\n");
         ResetFiles();
@@ -316,6 +344,17 @@ bool Store::LoadIndex(uint64_t capBytes) {
         end += r.size;
     }
     const uint64_t indexEnd = kHeaderSize + records.size() * sizeof(IndexRecord);
+    if (_readOnly) {
+        // A tail past the prefix is the holder's append in flight, or its torn tail: not ours to drop.
+        _dataEnd  = end;
+        _indexEnd = indexEnd;
+        DropSuperseded(records);
+        for (const IndexRecord& r : records)
+            _records.emplace(r.sourceHash, r);
+        _stats.entries   = _records.size();
+        _stats.dataBytes = _dataEnd;
+        return true;
+    }
     if (records.size() != all.size() || static_cast<uint64_t>(datSize) != end ||
         static_cast<uint64_t>(idxSize) != indexEnd) {
         std::fprintf(stderr, "[DerivedCache] dropped a damaged tail: kept %llu of %llu entries\n",
@@ -394,11 +433,19 @@ bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool u
     CloseHandle(_idx);
     const std::u16string dat = FilePath(_dir, "derived.dat");
     const std::u16string idx = FilePath(_dir, "derived.idx");
-    ok = ok && Platform::FileReplace(datNew.c_str(), dat.c_str()) != 0 &&
-         Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
-    _dat = Platform::FileOpenExclusive(dat.c_str());
-    _idx = Platform::FileOpenExclusive(idx.c_str());
+    const bool datReplaced = ok && Platform::FileReplace(datNew.c_str(), dat.c_str()) != 0;
+    ok = datReplaced && Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
+    _dat = Platform::FileOpenWriteShared(dat.c_str());
+    _idx = Platform::FileOpenWriteShared(idx.c_str());
     if (!Valid(_dat) || !Valid(_idx)) return false;
+    if (!datReplaced) {
+        // Nothing was replaced (on Windows: a reader without FILE_SHARE_DELETE, or a file system
+        // that refuses to rename over an open file): the cache stays as it was, rewritten next time.
+        std::fprintf(stderr, "[DerivedCache] the rewrite could not replace derived.dat: the cache is kept as it was\n");
+        Platform::FileDelete(datNew.c_str());
+        Platform::FileDelete(idxNew.c_str());
+        return true;
+    }
     if (!ok) {
         // A half-made rewrite: start empty rather than trust either file.
         std::fprintf(stderr, "[DerivedCache] the over-cap rewrite failed: starting empty\n");
@@ -442,6 +489,7 @@ void Store::Close() {
     _usedDirty   = false;
     _loggedFull  = false;
     _open        = false;
+    _readOnly    = false;
     _stats       = Stats();
 }
 
@@ -503,7 +551,7 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
 }
 
 void Store::Put(const Key& key, std::vector<uint8_t> payload) {
-    if (!_open || _disabled.load(std::memory_order_acquire) || payload.empty()) return;
+    if (!_open || _readOnly || _disabled.load(std::memory_order_acquire) || payload.empty()) return;
     std::unique_lock<std::mutex> lock(_mutex);
     if (_stats.writeFailed) return;
     _cv.wait(lock, [&] { return _queuedBytes == 0 || _queuedBytes + payload.size() <= kMaxQueued; });
@@ -514,7 +562,7 @@ void Store::Put(const Key& key, std::vector<uint8_t> payload) {
 }
 
 void Store::Flush() {
-    if (!_open) return;
+    if (!_open || _readOnly) return;
     std::unique_lock<std::mutex> lock(_mutex);
     _flushRequested = true;
     _cv.notify_all();
@@ -522,7 +570,7 @@ void Store::Flush() {
 }
 
 void Store::RequestFlush() {
-    if (!_open) return;
+    if (!_open || _readOnly) return;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _flushRequested = true;

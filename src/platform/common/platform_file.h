@@ -196,5 +196,12 @@ inline uint32_t FileMapRead(const FileMapping& m, uint64_t pos, uint32_t bytes, 
 // 1 on success. A mapped file cannot be truncated on Windows: truncate before FileMapOpen.
 FileHandle FileOpenExclusive(const PathChar* path);
 int32_t    FileTruncate(FileHandle h, int64_t size);
+// The cache's data files while derived.lock is held: read / write, created when absent, and readable
+// by another process meanwhile (the lock loser reads them with FileOpenReadShared, whose share mode
+// allows this handle's writes), which may also rename over or delete them. A second writer is
+// refused. Windows: CreateFileW(GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+// OPEN_ALWAYS, NORMAL). POSIX: open(O_RDWR | O_CREAT, 0644) and no flock: derived.lock is the
+// writers' exclusion, and a reader keeps the inode it opened across a rename.
+FileHandle FileOpenWriteShared(const PathChar* path);
 
 }  // namespace Platform

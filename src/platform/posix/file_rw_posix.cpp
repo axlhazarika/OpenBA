@@ -35,6 +35,13 @@ FileHandle FileOpenExclusive(const PathChar* path) {
     return reinterpret_cast<FileHandle>(static_cast<uintptr_t>(fd) + 1u);  // CAST-OK: ptr_int
 }
 
+FileHandle FileOpenWriteShared(const PathChar* path) {
+    const std::string native = Posix::ToNative(path);
+    const int fd = ::open(native.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) return kInvalidFileHandle;
+    return reinterpret_cast<FileHandle>(static_cast<uintptr_t>(fd) + 1u);  // CAST-OK: ptr_int
+}
+
 int32_t FileTruncate(FileHandle h, int64_t size) {
     if (size < 0) return 0;
     return ::ftruncate(Fd(h), static_cast<off_t>(size)) == 0 ? 1 : 0;

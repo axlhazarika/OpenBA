@@ -20,7 +20,7 @@
 //
 // THE FILES, in <dir> (the exe: <Documents>\Banished\Cache\, beside settings.cfg):
 //   derived.lock   held exclusively while a store is open (Platform::FileOpenExclusive): a second
-//                  running instance gets OpenStatus::InUse and runs without the cache
+//                  running instance gets OpenStatus::ReadOnly (below)
 //   derived.dat    32-byte header, then the payloads back to back, append-only
 //   derived.idx    32-byte header, then one 80-byte IndexRecord per payload, in payload order
 //   derived.used   the key ids the last session read or wrote (the cap's keep list), rewritten
@@ -40,6 +40,14 @@
 // THE CAP. Open with `capBytes`: a payload that would take the data file past it is not stored (one
 // log line). At the next Open a cache past its cap is rewritten keeping only the entries the
 // previous session used, in their order, up to the cap; with no keep list it is emptied.
+//
+// A SECOND INSTANCE. The lock holder opens derived.dat / derived.idx so that others may read them
+// (Platform::FileOpenWriteShared). The instance that loses the lock opens them read-only
+// (OpenStatus::ReadOnly): it loads the index's valid prefix as it is at that moment, serves Find
+// through the file handle (no mapping: the holder may truncate a torn tail under it), and never
+// writes, truncates or rewrites anything and has no writer thread; Put / Flush are no-ops. A live
+// append by the holder is safe to read: a record is written after its payload, every record is
+// self-hashed and every payload is hashed, so a half-written tail is simply not in the prefix.
 //
 // THREADS. Find is called from any thread (the loader's texture creates); its copy out of the
 // mapping (or read through the handle) holds the file lock, so ReleaseMapping is safe at any time.
@@ -110,7 +118,9 @@ struct Stats {
 
 class Store {
 public:
-    enum class OpenStatus { Opened, InUse, Failed };
+    // ReadOnly: another instance holds the lock; this store reads what it had stored (above).
+    // InUse: it holds the lock and its files cannot be read.
+    enum class OpenStatus { Opened, ReadOnly, InUse, Failed };
 
     Store() = default;
     ~Store();
@@ -123,6 +133,7 @@ public:
     // Writes what is queued, stops the writer, closes the files and releases the lock.
     void Close();
     bool IsOpen() const { return _open; }
+    bool IsReadOnly() const { return _readOnly; }
 
     // The payload stored under `key`, verified against its record. false = a miss (`out` cleared).
     bool Find(const Key& key, std::vector<uint8_t>& out);
@@ -150,6 +161,7 @@ private:
         std::vector<uint8_t> payload;
     };
 
+    OpenStatus OpenReadOnly(const std::string& dir);
     bool LoadIndex(uint64_t capBytes);
     bool Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly);
     void ResetFiles();
@@ -163,6 +175,7 @@ private:
     std::string _dir;
     uint64_t    _cap  = 0;
     bool        _open = false;
+    bool        _readOnly = false;   // the lock is another instance's (OpenStatus::ReadOnly)
 
     Platform::FileHandle  _lock = Platform::kInvalidFileHandle;
     Platform::FileHandle  _dat  = Platform::kInvalidFileHandle;
@@ -203,7 +216,8 @@ uint64_t BytesInDir(const std::string& dir);
 // "Cache". false when the documents folder is unknown.
 bool CacheDir(std::string& out);
 // Opens the shared store once (later calls return it, or null): null under the faithful profile,
-// when the folder is unknown, or when another instance holds the cache. The cap is
+// when the folder is unknown, or when the cache cannot be opened; read-only when another instance
+// holds it. The cap is
 // Val().derived_cache_mb.
 Store* OpenShared();
 Store* Shared();   // the store OpenShared opened, or null

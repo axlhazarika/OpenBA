@@ -47,7 +47,8 @@ Store* OpenShared() {
     }
     Store* s = new Store();
     const uint64_t cap = static_cast<uint64_t>(Val().derived_cache_mb) << 20;
-    if (s->Open(dir, cap) != Store::OpenStatus::Opened) {
+    const Store::OpenStatus status = s->Open(dir, cap);
+    if (status != Store::OpenStatus::Opened && status != Store::OpenStatus::ReadOnly) {
         delete s;
         return nullptr;
     }
