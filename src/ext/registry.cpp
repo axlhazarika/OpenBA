@@ -75,8 +75,10 @@ const Entry kEntries[] = {
       0, [](State& s) -> bool& { return s.fix.large_packages; } },
 
     // docs/retail_bugs.md section 10 (known_port_issues rows 1332 / 1334): a graphics device lost
-    // before the main menu's Startup has made the first Save::SaveLoad recovers; MainLoop's video
-    // error / restart pair skips the save-list walks while there is no save list.
+    // during start-up recovers. Two seams: MainLoop's video error / restart pair skips the save-list
+    // walks while there is no save list yet, and the renderer backend runs the device-lost recovery
+    // when a swap-chain reset fails on a removed device (retail recovers only from Present).
+    // Off (the faithful profile): retail's spin or crash.
     { "boot_device_lost", Tier::Fix, Class::None, true,
       "Graphics reset during start-up",
       "A graphics driver reset while the game is starting up no longer crashes it.",

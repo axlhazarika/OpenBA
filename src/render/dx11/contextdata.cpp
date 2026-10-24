@@ -219,6 +219,7 @@
 #include "options.h"
 #include "dx11_backend_access.h"
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
+#include "boot_device_lost/boot_device_lost.h"   // NOT RETAIL: fix.boot_device_lost
 #include "system/Error.h"   // ENDGAME B.3.4b System callers: System::Error (-Iruntime/types)
 // ENDGAME B.3.5 block VC: `Video::Viewport` and `Video::Context`.
 #include "video/Context.h"
@@ -442,7 +443,8 @@ bool ContextData::BeginCommands() {
         DeviceData* const dd = Dx11DeviceDataOf(device);   // B5 DEV-A: typed
         const int resized = Dx11_DeviceData_Resize(dd);
 
-        // NOT RETAIL (known_port_issues row 1334): a reset that failed on a REMOVED
+        // FIX SEAM (NOT RETAIL, docs/retail_bugs.md section 10, known_port_issues row
+        // 1334): with fix.boot_device_lost on, a reset that failed on a REMOVED
         // device enters Finish's device-lost recovery here. Retail reaches that
         // recovery only from Present, which a failed reset never gets to: once the
         // device is gone ResizeBuffers answers DXGI_ERROR_DEVICE_REMOVED on every
@@ -450,7 +452,8 @@ bool ContextData::BeginCommands() {
         // (the cursor's staging Map) crashed on the dead device. A reset refused for
         // any other reason (SetFullscreenState without the foreground, a hidden or
         // minimised window) leaves the device alive and is retried as retail retries.
-        if (resized == 0) {
+        // Row off (and under the faithful profile): retail's retry, spin or crash.
+        if (resized == 0 && BootDeviceLost::On()) {
             ID3D11Device* const d3dDevice = dd->d3dDevice;
             const HRESULT removed = d3dDevice->GetDeviceRemovedReason();
             if (removed != 0) {

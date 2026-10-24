@@ -276,6 +276,7 @@ public:
     // (src/ext/registry_boot.cpp points it at the live bool). While it reads true, OnVideoError and
     // OnVideoRestart skip the Save::SaveLoad walks when no SaveLoad exists yet (a device loss before
     // MenuDialogLoopT::Startup's end constructs the first one); retail dereferences the null.
+    // The row's other seam is the backend's (src/render/common/boot_device_lost/).
     static const bool* _extFixBootDeviceLost;   // defined in mainloop_video.cpp
     bool IsRunning(const UpdateLoop* loop) const;                  // 0x1800314b0
     System::Time GetDeltaTime() const;                             // 0x1800314f0  retslot
