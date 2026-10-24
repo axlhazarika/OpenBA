@@ -173,4 +173,21 @@ it still carries the save-load gain above.
 
 ## 6. Loader profile (the plan's prerequisite)
 
-See the addendum below (filled from the 2000 Hz sample taken at the end of this block).
+`BANISHED_SAMPLE=2000`, perf exe of this branch (both rows on), seven-part MegaMod, a fresh user dir whose derived
+cache one unsampled boot had just filled (`[StreamCache] hits 361837 ... misses 143`: warm), new game autostarted;
+1,184,516 samples, loader thread only, `tools/sample_report.py --thread loader`. The sampled boot ran close to the
+unsampled numbers (big load 7.66 s, menu 13.2 s, first game frame 15.65 s). Two of the five sampled attempts hung at
+boot (`engine.videomodes`, main thread in an ntdll loader-lock wait: the 2000 Hz suspension, not this change; the
+watchdog's exit could not complete either, the harness timeout killed them). Samples and log: scratchpad
+`t-visitpass/` and `build/samples_mm_warm.txt` in the worktree (not committed: 180 MB).
+
+Big load (InnerLoaderLoop, 9,152 loader samples), self time: unsymbolized static-CRT copy code at exe+0x420e88
+17.8 %, ntdll 11.7 %, ucrtbase 8.8 %, KERNEL32 4.6 %, `Compression::Decompress` 4.1 %, `CompressedStream::ReadArray`
+3.2 %, the allocator (`GetFreeTagForSize` + `Allocate` + `UnlinkFreeTag`) 5.4 %, `StreamCache::RecordView::Read` 1.6 %,
+`StriCmpAscii` 1.6 %, `FindFastpath::RequestTable::Find` 0.7 %. Inclusive: PickingMesh serialization 61.7 %
+(`SerializeUShortArray` 35 %, `SerializeTrianglesBody` 25.5 %), `CompressedStream::ReadArray` 48 %, `MemAlloc` 8.7 %,
+`DecompressFromSource` 8.7 %, `String::Release` 6.5 %, `ExternalFactory::Add` 4.7 %. The big load is array decode
+and copy (picking meshes first), not path or table work. First menu pass (774 samples): the verifying walk
+(`VisitExternal` -> FindOrLoad, ExpandRelativePath 18.5 %, Filename copies and AdjustDelimiters) plus the
+recording. New-game bracket (791 samples): `WorldGeometry::BuildTerrain` 77 %, of which erosion 52 %; the
+resource pass no longer shows.
