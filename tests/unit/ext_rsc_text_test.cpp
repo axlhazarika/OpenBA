@@ -9,6 +9,7 @@
 #include "unit.h"
 #include "ext/load_notice.h"
 #include "ext/resources/text_parser.h"
+#include "ext/resources/text_enums.h"
 #include "ext_rsc_text.h"
 
 #include <cstring>
@@ -211,6 +212,39 @@ UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
     const Object* rank = f.Find("textItemPriorityRank");
     CHECK(rank && rank->body.Find("_text"));
     CheckKnownTypes(f, "ItemPriorityPage.rsc");
+}
+
+// The element flags our pages may set (`Flags _flags = ExpandWidth;`): the kit's names with the bits the engine
+// reads (Element.h: the stretch bits 0x4 / 0x8 the layouts test, the screen-size bits 0x10 / 0x20 GetPaddedSize
+// tests), and nothing the table does not know.
+UNIT_TEST(ext_rsc_text_element_flags) {
+    uint32_t v = 0;
+    CHECK(LookupEnum(kElementFlags, "Hidden", v) && v == 0x1);
+    CHECK(LookupEnum(kElementFlags, "NoMouseCapture", v) && v == 0x2);
+    CHECK(LookupEnum(kElementFlags, "ExpandWidth", v) && v == 0x4);
+    CHECK(LookupEnum(kElementFlags, "ExpandHeight", v) && v == 0x8);
+    CHECK(LookupEnum(kElementFlags, "FullHeight", v) && v == 0x10);
+    CHECK(LookupEnum(kElementFlags, "FullWidth", v) && v == 0x20);
+    CHECK(!LookupEnum(kElementFlags, "ExtendWidth", v));   // Options.rsc's spelling: not a name the kit knows
+    CHECK(!LookupEnum(kElementFlags, "PauseGame", v));     // a dialog flag, not an element's
+    CHECK(LookupEnum(kDialogFlags, "FirstDraw", v) && v == 0x10);
+
+    // The Foods cell lays itself across the column the controller gives it.
+    File f;
+    CHECK(ParseEmbedded("Dialog/RestrictedFoodsPage.rsc", f));
+    const Object* cell = f.Find("ribbonRestrictedFoodsCell");
+    CHECK(cell != nullptr);
+    if (cell) {
+        const Field* flags = cell->body.Find("_flags");
+        CHECK(flags && !flags->isArray && flags->tokens.size() == 1 && flags->tokens[0].text == "ExpandWidth");
+        CHECK(cell->body.Find("_minWidth") == nullptr);   // the width is the list's, not a constant
+    }
+    File p;
+    CHECK(ParseEmbedded("Dialog/ItemPriorityPage.rsc", p));
+    const Object* row = p.Find("ribbonItemPriorityCell");
+    CHECK(row && row->body.Find("_minWidth") == nullptr);
+    const Object* label = p.Find("labelItemPriorityRow");
+    CHECK(label && label->body.Find("_minWidth") == nullptr);
 }
 
 UNIT_TEST(ext_rsc_text_syntax_errors) {
