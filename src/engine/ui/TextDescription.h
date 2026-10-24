@@ -39,8 +39,9 @@
 //     +0x86 ..+0x87  NEVER WRITTEN by the ctor and read by no body
 //     +0x88 dword 0xc8  kScalarInt
 //     +0x8c dword -1    kScalarInt, serialized CONDITIONALLY (textdescription.cpp)
-// The scalar names are the ported file's (`_u80`/`_b84`/`_b85`/`_i88`/`_i8c`):
-// Serialize proves the widths, nothing proves a meaning. Not invented here.
+// The scalar names are the ported file's (`_u80`/`_b84`/`_b85`/`_i8c`; the +0x88 dword is `_wordWrapSize`):
+// Serialize proves the widths, nothing proves a meaning. +0x88 is the width a wrapped text breaks at (the kit's
+// Mod.rsc writes `int _wordWrapSize = 192`), so it carries that name here and in TextElement.
 //
 // (Until ENDGAME B.3.9:) ABSTRACT (slot 0 `= 0`); no real ctor (B4b-2): every live one is built by the
 // `??0TextDescription` DOOR (textdescription.cpp) and wears the MINTED table,
@@ -83,7 +84,7 @@ public:
         _u80 = 0;
         _b84 = false;
         _b85 = false;
-        _i88 = 0xc8;
+        _wordWrapSize = 0xc8;
         _i8c = -1;
     }
 
@@ -142,7 +143,7 @@ public:
     bool         _b84;           // +0x84  kScalarBool
     bool         _b85;           // +0x85  kScalarBool
     uint8_t      _pad86[2];      // +0x86  never written
-    int32_t      _i88;           // +0x88  kScalarInt, ctor 0xc8
+    int32_t      _wordWrapSize;  // +0x88  kScalarInt, ctor 0xc8
     int32_t      _i8c;           // +0x8c  kScalarInt, ctor -1, conditional
 };
 
@@ -160,7 +161,7 @@ static_assert(offsetof(TextDescription, _name)         == 0x78, "");
 static_assert(offsetof(TextDescription, _u80)          == 0x80, "");
 static_assert(offsetof(TextDescription, _b84)          == 0x84, "");
 static_assert(offsetof(TextDescription, _b85)          == 0x85, "");
-static_assert(offsetof(TextDescription, _i88)          == 0x88, "");
+static_assert(offsetof(TextDescription, _wordWrapSize)   == 0x88, "");
 static_assert(offsetof(TextDescription, _i8c)          == 0x8c, "");
 
 }  // namespace UI

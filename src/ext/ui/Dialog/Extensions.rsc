@@ -110,7 +110,15 @@ TextDescription headerOn   : "header" { String _text = "ExtensionsHeaderOn";   i
 
 // The scrolling list and the ribbon the rows go into, as the Mods dialog has them; the controller
 // finds "tableMods" and appends one entryRow per registry entry.
-ContainerDescription tableList : "Mod.rsc:tableList" { ElementDescription _content = "tableMods"; }
+// Its size is the game's own (596 x 350), set here too: a mod that makes the Mods window wider (MegaMod does) would otherwise leave a
+// strip of empty list beside our rows.
+ContainerDescription tableList : "Mod.rsc:tableList"
+{
+	int _width = 596;
+	int _height = 350;
+	int _scrollSpacing = 4;
+	ElementDescription _content = "tableMods";
+}
 
 RibbonDescription tableMods : "Mod.rsc:tableMods"
 {
@@ -165,8 +173,11 @@ TextDescription textModName : "Mod.rsc:textModName"
 {
 }
 
+// The description's wrap width is our own, not the game's: the row puts the toggle 230 px past the description's left edge, and a mod that
+// widens the Mods window's description text (MegaMod does) would otherwise push the text over the toggle.
 TextDescription textModDescription : "Mod.rsc:textModDescription"
 {
+	int _wordWrapSize = 192;
 }
 
 // Small-font notes from our table: the base for the kind, the state and the profile texts.

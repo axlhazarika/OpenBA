@@ -70,6 +70,24 @@ UNIT_TEST(ext_rsc_text_parse_extensions) {
             CHECK(anchor && anchor->tokens[0].quoted && anchor->tokens[0].text == "blurb");
         }
     }
+    // The description wraps at a width of our own (not the game's, which a mod can widen over the toggle).
+    const Object* blurb = f.Find("textModDescription");
+    CHECK(blurb && blurb->base == "Mod.rsc:textModDescription");
+    if (blurb) {
+        const Field* size = blurb->body.Find("_wordWrapSize");
+        CHECK(size && size->tokens.size() == 1 && size->tokens[0].text == "192");
+        CHECK(blurb->body.Find("_wordWrap") == nullptr);   // the base's, unchanged
+    }
+    const Object* list = f.Find("tableList");
+    CHECK(list && list->type == "ContainerDescription");
+    if (list) {
+        const Field* w = list->body.Find("_width");
+        CHECK(w && w->tokens.size() == 1 && w->tokens[0].text == "596");
+        const Field* h = list->body.Find("_height");
+        CHECK(h && h->tokens.size() == 1 && h->tokens[0].text == "350");
+        const Field* gap = list->body.Find("_scrollSpacing");
+        CHECK(gap && gap->tokens.size() == 1 && gap->tokens[0].text == "4");
+    }
     const Object* title = f.Find("labelTitle");
     CHECK(title && title->base == "Mod.rsc:labelTitle" && title->type == "LabelDescription");
     const Object* notice = f.Find("extensionNotInBuild");

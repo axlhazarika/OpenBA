@@ -718,7 +718,7 @@ UNIT_TEST(b39_uia_text_label_ctors_make_retails_stores) {
         CHECK_EQ((int)d->_b85, 0);
         CHECK_EQ((int)d->_pad86[0], 0xCD);            // NOT written
         CHECK_EQ((int)d->_pad86[1], 0xCD);
-        CHECK_EQ(d->_i88, 0xc8);
+        CHECK_EQ(d->_wordWrapSize, 0xc8);
         CHECK_EQ(d->_i8c, -1);
         TextDescriptionProbe probe;
         CHECK(VTableOf(d) != VTableOf(&probe));
@@ -730,7 +730,7 @@ UNIT_TEST(b39_uia_text_label_ctors_make_retails_stores) {
         alignas(8) uint8_t buf[0xb8];
         std::memset(buf, 0xCD, sizeof buf);
         UI::LabelDescription* d = ::new (buf) UI::LabelDescription();
-        CHECK_EQ(d->_i88, 0xc8);                      // TextDescription() ran
+        CHECK_EQ(d->_wordWrapSize, 0xc8);                      // TextDescription() ran
         CHECK_EQ(d->_word90, 3u);
         CHECK_EQ(d->_word94, 1u);
         CHECK_EQ(d->_word98, 0);
@@ -760,7 +760,7 @@ UNIT_TEST(b39_uia_text_label_ctors_make_retails_stores) {
         CHECK_EQ((int)e->_drawShadow, 0);
         CHECK_EQ((int)e->_wrap, 0);
         CHECK_EQ((int)e->_padEA[0], 0xCD);            // NOT written
-        CHECK_EQ(e->_lineSpacing, 100);
+        CHECK_EQ(e->_wordWrapSize, 100);
         CHECK_EQ(e->_maxWidth, -1);
         CHECK_EQ(e->_justify, 0);
         CHECK(e->_cachedText._data == nullptr);
@@ -774,7 +774,7 @@ UNIT_TEST(b39_uia_text_label_ctors_make_retails_stores) {
         UI::g_textCacheTextCalls = 0;
         UI::LabelElement* e = ::new (buf) UI::LabelElement();
         CHECK_EQ(UI::g_textCacheTextCalls, 1);            // through TextElement()
-        CHECK_EQ(e->_lineSpacing, 100);
+        CHECK_EQ(e->_wordWrapSize, 100);
         CHECK(e->_sprite.spriteSheet == nullptr);
         CHECK_EQ(e->_sprite.spriteIndex, -1);
         CHECK_EQ((uint32_t)e->_sprite.pad0C, 0xCDCDCDCDu);   // NOT written

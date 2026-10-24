@@ -42,7 +42,7 @@
 //
 //   +0xE8  _drawShadow  bool   Draw's first, black, +1/+1 pass
 //   +0xE9  _wrap        bool   ComputeStringLayout / AddFont argument 3
-//   +0xEC  _lineSpacing int32  argument 4
+//   +0xEC  _wordWrapSize int32  argument 4 (the width a wrapped text breaks at; retail's Mod.rsc: 192)
 //   +0xF0  _maxWidth    int32  argument 5, and ComputeSize's width clamp when >0
 //   +0xF4  _justify     UI::Font::Justify
 //
@@ -109,7 +109,7 @@ constexpr uint32_t kDirtyBit  = UI::kElementFlagNeedsSizeCalc;
 //     +0xe0 dword -1                  index +0xe0}; +0xe4 NOT written
 //     +0xe8 WORD  0      _drawShadow +0xe8, _wrap +0xe9 (one store)
 //     +0xea ..+0xeb      NOT written
-//     +0xec dword 100    _lineSpacing
+//     +0xec dword 100    _wordWrapSize
 //     +0xf0 dword -1     _maxWidth
 //     +0xf4 dword 0      _justify     UI::Font::Justify
 //     +0xf8 qword 0      _cachedText  System::String, owned by CacheText
@@ -144,7 +144,7 @@ public:
     // `CALL 0x18011ec10` — CacheText.
     TextElement()
         : Element(), _font(nullptr), _params(), _text(),
-          _drawShadow(0), _wrap(0), _lineSpacing(0x64), _maxWidth(-1),
+          _drawShadow(0), _wrap(0), _wordWrapSize(0x64), _maxWidth(-1),
           _justify(0), _cachedText() {
         CacheText();                                             // 18011ebf9
     }
@@ -210,7 +210,7 @@ public:
     uint8_t    _drawShadow;    // +0xe8
     uint8_t    _wrap;          // +0xe9
     uint8_t    _padEA[2];      // +0xea  never written
-    int32_t    _lineSpacing;   // +0xec  ctor 100
+    int32_t    _wordWrapSize;  // +0xec  ctor 100
     int32_t    _maxWidth;      // +0xf0  ctor -1
     int32_t    _justify;       // +0xf4  UI::Font::Justify
     System::String _cachedText;   // +0xf8  owned by CacheText
@@ -233,7 +233,7 @@ static_assert(offsetof(TextElement, _params) + offsetof(Collection::Array<System
 static_assert(offsetof(TextElement, _text)        == TextElementOffsets::kTextString, "");
 static_assert(offsetof(TextElement, _drawShadow)  == 0xe8, "");
 static_assert(offsetof(TextElement, _wrap)        == 0xe9, "");
-static_assert(offsetof(TextElement, _lineSpacing) == 0xec, "");
+static_assert(offsetof(TextElement, _wordWrapSize) == 0xec, "");
 static_assert(offsetof(TextElement, _maxWidth)    == 0xf0, "");
 static_assert(offsetof(TextElement, _justify)     == 0xf4, "");
 static_assert(offsetof(TextElement, _cachedText)  == TextElementOffsets::kCachedText, "");

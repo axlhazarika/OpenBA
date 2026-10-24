@@ -104,7 +104,7 @@ void LabelElement::ComputeSize() {
         if (str != nullptr && RtSystem::StringLength(str) > 0) {
             int w = 0, h = 0;
             _font->ComputeStringLayout(_cachedText, _wrap != 0,
-                                       _lineSpacing, _maxWidth, 0,
+                                       _wordWrapSize, _maxWidth, 0,
                                        w, h, nullptr);
             _textWidth = w;
             textH = h;
@@ -290,11 +290,11 @@ void LabelElement::Draw(SpriteContext& ctx, uint8_t alpha) const {
 
     if (_drawShadow != 0) {
         ctx.AddFont(Object::ExternalPtr<Font>(font), _cachedText, _wrap != 0,
-                    _lineSpacing, _justify, _maxWidth,
+                    _wordWrapSize, _justify, _maxWidth,
                     textX + 1, baselineAdj + 1 + textY, 0xff000000u);
     }
     ctx.AddFont(Object::ExternalPtr<Font>(font), _cachedText, _wrap != 0,
-                _lineSpacing, _justify, _maxWidth,
+                _wordWrapSize, _justify, _maxWidth,
                 textX, baselineAdj + textY,
                 rtuielem::ComputeColor(baseColor, alpha));   // the inlined helper,
                                                              // not Element's member
