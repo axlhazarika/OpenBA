@@ -108,8 +108,6 @@ PathString Utf8ToPath(const char* s) {
     return out;
 }
 
-bool IsSeparator(Platform::PathChar c) { return c == '\\' || c == '/'; }
-
 // The directory part of a path (up to the last separator), or empty.
 PathString ParentOf(const PathString& path) {
     static const Platform::PathChar kSeparators[] = {'\\', '/', 0};
@@ -117,19 +115,6 @@ PathString ParentOf(const PathString& path) {
     if (cut == PathString::npos)
         return PathString();
     return path.substr(0, cut);
-}
-
-// DirCreate (CreateDirectoryW) on every prefix of `dir`, ignoring failures: an
-// existing directory, a drive root or a UNC host fail harmlessly, and a real
-// failure surfaces at the FileCreateWrite that follows.
-void CreateDirectoryChain(const PathString& dir) {
-    for (size_t i = 1; i <= dir.size(); ++i) {
-        if (i == dir.size() || IsSeparator(dir[i])) {
-            const PathString prefix = dir.substr(0, i);
-            if (!prefix.empty() && prefix.back() != ':')
-                Platform::DirCreate(prefix.c_str());
-        }
-    }
 }
 
 bool WriteAll(Platform::FileHandle h, const char* data, size_t n) {
@@ -212,8 +197,10 @@ bool WriteFileAtomic(const char* pathUtf8, const char* data, size_t n) {
     const PathString wtmp = wpath + kTmpSuffix;
 
     const PathString parent = ParentOf(wpath);
+    // Platform::EnsureDirChain (platform_file.h); a real failure surfaces at the FileCreateWrite
+    // that follows.
     if (!parent.empty())
-        CreateDirectoryChain(parent);
+        Platform::EnsureDirChain(parent.c_str());
 
     const Platform::FileHandle h = Platform::FileCreateWrite(wtmp.c_str());
     if (h == Platform::kInvalidFileHandle)

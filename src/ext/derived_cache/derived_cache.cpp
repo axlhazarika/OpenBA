@@ -6,7 +6,10 @@
 #include "ext/derived_cache/derived_cache.h"
 
 #include "ext/derived_cache/hash64.h"
+#include "platform_thread.h"   // ThreadBackgroundMode: the rewrite
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
@@ -19,21 +22,45 @@ constexpr uint32_t kRecordMagic = 0x31454344u;            // "DCE1"
 constexpr uint64_t kHeaderSize  = 32;
 constexpr uint64_t kMaxQueued   = 256ull * 1024 * 1024;   // Put waits past this
 constexpr uint32_t kChunk       = 1u << 20;               // one FileRead / FileWrite at most
+constexpr uint32_t kUsedRecord  = 16;                     // derived.used: KeyId, stamp, 0
 
-// Both files start with this.
+// What an eviction brings derived.dat down to: 90% of the cap, lower when the session before refused
+// more than the other 10% (room for what it derived anew), but never below half the cap.
+uint64_t EvictTarget(uint64_t capBytes, uint64_t refusedBytes) {
+    uint64_t target = capBytes - capBytes / 10;
+    if (refusedBytes < capBytes && capBytes - refusedBytes < target) target = capBytes - refusedBytes;
+    return std::max(target, capBytes / 2);
+}
+
+// The quiet spell: this long after the cache's last Find / Put the loads are over. The usage stamps
+// are written then (whoever the consumer is: ext.package_cache never sends RequestFlush), and the
+// rewrite runs then unless asked for at once (RequestCompact). 10 s; the unit test shortens it.
+std::atomic<int> g_quietMs{10000};
+
+std::chrono::milliseconds QuietSpell() {
+    return std::chrono::milliseconds(g_quietMs.load(std::memory_order_relaxed));
+}
+
+// Set by the unit test: the rewrite stops after replacing derived.dat, as a crash there would.
+std::atomic<bool> g_crashBetweenReplaces{false};
+
+// All three files start with this.
 struct FileHeader {
     char     magic[8];     // "OBADCDAT" / "OBADCIDX" / "OBADCUSE"
     uint32_t format;       // kFormatVersion
-    uint32_t recordSize;   // 80 for the index, 8 for the keep list, 0 for the data
+    uint32_t recordSize;   // 80 for the index, kUsedRecord for derived.used, 0 for the data
+    // derived.dat / derived.idx: [0] the generation (the same in both; every rewrite makes a new
+    // one), [1] 0. derived.used: [0] its session, [1] the payload bytes that session refused.
     uint64_t reserved[2];
 };
 static_assert(sizeof(FileHeader) == kHeaderSize, "a cache file header is 32 bytes");
 
-FileHeader MakeHeader(const char* magic, uint32_t recordSize) {
+FileHeader MakeHeader(const char* magic, uint32_t recordSize, uint64_t generation = 0) {
     FileHeader h = {};
     std::memcpy(h.magic, magic, 8);
-    h.format     = kFormatVersion;
-    h.recordSize = recordSize;
+    h.format      = kFormatVersion;
+    h.recordSize  = recordSize;
+    h.reserved[0] = generation;
     return h;
 }
 
@@ -212,6 +239,14 @@ uint64_t KeyId(const Key& key) {
     return Hash64(bytes, sizeof(bytes));
 }
 
+void SetCrashBetweenReplacesForTest(bool on) {
+    g_crashBetweenReplaces.store(on);
+}
+
+void SetQuietSpellForTest(int ms) {
+    g_quietMs.store(ms, std::memory_order_relaxed);
+}
+
 bool RequestClear(const std::string& dir) {
     const char mark[] = "clear\n";
     return WriteWhole(FilePath(dir, "derived.clear"), mark, sizeof(mark) - 1);
@@ -233,17 +268,16 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
     Close();
     _dir = dir;
     _cap = capBytes;
-    Platform::DirCreate(ToPath(dir).c_str());
-    const uint32_t attrs = Platform::PathAttributes(ToPath(dir).c_str());
-    if (attrs == Platform::kInvalidPathAttributes || (attrs & Platform::kFileAttributeDirectory) == 0) {
+    // The parents too: on a fresh profile <Documents>\Banished does not exist until the first
+    // settings.cfg or save write, and a cache consumer opens before that.
+    if (!Platform::EnsureDirChain(ToPath(dir).c_str())) {
         std::fprintf(stderr, "[DerivedCache] cannot create %s: no cache this run\n", dir.c_str());
         return OpenStatus::Failed;
     }
     _lock = Platform::FileOpenExclusive(FilePath(dir, "derived.lock").c_str());
     if (!Valid(_lock)) {
         _lock = Platform::kInvalidFileHandle;
-        std::fprintf(stderr, "[DerivedCache] %s is in use by another instance: no cache this run\n", dir.c_str());
-        return OpenStatus::InUse;
+        return OpenReadOnly(dir);
     }
     if (ClearRequested(dir)) {
         Platform::FileDelete(FilePath(dir, "derived.dat").c_str());
@@ -252,43 +286,102 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
         Platform::FileDelete(FilePath(dir, "derived.clear").c_str());
         std::fprintf(stderr, "[DerivedCache] cleared (requested from the Options dialog)\n");
     }
-    _dat = Platform::FileOpenExclusive(FilePath(dir, "derived.dat").c_str());
-    _idx = Platform::FileOpenExclusive(FilePath(dir, "derived.idx").c_str());
-    if (!Valid(_dat) || !Valid(_idx) || !LoadIndex(capBytes)) {
+    ReadUsedList();
+    _dat = Platform::FileOpenWriteShared(FilePath(dir, "derived.dat").c_str(), true);
+    _idx = Platform::FileOpenWriteShared(FilePath(dir, "derived.idx").c_str(), false);
+    if (!Valid(_dat) || !Valid(_idx) || !LoadIndex()) {
         CloseHandle(_dat);
         CloseHandle(_idx);
         CloseHandle(_lock);
         std::fprintf(stderr, "[DerivedCache] cannot open the cache files in %s: no cache this run\n", dir.c_str());
         return OpenStatus::Failed;
     }
+    // What a rewrite that never reached its replaces left (a crash, a kill: up to the cache's size).
+    Platform::FileDelete(FilePath(dir, "derived.dat.new").c_str());
+    Platform::FileDelete(FilePath(dir, "derived.idx.new").c_str());
     if (_dataEnd > kHeaderSize) Platform::FileMapOpen(_dat, &_map);
-    _open     = true;
-    _stop     = false;
-    _disabled = false;
-    _writer   = std::thread([this] { WriterMain(); });
-    std::fprintf(stderr, "[DerivedCache] %s: %llu entries, %.1f MB (cap %llu MB)\n", dir.c_str(),
+    _open         = true;
+    _stop         = false;
+    _disabled     = false;
+    _closing      = false;
+    _compactArmed = false;
+    _compactNow   = false;
+    _compactDone  = false;
+    _lastActivity = std::chrono::steady_clock::now();
+    const bool rewrite = NeedsCompact();
+    _writer = std::thread([this] { WriterMain(); });
+    std::fprintf(stderr, "[DerivedCache] %s: %llu entries, %.1f MB (cap %llu MB)%s\n", dir.c_str(),
                  static_cast<unsigned long long>(_records.size()),
                  static_cast<double>(_dataEnd + _indexEnd) / 1048576.0,
-                 static_cast<unsigned long long>(capBytes >> 20));
+                 static_cast<unsigned long long>(capBytes >> 20),
+                 rewrite ? "; rewritten on the writer thread once the loads are over" : "");
     return OpenStatus::Opened;
 }
 
+// The lock is another instance's: read what it has stored, write nothing (derived_cache.h, "A
+// SECOND INSTANCE"). A clear request is the holder's to carry out.
+Store::OpenStatus Store::OpenReadOnly(const std::string& dir) {
+    _readOnly = true;
+    _dat = Platform::FileOpenReadShared(FilePath(dir, "derived.dat").c_str());
+    _idx = Platform::FileOpenReadShared(FilePath(dir, "derived.idx").c_str());
+    if (!Valid(_dat) || !Valid(_idx) || !LoadIndex()) {
+        CloseHandle(_dat);
+        CloseHandle(_idx);
+        _readOnly = false;
+        std::fprintf(stderr, "[DerivedCache] %s is in use by another instance and cannot be read: no cache this run\n",
+                     dir.c_str());
+        return OpenStatus::InUse;
+    }
+    _open     = true;
+    _disabled = false;
+    std::fprintf(stderr, "[DerivedCache] %s is in use by another instance: reading its %llu entries (%.1f MB), "
+                         "storing nothing this run\n",
+                 dir.c_str(), static_cast<unsigned long long>(_records.size()),
+                 static_cast<double>(_dataEnd) / 1048576.0);
+    return OpenStatus::ReadOnly;
+}
+
 void Store::ResetFiles() {
+    ++_generation;
     Platform::FileTruncate(_dat, 0);
     Platform::FileTruncate(_idx, 0);
-    const FileHeader dh = MakeHeader("OBADCDAT", 0);
-    const FileHeader ih = MakeHeader("OBADCIDX", sizeof(IndexRecord));
+    const FileHeader dh = MakeHeader("OBADCDAT", 0, _generation);
+    const FileHeader ih = MakeHeader("OBADCIDX", sizeof(IndexRecord), _generation);
     WriteAt(_dat, 0, &dh, sizeof(dh));
     WriteAt(_idx, 0, &ih, sizeof(ih));
     _dataEnd  = kHeaderSize;
     _indexEnd = kHeaderSize;
 }
 
-// The longest valid prefix of the index; both files truncated to it; compacted when over the cap.
-bool Store::LoadIndex(uint64_t capBytes) {
+// A rewrite that stopped between its two replaces (a crash, a kill) left the new derived.dat beside
+// the old derived.idx; its new index is still derived.idx.new. Finish the rewrite when that file is
+// the data file's generation. The holder only.
+bool Store::FinishInterruptedRewrite(uint64_t datGeneration) {
+    const std::u16string idxNew = FilePath(_dir, "derived.idx.new");
+    std::vector<uint8_t> head;
+    Platform::FileHandle h = Platform::FileOpenReadShared(idxNew.c_str());
+    if (!Valid(h)) return false;
+    head.resize(sizeof(FileHeader));
+    uint32_t got = 0;
+    const bool read = Platform::FileRead(h, head.data(), sizeof(FileHeader), &got) != 0 && got == sizeof(FileHeader);
+    Platform::FileClose(h);
+    if (!read) return false;
+    FileHeader nh = {};
+    std::memcpy(&nh, head.data(), sizeof(nh));
+    if (!HeaderIs(nh, "OBADCIDX", sizeof(IndexRecord)) || nh.reserved[0] != datGeneration) return false;
+    const std::u16string idx = FilePath(_dir, "derived.idx");
+    CloseHandle(_idx);
+    const bool replaced = Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
+    _idx = Platform::FileOpenWriteShared(idx.c_str(), false);
+    return replaced && Valid(_idx);
+}
+
+// The longest valid prefix of the index; both files truncated to it (the holder). A rewrite the
+// files need (past the cap, superseded copies) is left to the writer thread (NeedsCompact).
+bool Store::LoadIndex() {
     _records.clear();
-    const int64_t datSize = Platform::FileSize64(_dat);
-    const int64_t idxSize = Platform::FileSize64(_idx);
+    int64_t datSize = Platform::FileSize64(_dat);
+    int64_t idxSize = Platform::FileSize64(_idx);
     if (datSize < 0 || idxSize < 0) return false;
     FileHeader dh = {};
     FileHeader ih = {};
@@ -297,43 +390,94 @@ bool Store::LoadIndex(uint64_t capBytes) {
                            ReadAt(_idx, 0, &ih, sizeof(ih)) && HeaderIs(dh, "OBADCDAT", 0) &&
                            HeaderIs(ih, "OBADCIDX", sizeof(IndexRecord));
     if (!headersOk) {
+        if (_readOnly) {
+            // The holder's files as they are; an empty or foreign cache is simply no entries.
+            _dataEnd  = 0;
+            _indexEnd = 0;
+            return true;
+        }
         if (datSize != 0 || idxSize != 0)
             std::fprintf(stderr, "[DerivedCache] unknown or damaged cache format: starting empty\n");
         ResetFiles();
         return true;
     }
+    // A pair from two different rewrites. Finished when the new index is still there; otherwise only
+    // the prefix whose payloads match their records is kept (the offsets alone prove nothing here).
+    bool verifyPayloads = false;
+    if (dh.reserved[0] != ih.reserved[0]) {
+        if (!_readOnly && FinishInterruptedRewrite(dh.reserved[0])) {
+            idxSize = Platform::FileSize64(_idx);
+            if (idxSize < static_cast<int64_t>(kHeaderSize) || !ReadAt(_idx, 0, &ih, sizeof(ih)) ||
+                !HeaderIs(ih, "OBADCIDX", sizeof(IndexRecord)) || ih.reserved[0] != dh.reserved[0])
+                return false;
+            std::fprintf(stderr, "[DerivedCache] finished a rewrite that was interrupted between its two files\n");
+        } else {
+            verifyPayloads = true;
+        }
+    }
+    _generation = dh.reserved[0];
     const uint64_t count = (static_cast<uint64_t>(idxSize) - kHeaderSize) / sizeof(IndexRecord);
     std::vector<IndexRecord> all(static_cast<size_t>(count));
     if (count != 0 && !ReadAt(_idx, kHeaderSize, all.data(), count * sizeof(IndexRecord))) return false;
     std::vector<IndexRecord> records;
     records.reserve(all.size());
     uint64_t end = kHeaderSize;
+    std::vector<uint8_t> payload;
     for (const IndexRecord& r : all) {
         if (r.magic != kRecordMagic || r.check != RecordCheck(r) || r.offset != end || r.size == 0 ||
             r.offset + r.size > static_cast<uint64_t>(datSize))
             break;
+        if (verifyPayloads) {
+            payload.resize(static_cast<size_t>(r.size));
+            if (!ReadAt(_dat, r.offset, payload.data(), r.size) ||
+                Hash64(payload.data(), payload.size()) != r.payloadHash)
+                break;
+        }
         records.push_back(r);
         end += r.size;
     }
     const uint64_t indexEnd = kHeaderSize + records.size() * sizeof(IndexRecord);
+    if (_readOnly) {
+        // A tail past the prefix is the holder's append in flight, or its torn tail: not ours to drop.
+        _dataEnd  = end;
+        _indexEnd = indexEnd;
+        DropSuperseded(records);
+        for (const IndexRecord& r : records)
+            _records.emplace(r.sourceHash, r);
+        _stats.entries   = _records.size();
+        _stats.dataBytes = _dataEnd;
+        return true;
+    }
+    if (verifyPayloads) {
+        std::fprintf(stderr, "[DerivedCache] derived.dat and derived.idx are from different rewrites: kept the %llu "
+                             "of %llu entries whose bytes match\n",
+                     static_cast<unsigned long long>(records.size()), static_cast<unsigned long long>(count));
+        ih.reserved[0] = _generation;
+        if (!WriteAt(_idx, 0, &ih, sizeof(ih))) return false;
+    }
     if (records.size() != all.size() || static_cast<uint64_t>(datSize) != end ||
         static_cast<uint64_t>(idxSize) != indexEnd) {
-        std::fprintf(stderr, "[DerivedCache] dropped a damaged tail: kept %llu of %llu entries\n",
-                     static_cast<unsigned long long>(records.size()), static_cast<unsigned long long>(count));
+        if (!verifyPayloads)
+            std::fprintf(stderr, "[DerivedCache] dropped a damaged tail: kept %llu of %llu entries\n",
+                         static_cast<unsigned long long>(records.size()), static_cast<unsigned long long>(count));
         Platform::FileTruncate(_dat, static_cast<int64_t>(end));
         Platform::FileTruncate(_idx, static_cast<int64_t>(indexEnd));
     }
     _dataEnd  = end;
     _indexEnd = indexEnd;
     // A key stored twice (its first payload failed its hash on a read, and the caller stored it
-    // again): the later record is the live one. The earlier ones are dropped here, and the rewrite
-    // below takes their bytes out of the files, so the next Open does not meet them again.
+    // again): the later record is the live one. The earlier ones are dropped here; their bytes stay
+    // in the files until the writer's rewrite takes them out.
+    const size_t before = records.size();
+    uint64_t live = 0;
     const size_t superseded = DropSuperseded(records);
+    for (const IndexRecord& r : records)
+        live += r.size;
+    _garbageBytes = (end - kHeaderSize) - live;
     if (superseded != 0)
-        std::fprintf(stderr, "[DerivedCache] %llu entries were stored again since: dropping the old copies\n",
-                     static_cast<unsigned long long>(superseded));
-    const bool overCap = _dataEnd > capBytes;
-    if ((overCap || superseded != 0) && !Compact(capBytes, records, overCap)) return false;
+        std::fprintf(stderr, "[DerivedCache] %llu of %llu entries were stored again since: the old copies go at the "
+                             "next rewrite\n",
+                     static_cast<unsigned long long>(superseded), static_cast<unsigned long long>(before));
     for (const IndexRecord& r : records)
         _records.emplace(r.sourceHash, r);
     _stats.entries   = _records.size();
@@ -341,45 +485,121 @@ bool Store::LoadIndex(uint64_t capBytes) {
     return true;
 }
 
-// Rewrites the files with `records`, in their order, up to the cap. Over the cap only the entries
-// the last session used are kept (`usedOnly`); after DropSuperseded alone, every record left is.
-bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly) {
-    std::unordered_set<uint64_t> keep;
-    std::vector<uint8_t> used;
-    if (usedOnly && ReadWhole(FilePath(_dir, "derived.used"), used) && used.size() >= kHeaderSize) {
-        FileHeader h = {};
-        std::memcpy(&h, used.data(), sizeof(h));
-        if (HeaderIs(h, "OBADCUSE", 8)) {
-            for (size_t at = kHeaderSize; at + 8 <= used.size(); at += 8) {
-                uint64_t id = 0;
-                std::memcpy(&id, used.data() + at, 8);
-                keep.insert(id);
+// The payload bytes the session before and this one refused at the cap (the larger).
+uint64_t Store::RefusedBytes() const {
+    return std::max(_lastRefusedBytes, _stats.refusedBytes);
+}
+
+// Full: past the cap (it was lowered), or a payload was refused at it (this session or the one
+// before) and the cache is above the eviction target. Under _mutex.
+bool Store::EvictWanted() const {
+    const uint64_t refused = RefusedBytes();
+    return _dataEnd > _cap || (refused != 0 && _dataEnd > EvictTarget(_cap, refused));
+}
+
+bool Store::NeedsCompact() const {
+    return _garbageBytes != 0 || EvictWanted();
+}
+
+// The rewrite, on the writer thread (derived_cache.h, "THE REWRITE"): the live records in file
+// order, the least recently used left out first when the cache is full (derived_cache.h, "THE
+// CAP"), every payload checked against its record on the way. Finds go on meanwhile; this run's
+// Puts wait in the queue, and the rewrite gives way (to run again after the next quiet spell) once
+// half the queue's room is taken.
+bool Store::Compact() {
+    std::vector<IndexRecord> records;
+    std::vector<bool> evicted;
+    size_t evictedCount = 0;
+    bool evict = false;
+    uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (!NeedsCompact()) return false;
+        evict = EvictWanted();
+        records.reserve(_records.size());
+        for (const auto& kv : _records)
+            records.push_back(kv.second);
+        std::sort(records.begin(), records.end(),
+                  [](const IndexRecord& x, const IndexRecord& y) { return x.offset < y.offset; });
+        evicted.assign(records.size(), false);
+        if (evict) {
+            uint64_t total = 0;
+            for (const IndexRecord& r : records)
+                total += r.size;
+            struct Age {
+                uint32_t stamp;
+                size_t   at;   // the record's place in the file
+            };
+            std::vector<Age> order;
+            order.reserve(records.size());
+            for (size_t i = 0; i < records.size(); ++i) {
+                const auto it = _stamps.find(KeyId(RecordKey(records[i])));
+                order.push_back(Age{ it == _stamps.end() ? 0u : it->second, i });
+            }
+            std::sort(order.begin(), order.end(), [](const Age& x, const Age& y) {
+                return x.stamp != y.stamp ? x.stamp < y.stamp : x.at < y.at;
+            });
+            const uint64_t limit  = EvictTarget(_cap, RefusedBytes());
+            const uint64_t target = limit > kHeaderSize ? limit - kHeaderSize : 0;   // payload bytes
+            for (const Age& age : order) {
+                if (total <= target) break;
+                evicted[age.at] = true;
+                total -= records[age.at].size;
+                ++evictedCount;
             }
         }
+        generation = _generation + 1;
     }
+    const uint64_t capBytes = _cap;
     const std::u16string datNew = FilePath(_dir, "derived.dat.new");
     const std::u16string idxNew = FilePath(_dir, "derived.idx.new");
     Platform::FileHandle nd = Platform::FileOpenExclusive(datNew.c_str());
     Platform::FileHandle ni = Platform::FileOpenExclusive(idxNew.c_str());
-    if (!Valid(nd) || !Valid(ni)) {
+    const auto dropNew = [&] {
         CloseHandle(nd);
         CloseHandle(ni);
+        Platform::FileDelete(datNew.c_str());
+        Platform::FileDelete(idxNew.c_str());
+    };
+    if (!Valid(nd) || !Valid(ni)) {
+        dropNew();
         return false;
     }
     Platform::FileTruncate(nd, 0);
     Platform::FileTruncate(ni, 0);
-    const FileHeader dh = MakeHeader("OBADCDAT", 0);
-    const FileHeader ih = MakeHeader("OBADCIDX", sizeof(IndexRecord));
+    const FileHeader dh = MakeHeader("OBADCDAT", 0, generation);
+    const FileHeader ih = MakeHeader("OBADCIDX", sizeof(IndexRecord), generation);
     bool ok = WriteAt(nd, 0, &dh, sizeof(dh)) && WriteAt(ni, 0, &ih, sizeof(ih));
     std::vector<IndexRecord> kept;
     uint64_t end = kHeaderSize;
+    size_t bad = 0;
     std::vector<uint8_t> payload;
-    for (const IndexRecord& r : records) {
-        if (!ok) break;
-        if (usedOnly && keep.find(KeyId(RecordKey(r))) == keep.end()) continue;
+    for (size_t i = 0; i < records.size() && ok; ++i) {
+        const IndexRecord& r = records[i];
+        if (evicted[i]) continue;
         if (end + r.size > capBytes) continue;
+        if (_disabled.load(std::memory_order_acquire) || _closing.load(std::memory_order_acquire)) {
+            ok = false;
+            break;
+        }
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            if (_queuedBytes > kMaxQueued / 2) {
+                std::fprintf(stderr, "[DerivedCache] the rewrite gives way to new entries: it runs again later\n");
+                ok = false;
+                break;
+            }
+        }
         payload.resize(static_cast<size_t>(r.size));
-        if (!ReadAt(_dat, r.offset, payload.data(), r.size)) continue;
+        bool read;
+        {
+            std::lock_guard<std::mutex> files(_fileMutex);
+            read = ReadAt(_dat, r.offset, payload.data(), r.size);
+        }
+        if (!read || Hash64(payload.data(), payload.size()) != r.payloadHash) {
+            ++bad;
+            continue;
+        }
         IndexRecord n = r;
         n.offset = end;
         n.check  = RecordCheck(n);
@@ -388,41 +608,76 @@ bool Store::Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool u
         kept.push_back(n);
         end += r.size;
     }
+    // On disk before either replace: a crash after the first one finds the second file whole.
+    ok = ok && Platform::FileFlush(nd) != 0 && Platform::FileFlush(ni) != 0;
+    if (!ok) {
+        dropNew();
+        return false;
+    }
     CloseHandle(nd);
     CloseHandle(ni);
-    CloseHandle(_dat);
-    CloseHandle(_idx);
     const std::u16string dat = FilePath(_dir, "derived.dat");
     const std::u16string idx = FilePath(_dir, "derived.idx");
-    ok = ok && Platform::FileReplace(datNew.c_str(), dat.c_str()) != 0 &&
-         Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
-    _dat = Platform::FileOpenExclusive(dat.c_str());
-    _idx = Platform::FileOpenExclusive(idx.c_str());
-    if (!Valid(_dat) || !Valid(_idx)) return false;
-    if (!ok) {
-        // A half-made rewrite: start empty rather than trust either file.
-        std::fprintf(stderr, "[DerivedCache] the over-cap rewrite failed: starting empty\n");
+    // The swap: no Find reads meanwhile (it holds _fileMutex across its lookup and copy).
+    std::lock_guard<std::mutex> files(_fileMutex);
+    Platform::FileMapClose(&_map);
+    CloseHandle(_dat);
+    CloseHandle(_idx);
+    const bool datReplaced = Platform::FileReplace(datNew.c_str(), dat.c_str()) != 0;
+    if (datReplaced && g_crashBetweenReplaces.load()) {
+        // The unit test's crash: the files stay as a dead process would leave them.
+        _disabled.store(true, std::memory_order_release);
+        return false;
+    }
+    const bool idxReplaced = datReplaced && Platform::FileReplace(idxNew.c_str(), idx.c_str()) != 0;
+    _dat = Platform::FileOpenWriteShared(dat.c_str(), true);
+    _idx = Platform::FileOpenWriteShared(idx.c_str(), false);
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!Valid(_dat) || !Valid(_idx) || (datReplaced && !idxReplaced)) {
+        // A new data file beside the old index (or no files): nothing more this run. The next Open
+        // finishes the rewrite from derived.idx.new, or keeps the prefix whose bytes match.
+        _disabled.store(true, std::memory_order_release);
+        std::fprintf(stderr,
+                     "[DerivedCache] the rewrite could not replace derived.idx: the cache is off for this run\n");
+        return false;
+    }
+    if (!datReplaced) {
+        // Nothing was replaced (Windows: another instance reading the files; MoveFileExW does not
+        // rename over a file another handle holds, FILE_SHARE_DELETE or not): kept as it was.
+        std::fprintf(stderr, "[DerivedCache] the rewrite could not replace derived.dat (another instance reading "
+                             "it?): the cache is kept as it was\n");
         Platform::FileDelete(datNew.c_str());
         Platform::FileDelete(idxNew.c_str());
-        ResetFiles();
-        records.clear();
-        return true;
+        return false;
     }
-    if (usedOnly)
-        std::fprintf(stderr, "[DerivedCache] over the cap (%llu MB): kept %llu of %llu entries the last run used\n",
-                     static_cast<unsigned long long>(capBytes >> 20), static_cast<unsigned long long>(kept.size()),
-                     static_cast<unsigned long long>(records.size()));
+    const size_t before = records.size();
+    _records.clear();
+    for (const IndexRecord& r : kept)
+        _records.emplace(r.sourceHash, r);
+    _generation   = generation;
+    _dataEnd      = end;
+    _indexEnd     = kHeaderSize + kept.size() * sizeof(IndexRecord);
+    _garbageBytes = 0;
+    ++_layout;
+    if (evict)
+        std::fprintf(stderr,
+                     "[DerivedCache] at the cap (%llu MB): evicted the %llu least recently used of %llu entries, "
+                     "%llu entries (%.1f MB) kept\n",
+                     static_cast<unsigned long long>(capBytes >> 20), static_cast<unsigned long long>(evictedCount),
+                     static_cast<unsigned long long>(before), static_cast<unsigned long long>(kept.size()),
+                     static_cast<double>(end) / 1048576.0);
     else
         std::fprintf(stderr, "[DerivedCache] rewritten without the old copies: %llu entries, %.1f MB\n",
                      static_cast<unsigned long long>(kept.size()), static_cast<double>(end) / 1048576.0);
-    records.swap(kept);
-    _dataEnd  = end;
-    _indexEnd = kHeaderSize + records.size() * sizeof(IndexRecord);
+    if (bad != 0)
+        std::fprintf(stderr, "[DerivedCache] the rewrite dropped %llu entries whose bytes did not match\n",
+                     static_cast<unsigned long long>(bad));
     return true;
 }
 
 void Store::Close() {
     if (_writer.joinable()) {
+        _closing.store(true, std::memory_order_release);   // a rewrite in progress gives up
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _stop = true;
@@ -436,12 +691,18 @@ void Store::Close() {
     CloseHandle(_lock);
     std::lock_guard<std::mutex> lock(_mutex);
     _records.clear();
-    _used.clear();
+    _stamps.clear();
+    _session          = 0;
+    _lastRefusedBytes = 0;
+    _garbageBytes     = 0;
+    _generation       = 0;
     _queue.clear();
     _queuedBytes = 0;
     _usedDirty   = false;
+    _flushRequested = false;
     _loggedFull  = false;
     _open        = false;
+    _readOnly    = false;
     _stats       = Stats();
 }
 
@@ -461,19 +722,25 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
     out.clear();
     if (!_open || _disabled.load(std::memory_order_acquire)) return false;
     IndexRecord rec;
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        const IndexRecord* r = Lookup(key);
-        if (r == nullptr) {
-            ++_stats.misses;
-            return false;
-        }
-        rec = *r;
-    }
-    out.resize(static_cast<size_t>(rec.size));
+    uint64_t layout = 0;
     bool ok = true;
     {
-        std::lock_guard<std::mutex> files(_fileMutex);   // also keeps the mapping until the copy is done
+        // Held across the lookup and the copy: the writer's rewrite swaps the files and the records
+        // under it, so an offset found here is read from the file it belongs to. It also keeps the
+        // mapping until the copy is done.
+        std::lock_guard<std::mutex> files(_fileMutex);
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _lastActivity = std::chrono::steady_clock::now();
+            const IndexRecord* r = Lookup(key);
+            if (r == nullptr) {
+                ++_stats.misses;
+                return false;
+            }
+            rec    = *r;
+            layout = _layout;
+        }
+        out.resize(static_cast<size_t>(rec.size));
         if (_map.data != nullptr && rec.offset + rec.size <= _map.size)
             std::memcpy(out.data(), _map.data + rec.offset, static_cast<size_t>(rec.size));
         else
@@ -483,13 +750,14 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
     std::lock_guard<std::mutex> lock(_mutex);
     if (!ok) {
         // A payload the OS never wrote (a power loss after its record): forget it; the caller
-        // derives it again and Put stores it anew.
+        // derives it again and Put stores it anew. (A rewrite since the read has already dropped it.)
         if (_stats.badPayloads++ == 0)
             std::fprintf(stderr, "[DerivedCache] an entry's bytes do not match its record: re-deriving it\n");
         auto range = _records.equal_range(key.sourceHash);
-        for (auto it = range.first; it != range.second; ++it) {
+        for (auto it = range.first; it != range.second && layout == _layout; ++it) {
             if (it->second.offset == rec.offset) {
                 _records.erase(it);
+                if (!_readOnly) _garbageBytes += rec.size;
                 break;
             }
         }
@@ -498,14 +766,15 @@ bool Store::Find(const Key& key, std::vector<uint8_t>& out) {
         return false;
     }
     ++_stats.hits;
-    if (_used.insert(KeyId(key)).second) _usedDirty = true;
+    Stamp(KeyId(key));
     return true;
 }
 
 void Store::Put(const Key& key, std::vector<uint8_t> payload) {
-    if (!_open || _disabled.load(std::memory_order_acquire) || payload.empty()) return;
+    if (!_open || _readOnly || _disabled.load(std::memory_order_acquire) || payload.empty()) return;
     std::unique_lock<std::mutex> lock(_mutex);
     if (_stats.writeFailed) return;
+    _lastActivity = std::chrono::steady_clock::now();
     _cv.wait(lock, [&] { return _queuedBytes == 0 || _queuedBytes + payload.size() <= kMaxQueued; });
     _queuedBytes += payload.size();
     _queue.push_back(Pending{ key, std::move(payload) });
@@ -514,18 +783,28 @@ void Store::Put(const Key& key, std::vector<uint8_t> payload) {
 }
 
 void Store::Flush() {
-    if (!_open) return;
+    if (!_open || _readOnly) return;
     std::unique_lock<std::mutex> lock(_mutex);
     _flushRequested = true;
     _cv.notify_all();
-    _cv.wait(lock, [&] { return (_queue.empty() && !_writing && !_usedDirty) || _stop; });
+    _cv.wait(lock, [&] { return (_queue.empty() && !_writing && !_usedDirty && !_compactNow) || _stop; });
 }
 
 void Store::RequestFlush() {
-    if (!_open) return;
+    if (!_open || _readOnly) return;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _flushRequested = true;
+        _compactArmed   = true;
+    }
+    _cv.notify_all();
+}
+
+void Store::RequestCompact() {
+    if (!_open || _readOnly) return;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _compactNow = true;
     }
     _cv.notify_all();
 }
@@ -558,12 +837,14 @@ uint64_t Store::BytesOnDisk() const {
     return _open ? _dataEnd + _indexEnd : 0;
 }
 
-// The keep list is rewritten only on a Flush (the load's end) or at Close, never per payload: a
-// first launch stores thousands of entries, and a list rewritten after each would be quadratic.
+// The usage stamps are rewritten on a Flush / RequestFlush (a load's end), after the quiet spell, at
+// Close and at exit (WriteStampsNow), never per payload: a first launch stores thousands of entries,
+// and a list rewritten after each would be quadratic. The rewrite (Compact) runs when the queue is
+// empty: at once after RequestCompact, otherwise once per run after the quiet spell, once a load's
+// end (RequestFlush) was seen.
 void Store::WriterMain() {
     std::unique_lock<std::mutex> lock(_mutex);
     for (;;) {
-        _cv.wait(lock, [&] { return _stop || !_queue.empty() || (_usedDirty && _flushRequested); });
         if (!_queue.empty()) {
             Pending p = std::move(_queue.front());
             _queue.pop_front();
@@ -576,7 +857,9 @@ void Store::WriterMain() {
             _cv.notify_all();
             continue;
         }
-        if (_usedDirty) {
+        const auto deadline = _lastActivity + QuietSpell();
+        const bool quiet    = std::chrono::steady_clock::now() >= deadline;
+        if (_usedDirty && (_flushRequested || _stop || quiet)) {
             _writing = true;
             lock.unlock();
             if (!_disabled.load(std::memory_order_acquire)) WriteUsedList();
@@ -587,8 +870,40 @@ void Store::WriterMain() {
             _cv.notify_all();
             continue;
         }
+        if (_stop) {
+            _cv.notify_all();
+            return;
+        }
+        const bool disabled = _disabled.load(std::memory_order_acquire);
+        const bool wanted   = !disabled && NeedsCompact();
+        if (_compactNow && !wanted) {
+            _compactNow = false;   // nothing to rewrite
+            _cv.notify_all();
+            continue;
+        }
+        const bool waiting = wanted && _compactArmed && !_compactDone;
+        if (wanted && (_compactNow || (waiting && quiet))) {
+            _writing = true;
+            lock.unlock();
+            // Background mode (Windows: low I/O and memory priority) for the rewrite only: the
+            // appends are on the loader's path once the queue fills, and must not be starved.
+            Platform::ThreadBackgroundMode(true);
+            // The evicted entries' stamps go with them (derived.used lists the live entries only).
+            if (Compact() && !_disabled.load(std::memory_order_acquire)) WriteUsedList();
+            Platform::ThreadBackgroundMode(false);
+            lock.lock();
+            _writing     = false;
+            _compactNow  = false;
+            // Given way to new entries: the next quiet spell tries again. Otherwise once is enough.
+            _compactDone = !NeedsCompact() || _queuedBytes <= kMaxQueued / 2;
+            _cv.notify_all();
+            continue;
+        }
         _cv.notify_all();
-        if (_stop) return;
+        if (waiting || (_usedDirty && !disabled))
+            _cv.wait_until(lock, deadline);
+        else
+            _cv.wait(lock);
     }
 }
 
@@ -602,6 +917,8 @@ void Store::WriteOne(Pending& p) {
         if (_stats.writeFailed || Lookup(p.key) != nullptr) return;
         if (_dataEnd + size > _cap) {
             ++_stats.refusedFull;
+            _stats.refusedBytes += size;
+            _usedDirty = true;   // derived.used carries the refusal: the next Open evicts
             if (!_loggedFull) {
                 _loggedFull = true;
                 std::fprintf(stderr, "[DerivedCache] the cache is at its cap (%llu MB): new entries are not stored "
@@ -636,21 +953,68 @@ void Store::WriteOne(Pending& p) {
     _indexEnd = indexAt + sizeof(rec);
     _records.emplace(rec.sourceHash, rec);
     ++_stats.stored;
-    if (_used.insert(KeyId(p.key)).second) _usedDirty = true;
+    Stamp(KeyId(p.key));
+}
+
+void Store::Stamp(uint64_t id) {
+    if (_readOnly) return;   // the holder's stamps are not ours to write
+    uint32_t& stamp = _stamps[id];
+    if (stamp == _session) return;
+    stamp      = _session;
+    _usedDirty = true;
+    _cv.notify_all();   // the writer starts the quiet-spell wait for the stamps
+}
+
+void Store::WriteStampsNow() {
+    if (!_open || _readOnly || _disabled.load(std::memory_order_acquire)) return;
+    WriteUsedList();
+}
+
+// The stamps and the session counter of the sessions before (derived.used). A file that is missing
+// or not in this format is no stamps: session 1, every entry as old as the oldest.
+void Store::ReadUsedList() {
+    _stamps.clear();
+    _session     = 1;
+    _lastRefusedBytes = 0;
+    std::vector<uint8_t> used;
+    if (!ReadWhole(FilePath(_dir, "derived.used"), used) || used.size() < kHeaderSize) return;
+    FileHeader h = {};
+    std::memcpy(&h, used.data(), sizeof(h));
+    if (!HeaderIs(h, "OBADCUSE", kUsedRecord)) return;
+    for (size_t at = kHeaderSize; at + kUsedRecord <= used.size(); at += kUsedRecord) {
+        uint64_t id = 0;
+        uint32_t stamp = 0;
+        std::memcpy(&id, used.data() + at, 8);
+        std::memcpy(&stamp, used.data() + at + 8, 4);
+        _stamps[id] = stamp;
+    }
+    const uint64_t last = h.reserved[0];
+    _session     = last < 0xFFFFFFFEull ? static_cast<uint32_t>(last) + 1 : 0xFFFFFFFFu;
+    _lastRefusedBytes = h.reserved[1];
 }
 
 void Store::WriteUsedList() {
+    std::lock_guard<std::mutex> file(_usedFileMutex);   // the writer and WriteStampsNow share the .tmp
     std::vector<uint8_t> bytes;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _usedDirty = false;
-        bytes.resize(kHeaderSize + _used.size() * 8);
-        const FileHeader h = MakeHeader("OBADCUSE", 8);
+        // Every entry the index still holds that a session stamped, this one's and the earlier ones'
+        // merged; an evicted entry's stamp goes with it.
+        bytes.reserve(kHeaderSize + _records.size() * kUsedRecord);
+        bytes.resize(kHeaderSize);
+        FileHeader h = MakeHeader("OBADCUSE", kUsedRecord);
+        h.reserved[0] = _session;
+        h.reserved[1] = _stats.refusedBytes;
         std::memcpy(bytes.data(), &h, sizeof(h));
-        size_t at = kHeaderSize;
-        for (uint64_t id : _used) {
-            std::memcpy(bytes.data() + at, &id, 8);
-            at += 8;
+        for (const auto& kv : _records) {
+            const uint64_t id = KeyId(RecordKey(kv.second));
+            const auto it = _stamps.find(id);
+            if (it == _stamps.end()) continue;
+            uint8_t rec[kUsedRecord] = {};
+            std::memcpy(rec, &id, 8);
+            std::memcpy(rec + 8, &it->second, 4);
+            bytes.insert(bytes.end(), rec, rec + kUsedRecord);
         }
     }
     WriteWhole(FilePath(_dir, "derived.used"), bytes.data(), bytes.size());

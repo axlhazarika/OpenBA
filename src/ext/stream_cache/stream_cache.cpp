@@ -381,7 +381,10 @@ void LoadDone(const std::type_info& loop) {
                  (unsigned long long)g_stats.chunksSkipped, (unsigned long long)g_stats.consolidated,
                  g_stats.consolidatedBytes / 1048576.0);
     if (bootEnds) {
-        // The boot's last bracket: the records have done their work for this run.
+        // The boot's last bracket: the derived cache may rewrite its files now (derived_cache.h,
+        // "THE REWRITE"), on its writer thread.
+        g_store->RequestCompact();
+        // The records have done their work for this run.
         for (auto& kv : g_packages) kv.second->bundle.Clear();
         g_bootDone = true;
         std::fprintf(stderr, "[StreamCache] boot over: %.1f MB of records dropped; later loads take retail's path\n",
@@ -423,8 +426,8 @@ void Boot() {
     if (!Ext().stream_cache) return;
     g_store = DerivedCache::OpenShared();
     if (g_store == nullptr) {
-        std::fprintf(stderr, "[StreamCache] no derived cache (faithful profile, no documents folder, or another "
-                     "instance holds it): off for this run\n");
+        std::fprintf(stderr, "[StreamCache] no derived cache (faithful profile, no documents folder, or the cache "
+                     "cannot be opened): off for this run\n");
         return;
     }
     g_payloadsSkipped = Ext().create_on_demand;

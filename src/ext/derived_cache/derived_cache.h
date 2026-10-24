@@ -20,11 +20,12 @@
 //
 // THE FILES, in <dir> (the exe: <Documents>\Banished\Cache\, beside settings.cfg):
 //   derived.lock   held exclusively while a store is open (Platform::FileOpenExclusive): a second
-//                  running instance gets OpenStatus::InUse and runs without the cache
+//                  running instance gets OpenStatus::ReadOnly (below)
 //   derived.dat    32-byte header, then the payloads back to back, append-only
 //   derived.idx    32-byte header, then one 80-byte IndexRecord per payload, in payload order
-//   derived.used   the key ids the last session read or wrote (the cap's keep list), rewritten
-//                  at every Flush / RequestFlush (the exe: each load's end) and at Close
+//   derived.used   per entry, the session that last read or wrote it (the cap's eviction order),
+//                  and the session counter; rewritten at every Flush / RequestFlush (the exe: each
+//                  load's end) and at Close
 //   derived.clear  the Options dialog's "Clear cache": the next Open deletes the cache first
 // Little-endian on disk (x86-64 and arm64 both are). The header's format word changing resets both
 // files.
@@ -34,12 +35,37 @@
 // offset, inside the data file), then truncates both files to it: a torn tail from a crash or a kill
 // is dropped. A payload whose bytes do not match its record's hash on a read (the OS wrote the
 // record but not the payload before a power loss) is a miss, and its key is stored again: a second
-// record for the key. Open keeps only a key's last record and rewrites the files without the earlier
-// ones, so the bad payload is read and rejected once, not at every start.
+// record for the key. Open keeps only a key's last record, and the next rewrite (below) takes the
+// earlier ones out of the files, so the bad payload is read and rejected once, not at every start.
+//
+// THE REWRITE (Compact) makes derived.dat.new / derived.idx.new with the live records in file order
+// (the least recently used left out when the cache is full, every payload checked against its record
+// on the way), flushes both, then replaces derived.dat and then derived.idx. It runs on the writer
+// thread, never in Open: once the writer's queue is empty, either at once (RequestCompact: the exe's
+// boot end) or once per run after the cache has gone unused for 10 s since a load's end (RequestFlush).
+// Finds go on meanwhile and are paused only for the swap. Both headers carry a generation, and a
+// rewrite writes the next one into both new files. A crash between the two replaces leaves the new
+// derived.dat beside the old derived.idx: the next Open sees the generations differ and finishes the
+// rewrite from derived.idx.new (whole: it was flushed before the first replace). Without it (a pair
+// put together by hand) Open keeps the index prefix whose payloads match their hashes. Leftover .new
+// files of a rewrite that never reached its replaces are deleted at Open.
 //
 // THE CAP. Open with `capBytes`: a payload that would take the data file past it is not stored (one
-// log line). At the next Open a cache past its cap is rewritten keeping only the entries the
-// previous session used, in their order, up to the cap; with no keep list it is emptied.
+// log line). Every holder Open is a new session (a counter in derived.used); a Find hit or a store
+// stamps the entry with it, and the stamps of earlier sessions are kept (merged, not replaced). A
+// cache past its cap, or one that refused a payload (this session or the one before), is rewritten
+// (THE REWRITE) without its least recently used entries (the oldest stamp first, then the oldest in
+// the file; an entry with no stamp counts as the oldest) until it is at 90% of the cap (lower by
+// what was refused, so that fits; never below half the cap), the rest in their order. A missing
+// derived.used therefore evicts the oldest-written entries, not all of them.
+//
+// A SECOND INSTANCE. The lock holder opens derived.dat / derived.idx so that others may read them
+// (Platform::FileOpenWriteShared). The instance that loses the lock opens them read-only
+// (OpenStatus::ReadOnly): it loads the index's valid prefix as it is at that moment, serves Find
+// through the file handle (no mapping: the holder may truncate a torn tail under it), and never
+// writes, truncates or rewrites anything and has no writer thread; Put / Flush are no-ops. A live
+// append by the holder is safe to read: a record is written after its payload, every record is
+// self-hashed and every payload is hashed, so a half-written tail is simply not in the prefix.
 //
 // THREADS. Find is called from any thread (the loader's texture creates); its copy out of the
 // mapping (or read through the handle) holds the file lock, so ReleaseMapping is safe at any time.
@@ -48,6 +74,7 @@
 // reads go on.
 // ============================================================================
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -95,7 +122,9 @@ struct IndexRecord {
 };
 static_assert(sizeof(IndexRecord) == 80, "derived.idx records are 80 bytes");
 
-constexpr uint32_t kFormatVersion = 1;   // both files' header; a change resets the cache
+// The three files' header. A change resets the cache. 2: the generation in the dat / idx headers,
+// derived.used's stamps.
+constexpr uint32_t kFormatVersion = 2;
 
 struct Stats {
     uint64_t entries     = 0;   // records in the index (this run's included)
@@ -104,25 +133,29 @@ struct Stats {
     uint64_t misses      = 0;
     uint64_t stored      = 0;   // payloads this run appended
     uint64_t refusedFull = 0;   // payloads not stored: the cap
+    uint64_t refusedBytes = 0;  // their bytes
     uint64_t badPayloads = 0;   // reads whose bytes did not match their record
     bool     writeFailed = false;
 };
 
 class Store {
 public:
-    enum class OpenStatus { Opened, InUse, Failed };
+    // ReadOnly: another instance holds the lock; this store reads what it had stored (above).
+    // InUse: it holds the lock and its files cannot be read.
+    enum class OpenStatus { Opened, ReadOnly, InUse, Failed };
 
     Store() = default;
     ~Store();
     Store(const Store&) = delete;
     Store& operator=(const Store&) = delete;
 
-    // `dir` is UTF-8, created when absent (its parent must exist). On InUse / Failed nothing is held
+    // `dir` is UTF-8, created when absent, its missing parents too. On InUse / Failed nothing is held
     // and every call below is a no-op miss.
     OpenStatus Open(const std::string& dir, uint64_t capBytes);
     // Writes what is queued, stops the writer, closes the files and releases the lock.
     void Close();
     bool IsOpen() const { return _open; }
+    bool IsReadOnly() const { return _readOnly; }
 
     // The payload stored under `key`, verified against its record. false = a miss (`out` cleared).
     bool Find(const Key& key, std::vector<uint8_t>& out);
@@ -131,8 +164,16 @@ public:
     void Put(const Key& key, std::vector<uint8_t> payload);
     // Waits until every queued payload is written and the keep list is current.
     void Flush();
-    // The same without waiting: the writer rewrites the keep list once its queue is empty.
+    // The same without waiting: the writer rewrites the keep list once its queue is empty. It also
+    // marks a load's end: a rewrite the files need runs once the cache has been idle a while.
     void RequestFlush();
+    // Runs the rewrite the files need (THE REWRITE) as soon as the writer's queue is empty, without
+    // waiting for the quiet spell; a later Flush waits for it. The exe: the boot's last load.
+    void RequestCompact();
+    // Writes the usage stamps (derived.used) now, on the calling thread. The exe: at exit (the
+    // shared store is never closed). Also written by the writer after a Flush / RequestFlush and
+    // after the quiet spell, so a consumer that never sends either (ext.package_cache) persists them.
+    void WriteStampsNow();
     // Unmaps derived.dat: later reads go through the file handle. The mapping's pages count in the
     // process's working set while it is held (file-backed, ~1 GB after a MegaMod boot), so the exe
     // drops it once the load that read the cache is over.
@@ -150,8 +191,15 @@ private:
         std::vector<uint8_t> payload;
     };
 
-    bool LoadIndex(uint64_t capBytes);
-    bool Compact(uint64_t capBytes, std::vector<IndexRecord>& records, bool usedOnly);
+    OpenStatus OpenReadOnly(const std::string& dir);
+    bool LoadIndex();
+    bool FinishInterruptedRewrite(uint64_t datGeneration);
+    bool Compact();                     // the writer thread; true when it rewrote the files
+    bool NeedsCompact() const;          // under _mutex
+    bool EvictWanted() const;           // under _mutex
+    uint64_t RefusedBytes() const;      // under _mutex
+    void ReadUsedList();
+    void Stamp(uint64_t id);   // under _mutex
     void ResetFiles();
     void WriterMain();
     void WriteOne(Pending& p);
@@ -163,33 +211,53 @@ private:
     std::string _dir;
     uint64_t    _cap  = 0;
     bool        _open = false;
+    bool        _readOnly = false;   // the lock is another instance's (OpenStatus::ReadOnly)
 
     Platform::FileHandle  _lock = Platform::kInvalidFileHandle;
     Platform::FileHandle  _dat  = Platform::kInvalidFileHandle;
     Platform::FileHandle  _idx  = Platform::kInvalidFileHandle;
     Platform::FileMapping _map;     // derived.dat as it was at Open (until ReleaseMapping / Close)
-    std::mutex            _fileMutex;   // the two handles' file positions, and the mapping
+    std::mutex            _usedFileMutex;   // derived.used's writes (the writer, WriteStampsNow)
+    std::mutex            _fileMutex;   // the two handles, their file positions, and the mapping; taken
+                                        // before _mutex when both are held
 
     mutable std::mutex                             _mutex;   // everything below
     std::condition_variable                        _cv;
     std::unordered_multimap<uint64_t, IndexRecord> _records;   // by sourceHash
-    std::unordered_set<uint64_t>                   _used;      // KeyId()s read or written this run
+    std::unordered_map<uint64_t, uint32_t>         _stamps;    // KeyId() -> the session that last used it
+    uint32_t                                       _session = 0;       // this Open's session number
+    uint64_t                                       _lastRefusedBytes = 0;   // the bytes the previous session refused
     std::deque<Pending>                            _queue;
     uint64_t _queuedBytes = 0;
     uint64_t _dataEnd     = 0;
     uint64_t _indexEnd    = 0;
+    uint64_t _generation  = 0;   // the files' (both headers)
+    uint64_t _garbageBytes = 0;  // payload bytes in derived.dat no record serves (superseded, bad)
+    uint64_t _layout      = 0;   // bumped when a rewrite moves the records (Find's erase checks it)
+    std::chrono::steady_clock::time_point _lastActivity;   // the last Find / Put
     bool     _usedDirty   = false;
     bool     _writing     = false;   // the writer is writing a payload or the keep list
     bool     _flushRequested = false; // a Flush waits: the writer rewrites the keep list
     bool     _stop        = false;
     bool     _loggedFull  = false;
+    bool     _compactArmed = false;  // a load's end was seen (RequestFlush)
+    bool     _compactNow   = false;  // RequestCompact
+    bool     _compactDone  = false;  // the quiet-spell rewrite ran this run
     std::atomic<bool> _disabled{false};
+    std::atomic<bool> _closing{false};   // Close: a rewrite in progress gives up
     Stats    _stats;
     std::thread _writer;
 };
 
-// A key's identity in the keep list.
+// A key's identity in derived.used.
 uint64_t KeyId(const Key& key);
+
+// The unit test's crash injection: a rewrite stops right after replacing derived.dat, its store
+// disabled and its files left as a killed process would leave them.
+void SetCrashBetweenReplacesForTest(bool on);
+// The unit test's quiet spell (default 10000 ms): the idle time after which the stamps are written
+// and the rewrite runs.
+void SetQuietSpellForTest(int ms);
 
 // The Options dialog's "Clear cache": writes `dir`\derived.clear (the next Open deletes the cache).
 bool RequestClear(const std::string& dir);
@@ -203,8 +271,8 @@ uint64_t BytesInDir(const std::string& dir);
 // "Cache". false when the documents folder is unknown.
 bool CacheDir(std::string& out);
 // Opens the shared store once (later calls return it, or null): null under the faithful profile,
-// when the folder is unknown, or when another instance holds the cache. The cap is
-// Val().derived_cache_mb.
+// when the folder is unknown, or when the cache cannot be opened; read-only when another instance
+// holds it. The cap is Val().derived_cache_mb.
 Store* OpenShared();
 Store* Shared();   // the store OpenShared opened, or null
 // The button: the clear request for the shared folder, and the shared store disabled at once.
