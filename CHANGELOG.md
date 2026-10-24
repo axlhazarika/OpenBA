@@ -16,6 +16,10 @@ Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CM
 - `ext.texture_quality` (off): a Texture quality choice on the Enhanced tab, Full or Half; Half makes
   large world textures without their top mip level (MegaMod: 3 GB never decoded, 10.1 GB down to 7.1 GB
   of deferred texture data). Sprite sheets, fonts and cursors are never affected.
+- `ext.stream_cache`: a cache hit no longer reads anything from the package file (each record carries its
+  resource's block directory; a package is identified by its size, date, header crc and file table, checked once
+  at mount). On slow storage this matters: a cold MegaMod boot from a USB flash drive 126 s down to 58 s; on an
+  SSD 0.2 s. The cache is rebuilt once (format 3).
 - `ext.heap_slack` (on): the engine allocator keeps a little freed heap committed instead of returning it to
   the OS and taking it back a moment later, zeroing exactly the pages retail would have received fresh, so every
   byte any allocation sees is unchanged (MegaMod first start with an empty cache folder 15.8 s down to 14.4 s).
