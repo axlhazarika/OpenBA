@@ -107,6 +107,8 @@ struct Extensions {
     bool package_cache = false; // class A, live at each mount: src/ext/package_cache/, seams IO::FileSystem::_extIndexRestore / _extIndexBuilt + the derived cache (docs/extensions/handins/PKGCACHE.md)
     bool create_on_demand = false; // class A, next start: src/ext/create_on_demand/, backend seam CreateOnDemandBackend + seams IO::FileSystem::_extHandleClosing, Video::ImageBuffer::_extLevelSource, Graphics::MeshInstance::_extMeshAssigned (docs/extensions/handins/CREATEONDEMAND.md)
     bool stream_cache = false; // class A, next start: src/ext/stream_cache/, seams Object::ExternalFactory::_extLoadBegin/_extLoadEnd, IO::CompressedStream::_extReadTap, Engine::LoaderLoop::_extLoadDone, CreateOnDemand::g_altLocate/g_altSkip + the derived cache (docs/extensions/handins/STREAMCACHE.md)
+    bool visit_replay = false; // class A, next start: src/ext/visit_replay/, seam Object::ExternalFactory::_extVisitReplay (docs/extensions/handins/VISITREPLAY.md)
+    bool find_fastpath = false; // class A, next start: src/ext/find_fastpath/, seam Object::ExternalFactory::_extFindFast (docs/extensions/handins/VISITREPLAY.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.

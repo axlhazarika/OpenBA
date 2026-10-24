@@ -61,6 +61,8 @@
 #include "external_path.h"
 #include "external_compiled.h"
 #include "external_path_stack.h"
+#include "external_set.h"
+#include "object/resource_ext.h"   // NOT RETAIL: docs/extensions/handins/VISITREPLAY.md
 
 #include "system/String.h"
 #include "io/FileSystem.h"   // ENDGAME B.3.9 SS1: FileSystem::_singleton
@@ -195,8 +197,10 @@ System::Filename* RtObject_ExternalFactory_GetCompiledPath(System::Filename* ret
 // B3R RT-Core: `Find`(private, 0x1800be0e0), `Add` (0x1800be570) and
 // `External::Load` (0x1800bc620) are ported and called by name.
 
-const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* self,
-                                                    const System::Filename* path) {
+// `useFast` (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): whether ext.find_fastpath may answer
+// or remember this request. The visit's own walk passes false: it asks once per row per run (the
+// VISITPASS shortcut answers every later visit), so remembering its requests only costs.
+static const ::Object::External* FindOrLoadBody(ExternalFactory* self, const System::Filename* path, bool useFast) {
     ++g_cc.findOrLoadCalls;
 
     // The scheduling seam for BOTH of this lane's self-tests. FindOrLoad is the
@@ -214,6 +218,17 @@ const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* s
         return nullptr;
     }
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): ext.find_fastpath answers a
+    // request that already named a row, under the empty path stack that makes the answer a function
+    // of the request's characters. Null by default.
+    const ::Object::ExtFindFast* const fast = ::Object::ExternalFactory::_extFindFast;
+    const bool fastUsable = useFast && fast != nullptr && self->_pathStack._size == 0;
+    if (fastUsable) {
+        void* const row = fast->find(*self, path->_data, path->GetLength());
+        if (row != nullptr)
+            return RtObject_ExternalFactory_FindOrLoadHitRow(self, row);
+    }
+
     // ExpandRelativePath writes a hidden return slot; the null local it is
     // handed is constructed into, not assigned to.
     System::Filename expanded;                                   // [RBP+0x38]
@@ -226,6 +241,9 @@ const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* s
     if (found != nullptr) {
         // ---- 0x1800bf376: the CACHE HIT -----------------------------------
         ++g_cc.cacheHit;
+        // EXT SEAM (NOT RETAIL, VISITREPLAY.md): the request named this row.
+        if (fastUsable)
+            fast->store(*self, path->_data, path->GetLength(), found);
         if (self->_loadEnabled) {
             ++g_cc.hitReAdded;
             RtObject_ExternalFactory_Add(self, found);
@@ -236,6 +254,8 @@ const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* s
     } else {
         // ---- 0x1800bf390: the MISS ----------------------------------------
         ++g_cc.cacheMiss;
+        // EXT SEAM (NOT RETAIL, VISITREPLAY.md): a miss (a load, a provider, or nothing).
+        ::Object::NotifyResourceEvent(::Object::ResourceEvent::Miss, nullptr, nullptr, nullptr);
         System::Filename compiled;                               // [RBP+0x40]
         BuildCompiledPath(&expanded, &compiled);
 
@@ -263,6 +283,8 @@ const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* s
             // `Filename::operator=(const Filename&)` (0x180006770) instruction
             // for instruction. `_path` is a POD member of the not-yet-converted
             // `Object::External`, so the left-hand side comes through the bridge.
+            // EXT SEAM (NOT RETAIL, VISITREPLAY.md): a `_path` write.
+            ::Object::NotifyResourceEvent(::Object::ResourceEvent::PathWrite, nullptr, loaded, expanded._data);
             loaded->_path = expanded;
             RtObject_ExternalFactory_Add(self, loaded);           // 0x1800bf5b1
             result = loaded;
@@ -284,6 +306,38 @@ const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* s
     // `KeyMap::RegisterInput`. The compiled-path shadow above is what this body
     // can honestly be held to; see WAVE11_LANE_OBJEXT.md for the rest.
     return result;
+}
+
+const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* self,
+                                                    const System::Filename* path) {
+    return FindOrLoadBody(self, path, true);
+}
+
+// NOT RETAIL (docs/extensions/handins/VISITREPLAY.md): the visit walk's FindOrLoad, the same body
+// without ext.find_fastpath (external_visit.cpp).
+const ::Object::External* RtObject_ExternalFactory_FindOrLoadVisit(ExternalFactory* self,
+                                                         const System::Filename* path) {
+    return FindOrLoadBody(self, path, false);
+}
+
+// ============================================================================
+// NOT RETAIL (docs/extensions/handins/VISITREPLAY.md): FindOrLoad's hit arm on a
+// row ext.find_fastpath named (the row the private Find returns for the
+// request; src/ext/find_fastpath/find_fastpath.cpp has the argument). The same
+// counters, the same `if (_loadEnabled) Add(found)` (AddFound: the hit arm on
+// the row in hand when its key is found's path), the same result.
+// ============================================================================
+const ::Object::External* RtObject_ExternalFactory_FindOrLoadHitRow(ExternalFactory* self, void* row) {
+    rtresset::Node* const node = static_cast<rtresset::Node*>(row);
+    ::Object::External* const found = rtresset::Elem(node)->external;
+    ++g_cc.cacheHit;
+    if (self->_loadEnabled) {
+        ++g_cc.hitReAdded;
+        RtObject_ExternalFactory_AddFound(self, found, node);
+    } else {
+        ++g_cc.hitNotReAdded;
+    }
+    return found;
 }
 
 }  // namespace RtObject

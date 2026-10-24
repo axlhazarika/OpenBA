@@ -222,6 +222,10 @@ extern "C" ::Object::External* RtObject_External_Load(const System::Filename* pa
     ::Audio::LoadDecode::Scope soundDecodeBatch;
     ++g_lc.calls;
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): an object rebuilt in place.
+    if (existing != nullptr)
+        ::Object::NotifyResourceEvent(::Object::ResourceEvent::Reload, nullptr, existing, nullptr);
+
     ::Object::External* obj = existing;      // RDI, and it is REASSIGNED at 1800bc745
 
     // `keep` IS THE CHOICE BETWEEN RETAIL'S TWO JOIN POINTS, and it is the only

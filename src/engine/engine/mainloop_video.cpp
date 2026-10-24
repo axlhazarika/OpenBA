@@ -686,6 +686,8 @@ void Engine::MainLoop::OnVideoRestart() {
             // release/adopt pair stays spelled out, in class terms, through the
             // transitional private accessors (cookbook, DELIMITERS, last case).
             System::Filename& dst = r->_object->_path;
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): a `_path` write.
+            ::Object::NotifyResourceEvent(::Object::ResourceEvent::PathWrite, nullptr, r->_object, r->_path._data);
             if (dst._data != r->_path._data) {
                 System::StringPrivateAccess::Release(dst.AsString());
                 // Release leaves `data - 8` in the slot on the FREEING arm

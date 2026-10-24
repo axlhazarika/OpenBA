@@ -79,6 +79,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <new>
 
 #include "external_set.h"
@@ -86,6 +87,7 @@
 #include "system/string_internal.h"
 #include "object/External.h"
 #include "io/FileStream.h"
+#include "object/resource_ext.h"   // NOT RETAIL: the ext.visit_replay / ext.find_fastpath seams
 
 // `??0Filename@System@@QEAA@AEBV01@@Z` (0x1800067d0) used to be forward-declared
 // here as a C entry point. ENDGAME B.3.1 step 2 calls it as what it is — the
@@ -174,14 +176,77 @@ struct AddCounters {
 };
 AddCounters g_ac{};
 
+// ---------------------------------------------------------------------------
+// THE PASS CENSUS (NOT RETAIL, print-only; docs/extensions/handins/VISITREPLAY.md
+// section 1). Rows whose bit a first touch set, per loader bracket: the count
+// and an order-free sum of a mix of the row pointers (equal within one run when
+// two passes mark the same rows). The debug exe also sums a hash of the rows'
+// keys, which is comparable across runs (ext.visit_replay on against off).
+// Loader::Run prints and resets it (loops.cpp). Racy by design when the main
+// thread marks rows during a loader bracket: the line counts both.
+// ---------------------------------------------------------------------------
+#if defined(_DEBUG)
+#define OPENBA_VISITCENSUS_PATHHASH 1
+#else
+#define OPENBA_VISITCENSUS_PATHHASH 0
+#endif
+
+namespace {
+
+struct PassCensus {
+    uint64_t marked;
+    uint64_t ptrHash;
+    uint64_t pathHash;
+};
+PassCensus g_pass{};
+
+uint64_t CensusMix(uint64_t h) {
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    return h ^ (h >> 33);
+}
+
+#if OPENBA_VISITCENSUS_PATHHASH
+uint64_t CensusPathHash(const char* s) {
+    uint64_t h = 1469598103934665603ull;
+    if (s == nullptr)
+        return h;
+    for (; *s; ++s) {
+        h ^= static_cast<unsigned char>(*s);
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+#endif
+
+}  // namespace
+
+void VisitCensusPass(const char* what, const char* loopName, int bit) {
+    if (g_pass.marked != 0) {
+        // stderr: the perf exe strips printf (src/app/log_strip.h).
+        fprintf(stderr, "[VisitCensus] %s %s bit=%d marked=%llu ptrHash=%016llx pathHash=%016llx\n", what, loopName,
+                bit, (unsigned long long)g_pass.marked, (unsigned long long)g_pass.ptrHash,
+                (unsigned long long)g_pass.pathHash);
+    }
+    g_pass = PassCensus{};
+}
+
 // ============================================================================
 // Add's HIT arm, 1800be68b..1800be6c7, on the node the descent landed on:
 // OR the clean bit in, and when it was not already set run the reference-visit
 // pass over the object. Its own function because the visit pass's shortcut
 // (block VISITPASS, external_visit.cpp) reaches this arm with the node it
-// already holds, skipping the descent and nothing else.
+// already holds, skipping the descent and nothing else. `viaAdd` (NOT RETAIL)
+// says which of the two reached it, for ext.visit_replay's record.
+//
+// NOT RETAIL in shape only (docs/extensions/handins/VISITREPLAY.md): the arm is
+// split at its branch so ext.visit_replay can run the same two halves --
+// `ArmMark` (the OR, the counters, "was it clear") and `VisitRow` (the visit) --
+// on the rows a record names.
 // ============================================================================
-void RtObject_ExternalFactory_AddHit(ExternalFactory* self, rtresset::Node* node, ::Object::External* external) {
+bool RtObject_ExternalFactory_ArmMark(ExternalFactory* self, rtresset::Node* node) {
     // The clean-generation bit for THIS generation (the same expression as the
     // body's below: `_cleanBitIndex` masked with `& 0x1f`, as retail's SHL does).
     const uint32_t bit = 1u << (static_cast<uint32_t>(self->_cleanBitIndex) & 31u);
@@ -190,29 +255,94 @@ void RtObject_ExternalFactory_AddHit(ExternalFactory* self, rtresset::Node* node
     const uint32_t before = entry->usageMask;
     entry->usageMask = before | bit;                            // 1800be694
 
-    if ((bit & before) == 0) {
-        // First time this resource has been touched in this clean
-        // generation. Run the reference-visit pass.
-        ++g_ac.hitVisited;
-
-        // ---- the stack-constructed IO::VisitorStream --------------------
-        // 0x18 bytes of stack, built by the REAL constructor (ENDGAME
-        // B.3.9 IO: retail's ??0VisitorStream 0x1800bb090 -- vptr,
-        // direction 1, the Visitor encoding). `Stream::pad0c` is not
-        // written, as in retail.
-        alignas(8) unsigned char vsMem[sizeof(IO::VisitorStream)];
-        IO::VisitorStream* vs = ::new (vsMem) IO::VisitorStream();
-
-        ExternalSerialize(external, *vs);                       // 1800be6a9
-
-        // ---- the INLINED ~VisitorStream (1800be673..) --------------------
-        // Retail's two table stores and the encoding free are
-        // ~VisitorStream -> ~Stream; slot 0 with flags 0 runs exactly that
-        // (called non-virtually, as retail's inlined copy is).
-        vs->IO::VisitorStream::~VisitorStream();
-    } else {
+    if ((bit & before) != 0) {
         ++g_ac.hitSkipped;
+        return false;
     }
+    // First time this resource has been touched in this clean generation: the
+    // caller runs the reference-visit pass.
+    ++g_ac.hitVisited;
+    ++g_pass.marked;   // the pass census (print-only)
+    g_pass.ptrHash += CensusMix(reinterpret_cast<uintptr_t>(node));   // CAST-OK: the address is the datum
+#if OPENBA_VISITCENSUS_PATHHASH
+    g_pass.pathHash += CensusMix(CensusPathHash(entry->path._data));
+#endif
+    return true;
+}
+
+void RtObject_ExternalFactory_VisitRow(ExternalFactory* self, rtresset::Node* node, ::Object::External* external) {
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): ext.visit_replay records the
+    // rows this visit hands to the arm. Null by default.
+    const ::Object::ExtVisitReplay* const replay = ::Object::ExternalFactory::_extVisitReplay;
+    if (replay != nullptr)
+        replay->visitBegin(*self, node);
+
+    // ---- the stack-constructed IO::VisitorStream --------------------
+    // 0x18 bytes of stack, built by the REAL constructor (ENDGAME
+    // B.3.9 IO: retail's ??0VisitorStream 0x1800bb090 -- vptr,
+    // direction 1, the Visitor encoding). `Stream::pad0c` is not
+    // written, as in retail.
+    alignas(8) unsigned char vsMem[sizeof(IO::VisitorStream)];
+    IO::VisitorStream* vs = ::new (vsMem) IO::VisitorStream();
+
+    ExternalSerialize(external, *vs);                       // 1800be6a9
+
+    // ---- the INLINED ~VisitorStream (1800be673..) --------------------
+    // Retail's two table stores and the encoding free are
+    // ~VisitorStream -> ~Stream; slot 0 with flags 0 runs exactly that
+    // (called non-virtually, as retail's inlined copy is).
+    vs->IO::VisitorStream::~VisitorStream();
+
+    if (replay != nullptr)
+        replay->visitEnd(*self, node);
+}
+
+void RtObject_ExternalFactory_AddHit(ExternalFactory* self, rtresset::Node* node, ::Object::External* external,
+                                     bool viaAdd) {
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): ext.visit_replay records
+    // which rows a first-touch visit hands to this arm. Null by default.
+    const ::Object::ExtVisitReplay* const replay = ::Object::ExternalFactory::_extVisitReplay;
+    if (replay != nullptr)
+        replay->edge(*self, node, external, viaAdd);
+
+    if (!RtObject_ExternalFactory_ArmMark(self, node))
+        return;
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): ext.visit_replay hands the
+    // rows this visit would hand to the arm to it again, from the visit's last record.
+    if (replay != nullptr && replay->replay(*self, node, external))
+        return;
+    RtObject_ExternalFactory_VisitRow(self, node, external);
+}
+
+// ============================================================================
+// NOT RETAIL (docs/extensions/handins/VISITREPLAY.md): `Add(found)` for a
+// `found` whose row is already in hand. Add copies found->GetPath(), descends
+// `_resources` for it and runs the hit arm on the row it lands on. When the
+// row's key is `found->_path` character for character, that descent lands on
+// this row (the tree never holds two fold-equal keys: an insert meeting one
+// inserts nothing), so the hit arm can run there directly: `AddDirect` says
+// whether it can and, when it can, counts Add's call and hit. Otherwise Add runs.
+// ============================================================================
+bool RtObject_ExternalFactory_AddDirect(::Object::External* found, rtresset::Node* node) {
+    const char* key = rtresset::Elem(node)->path._data;
+    const char* path = found->_path._data;
+    bool same = (key == path);
+    if (!same && key != nullptr && path != nullptr)
+        same = std::strcmp(key, path) == 0;
+    if (!same || rtresset::Elem(node)->external != found)
+        return false;
+    ++g_ac.calls;
+    ++g_ac.hit;
+    return true;
+}
+
+void RtObject_ExternalFactory_AddFound(ExternalFactory* self, ::Object::External* found, rtresset::Node* node) {
+    if (!RtObject_ExternalFactory_AddDirect(found, node)) {
+        RtObject_ExternalFactory_Add(self, found);
+        return;
+    }
+    RtObject_ExternalFactory_AddHit(self, node, found, true);
 }
 
 // ============================================================================
@@ -286,7 +416,7 @@ extern "C" void RtObject_ExternalFactory_Add(ExternalFactory* self, ::Object::Ex
     if (node != nullptr) {
         // ---- HIT: 1800be68b..1800be6c7 ----------------------------------
         ++g_ac.hit;
-        RtObject_ExternalFactory_AddHit(self, node, external);
+        RtObject_ExternalFactory_AddHit(self, node, external, true);
     } else {
         // ---- MISS: 1800be699..1800be6c2 ---------------------------------
         ++g_ac.inserted;
@@ -328,3 +458,7 @@ void DumpAddCounters() {
 }
 
 }  // namespace RtObject
+
+// EXT SEAMS (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): object/resource_ext.h.
+const Object::ExtVisitReplay* Object::ExternalFactory::_extVisitReplay = nullptr;
+const Object::ExtFindFast* Object::ExternalFactory::_extFindFast = nullptr;

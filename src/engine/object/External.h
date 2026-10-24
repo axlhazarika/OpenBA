@@ -41,6 +41,7 @@
 // Object` block would then have failed to find it. The lower include is now a
 // `#pragma once` no-op and is left in place with its explanatory banner.
 #include "TypeInfo.h"
+#include "resource_ext.h"   // NOT RETAIL: the ext.visit_replay / ext.find_fastpath seams (VISITREPLAY.md)
 
 namespace Object { class External; }   // ResourceEntry::external
 
@@ -930,6 +931,12 @@ public:
     using ExtLoadEndFn   = void (*)(IO::CompressedFileStream& cfs, IO::Stream* alt, const External* result);
     static ExtLoadBeginFn _extLoadBegin;   // defined in external_load.cpp
     static ExtLoadEndFn   _extLoadEnd;     // defined in external_load.cpp
+
+    // EXT SEAMS (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): ext.visit_replay and
+    // ext.find_fastpath (object/resource_ext.h). Null by default and under the faithful profile;
+    // set once at boot. Defined in external_add.cpp.
+    static const ExtVisitReplay* _extVisitReplay;
+    static const ExtFindFast*    _extFindFast;
 
     // ---- the read-only half (ported bodies, src/engine/object/external.cpp)
     const External* Find(const System::Filename& path) const;      // 0x1800bdeb0

@@ -22,6 +22,15 @@ System::Filename* RtObject_ExternalFactory_GetCompiledPath(System::Filename* ret
 const ::Object::External* RtObject_ExternalFactory_FindOrLoad(ExternalFactory* self,
                                                     const System::Filename* path);
 
+// NOT RETAIL (docs/extensions/handins/VISITREPLAY.md): FindOrLoad for the visit pass's walk
+// (external_visit.cpp): the same body, without ext.find_fastpath.
+const ::Object::External* RtObject_ExternalFactory_FindOrLoadVisit(ExternalFactory* self,
+                                                         const System::Filename* path);
+
+// NOT RETAIL (docs/extensions/handins/VISITREPLAY.md): FindOrLoad's hit arm on a row ext.find_fastpath
+// named (external_compiled.cpp). `row` is an rtresset::Node of `_resources`.
+const ::Object::External* RtObject_ExternalFactory_FindOrLoadHitRow(ExternalFactory* self, void* row);
+
 // EXT SEAM (NOT RETAIL, docs/extensions/KITFREE.md §2): the resource providers' entry, null by default.
 // FindOrLoad's miss branch calls it, with the EXPANDED path, only after
 // External::Load found neither a loose .crs nor a package entry; a non-null

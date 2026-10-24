@@ -76,6 +76,7 @@
 #include "external_set.h"
 #include "collection/fold_index.h"   // block PATHINDEX
 #include "collection/ptr_index.h"    // block VISITPASS
+#include "object/resource_ext.h"     // NOT RETAIL: VISITREPLAY.md
 #include "system/string_internal.h"
 #include "system/MemoryAllocator.h"   // B3R: MemAlloc / MemFree / FreeLockedIgnoringSelf
 
@@ -145,6 +146,8 @@ Collection::PtrIndex& VisitIdx() {
 void IndexesInsert(const Set* set, Node* fresh) {
     ResIndex().Insert(set, fresh);
     VisitIdx().Insert(set, fresh, fresh != nullptr ? Elem(fresh)->external : nullptr);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): a new row.
+    ::Object::NotifyResourceEvent(::Object::ResourceEvent::Insert, fresh, nullptr, nullptr);
 }
 }  // namespace
 
@@ -159,6 +162,8 @@ bool IndexedFind(const void* set, int32_t count, const char* key, Node** out) {
 void IndexClear(const void* set) {
     ResIndex().Clear(set);
     VisitIdx().Clear(set);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): every row freed.
+    ::Object::NotifyResourceEvent(::Object::ResourceEvent::Clear, nullptr, nullptr, nullptr);
 }
 
 bool VisitIndexFind(const void* set, int32_t count, const ::Object::External* ext, Node** out, bool* verified) {
@@ -580,6 +585,8 @@ void FreeEntryNode(void* ignored, Node* node) {
 // conditional rather than as two calls.
 // ---------------------------------------------------------------------------
 void Erase(Set* set, Node* z) {
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): the row is about to go.
+    ::Object::NotifyResourceEvent(::Object::ResourceEvent::Erase, z, nullptr, nullptr);
     ResIndex().Erase(set, z);               // NOT RETAIL (block PATHINDEX): the key is still live
     VisitIdx().Erase(set, z, Elem(z)->external);   // NOT RETAIL (block VISITPASS)
     Node* retraceFromParent = z->parent;    // [RSP+0x50], "local A"
@@ -907,3 +914,14 @@ void RtObject_ExternalFactory_Clean(ExternalFactory* self) {
 }
 
 }  // namespace RtObject
+
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): object/resource_ext.h.
+void Object::NotifyResourceEvent(ResourceEvent e, void* row, const External* external, const char* newPath) {
+    ExternalFactory* const f = ExternalFactory::_singleton;
+    if (f == nullptr)
+        return;
+    if (ExternalFactory::_extVisitReplay != nullptr)
+        ExternalFactory::_extVisitReplay->event(*f, e, row, external, newPath);
+    if (ExternalFactory::_extFindFast != nullptr)
+        ExternalFactory::_extFindFast->event(*f, e, row, external, newPath);
+}

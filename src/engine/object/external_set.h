@@ -184,5 +184,19 @@ namespace RtObject {
 void RtObject_ExternalFactory_Clean(ExternalFactory* self);
 // Add's HIT arm (1800be68b..1800be6c7) on a node already in hand: OR the clean
 // bit in, visit on a first touch (external_add.cpp; block VISITPASS reaches it).
-void RtObject_ExternalFactory_AddHit(ExternalFactory* self, rtresset::Node* node, ::Object::External* external);
+// `viaAdd` (NOT RETAIL) is true from Add's descent, false from the visit's shortcut.
+void RtObject_ExternalFactory_AddHit(ExternalFactory* self, rtresset::Node* node, ::Object::External* external,
+                                     bool viaAdd);
+// NOT RETAIL in shape (docs/extensions/handins/VISITREPLAY.md): the hit arm's two halves. `ArmMark`
+// ORs the clean bit in (with the arm's counters) and returns whether it was clear; `VisitRow` is the
+// first touch's reference visit.
+bool RtObject_ExternalFactory_ArmMark(ExternalFactory* self, rtresset::Node* node);
+void RtObject_ExternalFactory_VisitRow(ExternalFactory* self, rtresset::Node* node, ::Object::External* external);
+// NOT RETAIL (docs/extensions/handins/VISITREPLAY.md): `Add(found)` with found's row in hand
+// (external_add.cpp has the argument). `AddDirect` is its test plus Add's counters: true = run the
+// arm on `node`, false = run Add.
+bool RtObject_ExternalFactory_AddDirect(::Object::External* found, rtresset::Node* node);
+void RtObject_ExternalFactory_AddFound(ExternalFactory* self, ::Object::External* found, rtresset::Node* node);
+// NOT RETAIL, print-only: the per-bracket census of rows a first touch marked (external_add.cpp).
+void VisitCensusPass(const char* what, const char* loopName, int bit);
 }  // namespace RtObject
