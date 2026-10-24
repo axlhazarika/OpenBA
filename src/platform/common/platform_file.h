@@ -76,6 +76,11 @@ int32_t  FileDelete(const PathChar* path);                        // DeleteFileW
 // and unlinks on EXDEV (plans/THREADS.md F.1).
 int32_t  FileMove(const PathChar* from, const PathChar* to);
 int32_t  DirCreate(const PathChar* path);                         // CreateDirectoryW(path, NULL)
+// NOT RETAIL: DirCreate on every prefix of `dir` (either separator), so the missing parents are made
+// too; an existing directory, a drive ("C:") or a UNC host fail harmlessly. true when `dir` is a
+// directory afterwards. One body over DirCreate / PathAttributes (src/platform/common/dir_chain.cpp):
+// the settings twins' WriteFileAtomic and the derived cache's Store::Open.
+bool     EnsureDirChain(const PathChar* dir);
 
 // ---- settings.cfg's file layer (D4_RULES C3; not retail) ---------------------
 // src/platform/win/settings_win.cpp's ReadWholeFile / WriteFileAtomic, with the

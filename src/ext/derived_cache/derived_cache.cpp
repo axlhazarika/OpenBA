@@ -233,9 +233,9 @@ Store::OpenStatus Store::Open(const std::string& dir, uint64_t capBytes) {
     Close();
     _dir = dir;
     _cap = capBytes;
-    Platform::DirCreate(ToPath(dir).c_str());
-    const uint32_t attrs = Platform::PathAttributes(ToPath(dir).c_str());
-    if (attrs == Platform::kInvalidPathAttributes || (attrs & Platform::kFileAttributeDirectory) == 0) {
+    // The parents too: on a fresh profile <Documents>\Banished does not exist until the first
+    // settings.cfg or save write, and a cache consumer opens before that.
+    if (!Platform::EnsureDirChain(ToPath(dir).c_str())) {
         std::fprintf(stderr, "[DerivedCache] cannot create %s: no cache this run\n", dir.c_str());
         return OpenStatus::Failed;
     }

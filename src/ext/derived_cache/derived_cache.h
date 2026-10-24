@@ -117,7 +117,7 @@ public:
     Store(const Store&) = delete;
     Store& operator=(const Store&) = delete;
 
-    // `dir` is UTF-8, created when absent (its parent must exist). On InUse / Failed nothing is held
+    // `dir` is UTF-8, created when absent, its missing parents too. On InUse / Failed nothing is held
     // and every call below is a no-op miss.
     OpenStatus Open(const std::string& dir, uint64_t capBytes);
     // Writes what is queued, stops the writer, closes the files and releases the lock.

@@ -345,6 +345,20 @@ UNIT_TEST(ext_derived_cache_second_instance_and_clear) {
     CHECK_EQ(a.BytesOnDisk(), 64ull);
 }
 
+UNIT_TEST(ext_derived_cache_open_creates_missing_parents) {
+    TempDir t;
+    const fs::path deep = t.dir / "a" / "b" / "Cache";   // neither a nor b exists yet
+    CHECK(!fs::exists(t.dir / "a"));
+    Store s;
+    CHECK(s.Open(deep.u8string(), kBig) == Store::OpenStatus::Opened);
+    CHECK(fs::is_directory(deep));
+    s.Put(MakeKey(1), Payload(100, 15));
+    s.Flush();
+    CHECK_EQ(s.GetStats().stored, 1ull);
+    s.Close();
+    CHECK(fs::exists(deep / "derived.dat"));
+}
+
 UNIT_TEST(ext_derived_cache_unknown_format_starts_empty) {
     TempDir t;
     {
