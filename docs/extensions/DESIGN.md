@@ -160,7 +160,7 @@ separate axis, a *surface*, and every surface is built once as a host that exten
 
 | Surface | Host | What an extension contributes |
 |---|---|---|
-| Extensions dialog (front end) | `src/game/Dialog/ExtensionsDialog.*` | its registry row (mandatory) |
+| Extensions dialog (front end) | `src/game/Dialog/ExtensionsDialog.*` | its registry row (mandatory), in the Optional tab when `defaultOn` is false, in the Default tab when it is true |
 | Enhanced tab (Options dialog) | `src/ext/enhanced_tab/` | rows for its class A values (`EnhancedTab::Contribution`: open / apply / close) |
 | In-game toolbar window | one extension button on the toolbar opening a window of pages, built with the first extension that needs it | a page, offered only while the extension is active for the town |
 
@@ -385,7 +385,10 @@ profile.
 
 **Menu.** The front end gets an Extensions button beside Mods with its own icon (a new `.rsc` and
 sprite is fine). The dialog lists fixes and extensions with the class letter, the lock state
-("live" / "locked for this game"), the toggle, and the description. A B/C toggle in-game shows the
+("live" / "locked for this game"), the toggle, and the description, in two tabs in registry order:
+Optional (shown when the dialog opens: the rows with `defaultOn` false, where the player adds
+extras) and Default (the rows with `defaultOn` true: every fix and the default-on extensions, where
+one is switched off). The split is presentation only: keys, lock and save manifest are unchanged. A B/C toggle in-game shows the
 same restart/reload notice the Mods dialog shows.
 
 ## 4. Order of work
