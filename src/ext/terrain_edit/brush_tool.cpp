@@ -137,9 +137,16 @@ void AdoptWorld(const void* map, const void* heights, int stride) {
     g_undoEpoch = Ext::LockEpoch();
 }
 
+// A road is a cell the game marked in field_0x2A (the road batch id, 0xFF when there is none): the road mesh
+// is built once from the ground's heights at that time, so ground raised or lowered under a road would bury
+// it or leave it in the air, and the cell's type must stay what the road was built on.
+bool IsRoadCell(const MapCell& cell) {
+    return cell.field_0x2A != 0xFF;
+}
+
 // A vertex is a corner of four cells, and the terrain classifier reads the cell centre from all four
-// corners: a vertex that touches a building or another blocker is left alone, or the building floats or
-// sinks at that edge.
+// corners: a vertex that touches a building, another blocker or a road is left alone, or the building
+// floats or sinks at that edge and the road is buried.
 bool VertexTouchesBlocker(Map* map, int vx, int vy, int offset) {
     const int size = map->size;
     const MapCell* cells = map->cells.GetData();
@@ -148,7 +155,8 @@ bool VertexTouchesBlocker(Map* map, int vx, int vy, int offset) {
             const int col = vx - offset + dx;
             const int row = vy - offset + dy;
             if (col < 0 || row < 0 || col >= size || row >= size) continue;
-            if (cells[static_cast<int64_t>(row) * size + col].blocker.Get() != nullptr) return true;
+            const MapCell& corner = cells[static_cast<int64_t>(row) * size + col];
+            if (corner.blocker.Get() != nullptr || IsRoadCell(corner)) return true;
         }
     }
     return false;
@@ -1122,7 +1130,7 @@ private:
             const int idx = c.row * size + c.col;
             MapCell& mc = map->cells.GetData()[idx];
             ReseatOccupant(map, mc.occupant.Get());   // a tree or rock on the cell goes with the ground
-            if (mc.blocker.Get() != nullptr || !IsNaturalType(mc.terrainType)) continue;
+            if (mc.blocker.Get() != nullptr || IsRoadCell(mc) || !IsNaturalType(mc.terrainType)) continue;
             const int cls = map->ClassifyTerrain(idx);
             if (cls != mc.terrainType && IsNaturalType(static_cast<uint8_t>(cls))) {
                 g_undo.RecordType(idx, mc.terrainType);
@@ -1260,7 +1268,7 @@ bool UndoLast() {
         const auto wrote = stroke.written.find(entry.first);
         // only a cell that is free and still holds the type the stroke gave it: not a road, a field or a
         // house built since
-        if (undone.blocker.Get() != nullptr || wrote == stroke.written.end() ||
+        if (undone.blocker.Get() != nullptr || IsRoadCell(undone) || wrote == stroke.written.end() ||
             undone.terrainType != wrote->second) {
             continue;
         }
