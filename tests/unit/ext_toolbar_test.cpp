@@ -55,6 +55,13 @@ const Ext::Toolbar::Contribution& Ext::Toolbar::ItemPriorityPage() {
     return c;
 }
 
+const Ext::Toolbar::Contribution& Ext::Toolbar::TerrainEditPage() {
+    static const Contribution c = { "terrain_edit", "TerrainEditTab",
+        "Dialog/TerrainEditPage.rsc:pageTerrainEdit",
+                                    StubOpen, StubChanged, StubClose };
+    return c;
+}
+
 UNIT_TEST(ext_toolbar_no_page_while_the_row_is_off) {
     Ext::Install(ResolveText(""), Ext::Profile::PerEntry, false);
     const Ext::Toolbar::Contribution* pages[4] = {};
@@ -76,7 +83,7 @@ UNIT_TEST(ext_toolbar_a_page_is_offered_while_its_row_is_active) {
     CHECK_EQ(Ext::Toolbar::ActivePages(none, 0), 1);
     CHECK(none[0] == nullptr);
     int n = 0;
-    CHECK(Ext::Toolbar::All(&n) != nullptr && n == 2);
+    CHECK(Ext::Toolbar::All(&n) != nullptr && n == 3);
     Ext::Install(ResolveText(""), Ext::Profile::PerEntry, false);
 }
 

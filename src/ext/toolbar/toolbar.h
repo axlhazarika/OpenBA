@@ -68,6 +68,7 @@ struct Contribution {
 // The contributions (defined beside their extensions, src/ext/<id>/toolbar_page.cpp).
 const Contribution& RestrictedFoodsPage();
 const Contribution& ItemPriorityPage();
+const Contribution& TerrainEditPage();
 
 // The list, and the ones whose row is active for this game (into `out`; returns how many there are,
 // which may exceed `capacity`).

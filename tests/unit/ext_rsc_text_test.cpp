@@ -38,13 +38,14 @@ bool ParseEmbedded(const char* path, File& f) {
 }  // namespace
 
 UNIT_TEST(ext_rsc_text_embedded_files) {
-    CHECK(kEmbeddedCount == 6);
+    CHECK(kEmbeddedCount == 7);
     CHECK(Embedded("Dialog/Extensions.rsc") != nullptr);
     CHECK(Embedded("Dialog/EnhancedOptions.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsStringTable.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsWindow.rsc") != nullptr);
     CHECK(Embedded("Dialog/RestrictedFoodsPage.rsc") != nullptr);
     CHECK(Embedded("Dialog/ItemPriorityPage.rsc") != nullptr);
+    CHECK(Embedded("Dialog/TerrainEditPage.rsc") != nullptr);
 }
 
 UNIT_TEST(ext_rsc_text_parse_extensions) {
@@ -167,7 +168,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 47);
+    CHECK(strings && strings->blocks.size() == 61);
     if (strings) {
         // The Extensions dialog's two tab captions.
         int tabKeys = 0;
@@ -179,7 +180,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
         }
         CHECK(tabKeys == 2);
     }
-    if (strings && strings->blocks.size() == 45) {
+    if (strings) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
         bool found = false;
@@ -202,7 +203,8 @@ void CheckKnownTypes(const File& f, const char* file) {
                            o.type == "RibbonDescription" || o.type == "LabelDescription" ||
                            o.type == "TextDescription" || o.type == "TabDescription" ||
                            o.type == "ButtonDescription" || o.type == "TableDescription" ||
-                           o.type == "ContainerDescription" || o.type == "CheckDescription";
+                           o.type == "ContainerDescription" || o.type == "CheckDescription" ||
+                           o.type == "ImageDescription" || o.type == "SliderDescription";
         CHECK(known);
         if (!known) std::printf("  %s:%s has type %s\n", file, o.name.c_str(), o.type.c_str());
     }
@@ -299,6 +301,24 @@ UNIT_TEST(ext_rsc_text_element_flags) {
     CHECK(row && row->body.Find("_minWidth") == nullptr);
     const Object* label = p.Find("labelItemPriorityRow");
     CHECK(label && label->body.Find("_minWidth") == nullptr);
+}
+
+UNIT_TEST(ext_rsc_text_parse_terrain_edit_page) {
+    File f;
+    CHECK(ParseEmbedded("Dialog/TerrainEditPage.rsc", f));
+    CHECK(f.Find("resource") == nullptr);   // a page, not a dialog: the root object is pageTerrainEdit
+    const Object* page = f.Find("pageTerrainEdit");
+    CHECK(page && page->type == "RibbonDescription");
+    CHECK(f.Find("textTerrainEditHint") && f.Find("textTerrainEditHint2")
+        && f.Find("textTerrainEditHint3") && f.Find("textTerrainEditHint4") &&
+          f.Find("textTerrainEditStatus"));
+    CHECK(f.Find("rowTerrainEditModes") && f.Find("rowTerrainEditSize") && f.Find("rowTerrainEditStrength"));
+    CHECK(f.Find("buttonTerrainEditRaise") && f.Find("buttonTerrainEditLower")
+        && f.Find("buttonTerrainEditFlatten") && f.Find("buttonTerrainEditMountain")
+        && f.Find("buttonTerrainEditSmooth") && f.Find("buttonTerrainEditUndo"));
+    CHECK(f.Find("imageTerrainEditRaise") && f.Find("imageTerrainEditUndo"));
+    CHECK(f.Find("sliderTerrainEditSize") && f.Find("sliderTerrainEditStrength"));
+    CheckKnownTypes(f, "TerrainEditPage.rsc");
 }
 
 UNIT_TEST(ext_rsc_text_syntax_errors) {
