@@ -16,6 +16,9 @@ Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CM
 - `ext.texture_quality` (off): a Texture quality choice on the Enhanced tab, Full or Half; Half makes
   large world textures without their top mip level (MegaMod: 3 GB never decoded, 10.1 GB down to 7.1 GB
   of deferred texture data). Sprite sheets, fonts and cursors are never affected.
+- `ext.heap_slack` (on): the engine allocator keeps a little freed heap committed instead of returning it to
+  the OS and taking it back a moment later, zeroing exactly the pages retail would have received fresh, so every
+  byte any allocation sees is unchanged (MegaMod first start with an empty cache folder 15.8 s down to 14.4 s).
 - With the four rows on, a MegaMod boot to the menu is 12.9 s down to 11.5 s on the reference machine.
 
 **Fixes**
