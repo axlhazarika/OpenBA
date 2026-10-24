@@ -298,6 +298,9 @@ int32_t FileSystem::_extWideCount = 0;
 bool (*FileSystem::_extIndexRestore)(FileSystem& fs) = nullptr;
 void (*FileSystem::_extIndexBuilt)(FileSystem& fs) = nullptr;
 
+// ext.menu_entry (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): src/ext/menu_entry/ sets it.
+void (*FileSystem::_extPackagesClosed)(FileSystem& fs) = nullptr;
+
 int64_t FileSystem::PackedReadOffset(const RtIO::FileInfo& fi, bool* wide) const {
     const uint32_t tag = static_cast<uint32_t>(fi.handle);
     const uint32_t packIndex = tag >> 24;

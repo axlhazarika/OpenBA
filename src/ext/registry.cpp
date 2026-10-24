@@ -317,6 +317,15 @@ const Entry kEntries[] = {
       "Keeps the combined file list of the mounted mods in the cache folder, so starting the game or "
       "reloading mods skips rebuilding it. Same game data.",
       0, [](State& s) -> bool& { return s.ext.package_cache; } },
+    // MENUENTRY (docs/extensions/handins/MENUENTRY.md, issue #13): entering the main menu rescans
+    // every .pkm and then remounts every package, even when nothing changed. The scan takes each
+    // unchanged .pkm's record (same name, size, write time) from the last scan, and the remount is
+    // skipped when what it would mount is what is mounted. Read at each menu entry (live).
+    { "menu_entry", Tier::Extension, Class::A, true,
+      "Quick return to the menu",
+      "Skips rescanning and remounting the mod files when returning to the main menu if none of "
+      "them changed. Same game data.",
+      0, [](State& s) -> bool& { return s.ext.menu_entry; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).

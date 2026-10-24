@@ -107,6 +107,7 @@ struct Extensions {
     bool package_cache = false; // class A, live at each mount: src/ext/package_cache/, seams IO::FileSystem::_extIndexRestore / _extIndexBuilt + the derived cache (docs/extensions/handins/PKGCACHE.md)
     bool create_on_demand = false; // class A, next start: src/ext/create_on_demand/, backend seam CreateOnDemandBackend + seams IO::FileSystem::_extHandleClosing, Video::ImageBuffer::_extLevelSource, Graphics::MeshInstance::_extMeshAssigned (docs/extensions/handins/CREATEONDEMAND.md)
     bool texture_quality = false; // class A, next start: src/ext/texture_quality/, backend seam TextureQualityBackend + the level readers (docs/extensions/handins/TEXQUALITY.md)
+    bool menu_entry = false; // class A, live at each menu entry: src/ext/menu_entry/, seams IO::Modification::_extModCached / _extModStored / _extOverridesRestore / _extOverridesBuilt / _extRemountSkip / _extRemountDone + IO::FileSystem::_extPackagesClosed (docs/extensions/handins/MENUENTRY.md)
     bool stream_cache = false; // class A, next start: src/ext/stream_cache/, seams Object::ExternalFactory::_extLoadBegin/_extLoadEnd, IO::CompressedStream::_extReadTap, Engine::LoaderLoop::_extLoadDone, CreateOnDemand::g_altLocate/g_altSkip + the derived cache (docs/extensions/handins/STREAMCACHE.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the

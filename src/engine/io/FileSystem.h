@@ -593,6 +593,13 @@ public:
     static bool (*_extIndexRestore)(FileSystem& fs);
     static void (*_extIndexBuilt)(FileSystem& fs);
 
+    // ---- ext.menu_entry (NOT RETAIL, docs/extensions/handins/MENUENTRY.md) ----------------------
+    // Engine-side seam (DESIGN.md hook rule 5), null by default and under the faithful profile: run
+    // at the end of every ClosePackages (LoadPackages' own included). The extension keeps a
+    // fingerprint of the packages the last remount mounted; a close from anywhere but that
+    // remount drops it.
+    static void (*_extPackagesClosed)(FileSystem& fs);
+
     // ---- ext.create_on_demand (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md) ----------
     // Engine-side seam (DESIGN.md hook rule 5), null by default and under the faithful profile:
     // run by PlatformCloseFile (through PackedMapRelease) for every handle it is about to close,
