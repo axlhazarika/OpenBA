@@ -94,6 +94,9 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     }
     const Object* table = e.Find("enhancedOptions");
     CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 14);   // seven rows x two columns (COMPRESSAO: the cache row; TEXQUALITY: texture quality)
+    // TEXQUALITY: the Texture quality combo offers Full / Half only (Quarter removed by the user's ruling).
+    const Object* tqItems = e.Find("textureQualityItems");
+    CHECK(tqItems && tqItems->body.Find("_strings") && tqItems->body.Find("_strings")->blocks.size() == 2);
     const Object* opt = e.Find("textAoOption");
     CHECK(opt && opt->body.Find("_color") && opt->body.Find("_color")->tokens[0].text == "0xFFC0C0C0");
 

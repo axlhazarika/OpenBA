@@ -410,8 +410,10 @@ const ValueKey kValueKeys[] = {
       [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
     // TEXQUALITY: the top mip levels a qualifying texture is made without while the row texture_quality is
     // on: 0 = Full (the default, so the row or profile=all alone drops nothing; ruled by the user),
-    // 1 = half resolution, 2 = quarter (the combo's Half / Quarter). Read once at boot.
-    { "texture_quality_drop", "texture_quality", 0, 2, 0,
+    // 1 = half resolution (the combo's Half). Read once at boot. Quarter (2) was removed by the user's
+    // ruling (too blurry): the range is 0..1, so a 2 from an older settings.cfg CLAMPS to 1 (ClampValue,
+    // a range key). The code below the key still takes any drop N (texture_quality.h).
+    { "texture_quality_drop", "texture_quality", 0, 1, 0,
       [](State& s) -> int32_t& { return s.val.texture_quality_drop; }, nullptr, 0 },
 };
 

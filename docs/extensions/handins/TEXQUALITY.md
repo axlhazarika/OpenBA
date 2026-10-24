@@ -7,10 +7,13 @@
 ## 1. What it does
 
 `ext.texture_quality` (class A, default OFF, next start) with the valued key
-`ext.texture_quality_drop` 0..2 (default 0 = Full: ruled by the user, a `profile=all` run or the row
-alone loads textures at Full). On the Enhanced tab: the combo **Texture quality**
-Full / Half (next start) / Quarter (next start); Full is the row off (or drop 0), Half / Quarter the
-row on with drop 1 / 2 (`SetTextureQualityAndRecord`, `TextureQualityChoice` in `registry_boot.cpp`). The drop is
+`ext.texture_quality_drop` 0..1 (default 0 = Full: ruled by the user, a `profile=all` run or the row
+alone loads textures at Full). **The shipped levels are Full and Half.** Quarter (drop 2) was built,
+measured (the tables below keep its numbers as a record) and removed by the user's ruling after the
+MegaMod screenshots (too blurry to be useful): the key's range is 0..1, so a 2 from an older
+settings.cfg clamps to 1 (Half). The code below the key stays general (any drop N). On the Enhanced
+tab: the combo **Texture quality** Full / Half (next start); Full is the row off (or drop 0), Half the
+row on with drop 1 (`SetTextureQualityAndRecord`, `TextureQualityChoice` in `registry_boot.cpp`). The drop is
 read once at boot (`Ext::TextureQuality::Boot`, after create_on_demand's Boot and before
 stream_cache's) into `TextureQuality::SetDrop`. Off under the faithful profile (the row is off).
 
@@ -101,7 +104,8 @@ only (no UI).
   are small and keep every level).
 - `D_drop0_loadTQ1/Screenshot3.png`: the save made at Half, loaded at Full: full-detail terrain.
 
-**The look at Quarter is the coordinator's / user's call** (close up it is obviously low-res).
+**Ruled (2026-10-24, after the MegaMod screenshots):** Quarter is too blurry to be useful and was
+removed from the key and the combo; Full and Half ship. The Quarter rows above are kept as a record.
 
 ## 6. Verification
 
@@ -119,6 +123,22 @@ only (no UI).
   `R32_FLOAT`, MaxLOD = FLT_MAX), pre-existing and unrelated (`t-texq/trace/s4_detail.txt`). drop 1
   vs drop 0, control drop1/drop1: S2 0, S3 0, S6 0; S1 32 and S5 26 are texture keys (desc +
   mip-0 hash differ by design). Traces: `t-texq/trace/*.jsonl`.
+
+## 6b. Follow-up: the boot crash on a short settings.cfg (2026-10-24)
+
+A settings.cfg holding only the two texture keys crashed 4/4 at the main menu (null `AddRef` in
+`ImageBufferData::AttachColorBuffer` <- `FrameCopyImageBuffer` <- the menu scene load); with the drop
+at 0 it passed 2/2. Cause (instrumented): not a thread race. Every `DeviceData_Resize` of the
+first-run window (clamped to the desktop, so it re-arms every few frames) failed at
+`SetFullscreenState(FALSE)` = `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` (another lane's game held the
+foreground), leaving `DeviceData::colorBuffer` released and null until a later retry; all on the main
+thread. Our `ChunkedSceneLoader` (not retail: retail loads the menu scene inside the loader's load) ran
+LoadSceneA1 from the splash update in that window. The drop only moved the load's timing into it.
+Fix (`splash_loop_stubs.cpp`): the chunked menu-scene work also waits while
+`Video::Device::settingsChanged` is set, as BeginCommands does; no retail body gains a check. After:
+crash route 5/5 + 5/5 instrumented, full-settings route 5/5, the gate route (autostart,
+`/profile:faithful`, pause-menu quit) 1/1 exit 0. One other crash (the cursor's staging read at
+`MenuDialogLoopT::Startup`, 1 run in 20) is row 1334 of `docs/known_port_issues.md`.
 
 ## 7. Not done / not tested
 
