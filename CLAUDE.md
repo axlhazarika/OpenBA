@@ -37,6 +37,7 @@ tools/build.sh unit [flavour]  # build + run the unit tests
 tools/build.sh stress          # perf build + the stress town (skill `stress-test`)
 tools/build.sh clean [flavour] # remove the build directory (all four without a flavour)
 tools/resave_gate/resave_gate.sh Gate   # serializer regression check (README alongside)
+BANISHED_RENDER_BACKEND=vulkan tools/build.sh run-menu   # the Vulkan backend (docs/vulkan/PLAN.md), own build dir
 ```
 `--jobs N` / `BUILD_JOBS` (default 8; agents use 2). On Linux the same CMakeLists builds `OpenBA` and
 `unit` (`tools/linux_gamedir.sh`, `tools/linux_run.sh`). `run` is the default check of any gameplay /

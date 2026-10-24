@@ -6,3 +6,7 @@
 	path = third_party/freetype
 	url = https://github.com/freetype/freetype
 	shallow = true
+[submodule "third_party/Vulkan-Headers"]
+	path = third_party/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers
+	shallow = true

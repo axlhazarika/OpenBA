@@ -12,6 +12,7 @@
 #   clean   [flavour]   remove the platform build dir (all flavours when none is given)
 #   exe     [flavour]   print the exe path (for scripts)
 #   build dirs: build/cmake-<flavour> (Windows, Linux); on macOS build/mac-<flavour>, with debug = build/mac-arm64.
+#   env BANISHED_RENDER_BACKEND=vulkan picks the Vulkan backend into build/cmake-<flavour>-vulkan.
 #               Darwin builds with the Metal render backend.
 #   flavours: debug (default) | og | perf | release   -- CMakeLists.txt's BANISHED_FLAVOUR
 #
@@ -41,6 +42,15 @@ if [ "$(uname -s)" = Darwin ]; then
   B="build/mac-$FLAV"
   [ "$FLAV" = debug ] && B="build/mac-arm64"
 fi
+# The renderer backend (src/render/common/README.md): env BANISHED_RENDER_BACKEND picks a non-default
+# one (vulkan; docs/vulkan/PLAN.md) and keys its own build directory, build/cmake-<flavour>-<backend>,
+# so the default build is never reconfigured under it. Unset = the platform default (dx11 / metal).
+BACKEND="${BANISHED_RENDER_BACKEND:-}"
+BACKEND_CMAKE=""
+if [ -n "$BACKEND" ]; then
+  B="$B-$BACKEND"
+  BACKEND_CMAKE="-DBANISHED_RENDER_BACKEND=$BACKEND"
+fi
 EXE="$B/OpenBA$EXT"
 # THE GATE RUNS FAITHFUL (docs/extensions/DESIGN.md §3 "Gates"): every fix and extension off for
 # this one run, through the exe's own command line (retail's `/key:value` parser, System::Configuration),
@@ -50,8 +60,8 @@ FAITHFUL="/profile:faithful"
 
 configure() {
   [ -f "$B/build.ninja" ] && return 0
-  echo "== configure $B (BANISHED_FLAVOUR=$FLAV)"
-  cmake -S . -B "$B" -G Ninja -DBANISHED_FLAVOUR="$FLAV" -DBANISHED_GAME_DIR="$BANISHED_DIR" ${CMAKE_EXTRA:-} || exit 1
+  echo "== configure $B (BANISHED_FLAVOUR=$FLAV${BACKEND:+, BANISHED_RENDER_BACKEND=$BACKEND})"
+  cmake -S . -B "$B" -G Ninja -DBANISHED_FLAVOUR="$FLAV" -DBANISHED_GAME_DIR="$BANISHED_DIR" $BACKEND_CMAKE ${CMAKE_EXTRA:-} || exit 1
 }
 build() { # targets...
   configure
@@ -93,7 +103,7 @@ case "$CMD" in
            elif [ "$(uname -s)" = Darwin ]; then
              rm -rf build/mac-*
              echo "removed build/mac-*"
-           else rm -rf build/cmake-debug build/cmake-og build/cmake-perf build/cmake-release; echo "removed build/cmake-{debug,og,perf,release}"; fi;;
+           else rm -rf build/cmake-debug build/cmake-og build/cmake-perf build/cmake-release build/cmake-*-vulkan; echo "removed build/cmake-{debug,og,perf,release}[-vulkan]"; fi;;
   *)
     echo "unknown command $CMD"
     sed -n '2,17p' "$0"

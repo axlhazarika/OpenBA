@@ -8,7 +8,7 @@ include path, the unit tests' included.
 
 | File | What |
 |---|---|
-| `render_backend.h` | The entry points `src/app/video_interface.cpp` writes into `Video::Device::dllSlots` (`Render::DeviceName`, `Render::CreateDeviceData`, and the cutover-only placeholder pair for the second slot). |
+| `render_backend.h` | The entry points `src/app/video_interface.cpp` writes into `Video::Device::dllSlots` (`Render::DeviceName`, `Render::CreateDeviceData`, and the cutover-only placeholder pair for the second slot), the window flag the Darwin twin asks for, and the two boot diagnostics `src/app/main.cpp` prints (`Render::DumpSwapChainState`, `Render::BootedExclusiveFullscreen`). |
 | `ao/shaders/` | Backend-neutral generated ASSAO shader byte arrays. |
 | `ao/ao_backend.h` | `AoBackend::`: what ext.ambient_occlusion asks of the backend (readable depth, feature support). |
 | `better_trees/foliage_aa_backend.h` | `FaaBackend::`: ext.foliage_aa's request and its tweak stats. |
@@ -36,6 +36,11 @@ A backend is a directory `src/render/<name>/` with:
    the two seams named above; a backend that does not support a feature gives the "not supported"
    answer (`AoBackend::Supported()` false) and ignores the request.
 
-Nothing outside `src/render/<name>/` names the backend's own namespace. The one exception today is
-`VideoDX11::Dx11SwapChain()`, read by `src/app/main.cpp`'s two Windows-only DXGI swap-chain probes
-(diagnostics that call `IDXGISwapChain` directly).
+Nothing outside `src/render/<name>/` names the backend's own namespace. (The former exception, the
+two DXGI swap-chain probes in `src/app/main.cpp`, went behind `Render::DumpSwapChainState` /
+`Render::BootedExclusiveFullscreen` when the Vulkan backend arrived; their DX11 bodies are
+`src/render/dx11/swap_probe_dx11.cpp`.)
+
+The backends: `dx11/` (Windows; Linux over dxvk-native until the Vulkan cutover), `metal/` (macOS),
+`vulkan/` (Linux and Android, Windows as the dev bed; `docs/vulkan/PLAN.md`). `tools/build.sh` picks a
+non-default one from `BANISHED_RENDER_BACKEND` into its own build directory.

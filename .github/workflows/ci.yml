@@ -32,7 +32,7 @@ jobs:
       run:
         shell: msys2 {0}
     env:
-      CCACHE_MAXSIZE: 800M    # the debug object set
+      CCACHE_MAXSIZE: 1000M   # the debug object set, dx11 + vulkan
     steps:
       - uses: actions/checkout@v5
         with:
@@ -59,6 +59,10 @@ jobs:
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/build.sh build debug
       - name: Unit tests (debug)
         run: tools/build.sh unit debug
+      # The Vulkan backend (docs/vulkan/PLAN.md) in its own build directory; everything but
+      # src/render comes out of ccache. Headers only: no Vulkan runtime is needed to build it.
+      - name: Build OpenBA (debug, vulkan backend)
+        run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" BANISHED_RENDER_BACKEND=vulkan tools/build.sh build debug
       - name: ccache statistics
         if: always()
         run: ccache -s
@@ -92,6 +96,8 @@ jobs:
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/build.sh build debug
       - name: Unit tests (debug)
         run: tools/build.sh unit debug
+      - name: Build OpenBA (debug, vulkan backend)
+        run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" BANISHED_RENDER_BACKEND=vulkan tools/build.sh build debug
       - name: ccache statistics
         if: always()
         run: ccache -s

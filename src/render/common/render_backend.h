@@ -13,7 +13,8 @@
 // src/render/dx11/render_backend_dx11.cpp to VideoDX11-x64.dll's two exports and the
 // cutover-only DX9 placeholder (src/render/dx11/VideoDX11Plugin.h). A second backend
 // supplies its own render_backend_<name>.cpp; nothing outside src/render/<backend>/
-// names a backend namespace (src/render/common/README.md).
+// names a backend namespace (src/render/common/README.md): the two boot diagnostics
+// below are what src/app/main.cpp used to read through VideoDX11::Dx11SwapChain.
 //
 // Kept free of every graphics header: the Video types are forward-declared.
 // ============================================================================
@@ -38,6 +39,15 @@ const char* DeviceName();
 // Only the Darwin window twin asks (src/platform/darwin/window_darwin.cpp); the posix and
 // Windows twins set their own flags (Vulkan on Linux) and do not call this.
 uint64_t GraphicsWindowFlags();
+
+// ---- boot diagnostics (src/app/main.cpp) -------------------------------------------
+// The swap-chain state probe printed after Engine::Startup and around focus events
+// ([SwapProbe <tag>] lines), and whether the device booted in DXGI exclusive fullscreen
+// (drives main.cpp's FSE refocus recovery). DX11 reads its IDXGISwapChain
+// (src/render/dx11/swap_probe_dx11.cpp); a backend without a DXGI swap chain prints one
+// "not probed" line and answers false.
+void DumpSwapChainState(const char* tag);
+bool BootedExclusiveFullscreen();
 
 // ---- the second slot (dllSlots[kInterfaceDX9]) ------------------------------------
 // The cutover-only placeholder that keeps one GraphicsInterface entry per slot

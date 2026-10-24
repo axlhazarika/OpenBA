@@ -44,12 +44,21 @@ set(BANISHED_GAME_DIR "C:/GOG Games/Banished" CACHE PATH "where sa-deploy copies
 # docs/reference/tweak_overlay.md): ON for the debug flavour on Windows only. OFF, not one source
 # of it is compiled and every `#if BANISHED_TWEAK_OVERLAY` site is out, so og / perf / release build
 # exactly as without it.
-if(BANISHED_FLAVOUR STREQUAL "debug" AND WIN32)
+# The renderer backend (src/render/common/README.md): dx11 by default, metal on APPLE, vulkan by
+# choice (docs/vulkan/PLAN.md). Chosen here because the tweak overlay below is DX11-only; the
+# fragment itself is included further down, with the sources.
+if(APPLE)
+  set(BANISHED_RENDER_BACKEND_DEFAULT metal)
+else()
+  set(BANISHED_RENDER_BACKEND_DEFAULT dx11)
+endif()
+set(BANISHED_RENDER_BACKEND ${BANISHED_RENDER_BACKEND_DEFAULT} CACHE STRING "Renderer backend: src/render/<name>/backend.cmake")
+if(BANISHED_FLAVOUR STREQUAL "debug" AND WIN32 AND BANISHED_RENDER_BACKEND STREQUAL "dx11")
   set(_banished_tweak_default ON)
 else()
   set(_banished_tweak_default OFF)
 endif()
-option(BANISHED_TWEAK_OVERLAY "Debug tweak overlay (Dear ImGui): debug flavour on Windows only" ${_banished_tweak_default})
+option(BANISHED_TWEAK_OVERLAY "Debug tweak overlay (Dear ImGui): debug flavour on Windows, dx11 backend only" ${_banished_tweak_default})
 
 if(BANISHED_USE_CCACHE)
   find_program(CCACHE_PROGRAM ccache)
@@ -173,15 +182,9 @@ else()
 endif()
 # The renderer backend: src/render/${BANISHED_RENDER_BACKEND}/backend.cmake sets RENDER_SRCS (its own
 # sources), RENDER_BACKEND_INCLUDES and RENDER_BACKEND_READY, and its per-source properties
-# (src/render/common/README.md). dx11 by default, metal on APPLE.
+# (src/render/common/README.md). The choice (BANISHED_RENDER_BACKEND) is made near the top.
 # src/render/common is globbed here, not in the fragment: every backend links it, and the unit
 # tests and the extensions include it whichever backend is picked.
-if(APPLE)
-  set(BANISHED_RENDER_BACKEND_DEFAULT metal)
-else()
-  set(BANISHED_RENDER_BACKEND_DEFAULT dx11)
-endif()
-set(BANISHED_RENDER_BACKEND ${BANISHED_RENDER_BACKEND_DEFAULT} CACHE STRING "Renderer backend: src/render/<name>/backend.cmake")
 if(NOT EXISTS ${CMAKE_SOURCE_DIR}/src/render/${BANISHED_RENDER_BACKEND}/backend.cmake)
   message(FATAL_ERROR "BANISHED_RENDER_BACKEND=${BANISHED_RENDER_BACKEND}: no src/render/${BANISHED_RENDER_BACKEND}/backend.cmake")
 endif()
@@ -271,7 +274,9 @@ if(Python3_Interpreter_FOUND)
     COMMENT "check_log_strip: no qualified std::printf")
 endif()
 
-if(WIN32)
+if(WIN32 AND NOT RENDER_BACKEND_READY)
+  message(STATUS "OpenBA target skipped: the ${BANISHED_RENDER_BACKEND} backend is not ready on this host (see above)")
+elseif(WIN32)
 add_executable(OpenBA WIN32
   ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
   ${CMAKE_SOURCE_DIR}/src/app/icon.rc)
@@ -288,6 +293,8 @@ target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -static -static-libgcc -stat
 target_link_libraries(OpenBA PRIVATE user32 dbghelp shell32 gdi32)
 # SDL3 static: the target carries its include directory and its system libraries
 target_link_libraries(OpenBA PRIVATE SDL3::SDL3-static)
+# The backend's own link libraries (dx11, vulkan: none; the Vulkan loader is opened by SDL).
+target_link_libraries(OpenBA PRIVATE ${RENDER_BACKEND_LINK_LIBRARIES})
 # xWMA -> PCM (third_party/wmadec): the target carries its include directory
 target_link_libraries(OpenBA PRIVATE wmadec)
 # FreeType (third_party/freetype_build): src/platform/common/font_raster_freetype.cpp
