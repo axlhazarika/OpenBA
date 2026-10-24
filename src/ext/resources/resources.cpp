@@ -109,11 +109,20 @@ void Pin(Object::External* obj, const char* expandedPath) {
     // The factory's own insert first (the key is the expanded path, as
     // FindOrLoad sets it), then the pin as a second touch so the reference
     // visit runs; FindOrLoad's own Add after this is a hit that changes nothing.
+    // The insert must not carry the pin bit: Add visits a row only on the first
+    // touch of a bit, so when the published index IS the pin bit (the bit was
+    // reserved right after a Clean released it, and no loop has published since)
+    // the second touch would skip the visit, and what the object points at
+    // (Dialog/Extensions.rsc:buttonExtensions -> Dialog/MainMenu.rsc:border) would
+    // keep only the loop's bit and be freed under it (known_port_issues row 1333).
+    // The insert then takes the next bit instead, on this object's row only.
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): a `_path` write.
     Object::NotifyResourceEvent(Object::ResourceEvent::PathWrite, nullptr, obj, expandedPath);
     obj->_path = System::Filename(expandedPath);
-    f->Add(obj);
     const int32_t savedBit = f->_cleanBitIndex;
+    if (savedBit == g_pinBit)
+        f->_cleanBitIndex = (g_pinBit + 1) & 31;
+    f->Add(obj);
     const bool savedLoad = f->_loadEnabled;
     f->_cleanBitIndex = g_pinBit;
     f->_loadEnabled = true;

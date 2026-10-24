@@ -106,19 +106,18 @@ MenuDialogLoopT::~MenuDialogLoopT() {
     printf("[MenuDLT::Destroy] self=%p\n", (void*)this);
     // After this body the compiler frees _sceneIdArray (+0xbf0), _instanceArray
     // (+0xbe0), _particleArray (+0xbd0) and runs ~Audio::Scene on +0xb30, reverse
-    // declaration order, as retail's 0x14001a310 does. (The _loadBit store below
-    // now precedes them; neither destructor reads it.)
-
-    // retail 0x14001a310 : no `_loadBit` store -- ruled: kept (known_port_issues row
-    // 1295). Handing ~UpdateLoop a -1 bit stops ExternalFactory::Clean for the menu's
-    // bit 0. Retail's container resources are found by the INNER LoaderLoop's Load
-    // (0x140001120 -> GameContainer_Init 0x140099db0), which drops that loop's bit so
-    // they stay resident; the tree does the same since SLOTS2B, and the boot-time
-    // container copies under bit 0 are gone (D.4 RESIDUE). What bit 0 still owns that
-    // retail never loads there: the two splash dialogs game_main.cpp preloads on the
-    // main thread before MainLoop::Run (Dialog/ShiningRock.rsc, Dialog/Loading.rsc).
-    // Remove this store once those preloads go or a run shows bit 0 can be cleaned.
-    _loadBit = -1;
+    // declaration order, as retail's 0x14001a310 does.
+    //
+    // No `_loadBit` store, as retail 0x14001a310 has none: ~UpdateLoop hands the
+    // menu's bit back, publishes it as the factory's _cleanBitIndex and runs
+    // ExternalFactory::Clean for it (known_port_issues rows 1295, 1333). That index is
+    // still published when the next loop's Loader::Load remounts the mods, so what the
+    // remount's in-place reloads newly load carries the freed menu bit, which the next
+    // MenuDialogLoopT takes again (the lowest free bit). The store this replaced kept
+    // bit 0 for the process: the stale index was then an earlier loop's bit that the
+    // GameUpdateLoop had taken, and quitting to the menu freed those loads under a
+    // resident model (row 1333). The splash dialogs game_main.cpp preloads under bit 0
+    // are unused by then: both splash loops are deleted before the menu is.
 }
 
 void MenuDialogLoopT::Startup() {
