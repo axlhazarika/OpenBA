@@ -65,10 +65,11 @@ void Boot() {
     if (ownReader) ::Video::ImageBuffer::_extLevelSource = &ReadLevels;
     if (active > 0)
         std::fprintf(stderr,
-                     "[TextureQuality] on: qualifying textures drop their %d largest level(s) (%s reader)\n",
-                     active, ownReader ? "eager" : "create_on_demand's");
+                     "[TextureQuality] on: drop=%d, qualifying textures drop their %d largest level(s) (%s reader)\n",
+                     active, active, ownReader ? "eager" : "create_on_demand's");
     else
-        std::fprintf(stderr, "[TextureQuality] off: every level kept\n");
+        std::fprintf(stderr, "[TextureQuality] off: drop=0 (row %d, ext.texture_quality_drop=%d), every level kept\n",
+                     Ext().texture_quality ? 1 : 0, static_cast<int>(Val().texture_quality_drop));
 }
 
 }}  // namespace Ext::TextureQuality

@@ -1,6 +1,7 @@
 // src/ext/texture_quality/enhanced_entry.cpp -- ext.texture_quality's row of the Enhanced tab (block TEXQUALITY)
 //
-// NOT RETAIL. The combo "Texture quality" Full / Half / Quarter: Full = the bool row
+// NOT RETAIL. The combo "Texture quality" Full / Half / Quarter: Full = the bool row off, or the
+// key at its default 0 (the row or profile=all alone drops nothing); otherwise Full = the bool row
 // `ext.texture_quality` off (the stored `ext.texture_quality_drop` is kept), Half / Quarter = the row on
 // and the valued key `ext.texture_quality_drop` 1 / 2. SetTextureQualityAndRecord records the keys; the
 // drop was fixed at boot from the value the game started with (Ext::TextureQuality::Boot), so the

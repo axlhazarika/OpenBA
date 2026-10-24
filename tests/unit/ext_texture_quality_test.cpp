@@ -111,15 +111,20 @@ UNIT_TEST(ext_texture_quality_drop_key) {
     CHECK(k != nullptr);
     if (k == nullptr) return;
     CHECK_STREQ(k->owner, "texture_quality");
-    CHECK_EQ(k->minValue, 1);
+    CHECK_EQ(k->minValue, 0);
     CHECK_EQ(k->maxValue, 2);
-    CHECK_EQ(k->defaultValue, 1);
-    CHECK_EQ(Ext::Values{}.texture_quality_drop, 1);
-    CHECK_EQ(Resolved("").val.texture_quality_drop, 1);
+    CHECK_EQ(k->defaultValue, 0);   // Full: the row or profile=all alone drops nothing (the user's ruling)
+    CHECK_EQ(Ext::Values{}.texture_quality_drop, 0);
+    CHECK_EQ(Resolved("").val.texture_quality_drop, 0);
+    CHECK_EQ(Resolved("ext.texture_quality_drop=1\n").val.texture_quality_drop, 1);
     CHECK_EQ(Resolved("ext.texture_quality_drop=2\n").val.texture_quality_drop, 2);
-    CHECK_EQ(Resolved("ext.texture_quality_drop=7\n").val.texture_quality_drop, 2);   // clamped
-    CHECK_EQ(Resolved("ext.texture_quality_drop=0\n").val.texture_quality_drop, 1);
-    CHECK_EQ(Resolved("ext.texture_quality_drop=x\n").val.texture_quality_drop, 1);   // malformed: default
+    CHECK_EQ(Resolved("ext.texture_quality_drop=7\n").val.texture_quality_drop, 2);    // clamped
+    CHECK_EQ(Resolved("ext.texture_quality_drop=-1\n").val.texture_quality_drop, 0);   // clamped
+    CHECK_EQ(Resolved("ext.texture_quality_drop=x\n").val.texture_quality_drop, 0);    // malformed: default
+    // profile=all turns the row on and leaves the key at its default: Full.
+    const Ext::State all = Resolved("ext.texture_quality_drop=2\nprofile=all\n");
+    CHECK(all.ext.texture_quality);
+    CHECK_EQ(all.val.texture_quality_drop, 0);
 }
 
 UNIT_TEST(ext_texture_quality_rule) {

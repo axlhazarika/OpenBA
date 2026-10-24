@@ -7,9 +7,10 @@
 ## 1. What it does
 
 `ext.texture_quality` (class A, default OFF, next start) with the valued key
-`ext.texture_quality_drop` 1..2 (default 1). On the Enhanced tab: the combo **Texture quality**
-Full / Half (next start) / Quarter (next start); Full is the row off, Half / Quarter the row on with
-drop 1 / 2 (`SetTextureQualityAndRecord`, `TextureQualityChoice` in `registry_boot.cpp`). The drop is
+`ext.texture_quality_drop` 0..2 (default 0 = Full: ruled by the user, a `profile=all` run or the row
+alone loads textures at Full). On the Enhanced tab: the combo **Texture quality**
+Full / Half (next start) / Quarter (next start); Full is the row off (or drop 0), Half / Quarter the
+row on with drop 1 / 2 (`SetTextureQualityAndRecord`, `TextureQualityChoice` in `registry_boot.cpp`). The drop is
 read once at boot (`Ext::TextureQuality::Boot`, after create_on_demand's Boot and before
 stream_cache's) into `TextureQuality::SetDrop`. Off under the faithful profile (the row is off).
 

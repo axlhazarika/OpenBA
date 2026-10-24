@@ -133,7 +133,7 @@ struct Values {
     int32_t max_shadow_size = 4096; // ext.max_shadow_size 4096 | 8192 (owner max_shadow_res): the sun map at High (FAA-SHADOW2)
     int32_t rock_seat_mode = 2; // ext.rock_seat_mode 1..2 (owner fix rock_seat): 1 sink to the lowest ground under the rock, 2 tilt to the slope (the default, ROCKSEAT.md)
     int32_t create_on_demand_idle_min = 0; // ext.create_on_demand_idle_min 0..120 (owner create_on_demand): minutes unused before a made object is given back, 0 = never, the default until re-makes are prefetched (CREATEONDEMAND.md section 7)
-    int32_t texture_quality_drop = 1; // ext.texture_quality_drop 1..2 (owner texture_quality): the top mip levels a qualifying texture is made without, read once at boot (TEXQUALITY.md)
+    int32_t texture_quality_drop = 0; // ext.texture_quality_drop 0..2 (owner texture_quality): the top mip levels a qualifying texture is made without, 0 = Full (the default: the row or profile=all alone drops nothing), read once at boot (TEXQUALITY.md)
     int32_t derived_cache_mb = 4096; // ext.derived_cache_mb 256..65536 (owner compress_ao, the cache's first user): the derived-data cache's cap in MB (COMPRESSAO.md)
 };
 

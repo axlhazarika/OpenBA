@@ -385,8 +385,9 @@ const ValueKey kValueKeys[] = {
     { "create_on_demand_idle_min", "create_on_demand", 0, 120, 0,
       [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
     // TEXQUALITY: the top mip levels a qualifying texture is made without while the row texture_quality is
-    // on (the combo's Full is the row's bool): 1 = half resolution, 2 = quarter. Read once at boot.
-    { "texture_quality_drop", "texture_quality", 1, 2, 1,
+    // on: 0 = Full (the default, so the row or profile=all alone drops nothing; ruled by the user),
+    // 1 = half resolution, 2 = quarter (the combo's Half / Quarter). Read once at boot.
+    { "texture_quality_drop", "texture_quality", 0, 2, 0,
       [](State& s) -> int32_t& { return s.val.texture_quality_drop; }, nullptr, 0 },
 };
 
