@@ -4,6 +4,29 @@ One section per release, newest first. The section of the version being tagged i
 release's notes (`.github/workflows/release.yml` reads it with `tools/release/changelog_section.py`).
 Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CMakeLists.txt`.
 
+## Unreleased
+
+**Loading (caching round 2)**
+- `ext.menu_entry` (on): returning to the main menu, or reaching it at boot, no longer rescans every mod
+  file and remounts every package when nothing changed (MegaMod: return to the menu 2.2 s down to 0.8 s).
+- `ext.visit_replay` (on): the loader's later passes reach the resources they marked before from a record
+  instead of walking every link again (MegaMod: 0.6 s off the post-load passes, 0.4 s off a new game).
+- `ext.find_fastpath` (on): resource lookups a load already answered are answered from a table (save load
+  entity stage 229 ms down to 129 ms).
+- `ext.texture_quality` (off): a Texture quality choice on the Enhanced tab, Full or Half; Half makes
+  large world textures without their top mip level (MegaMod: 3 GB never decoded, 10.1 GB down to 7.1 GB
+  of deferred texture data). Sprite sheets, fonts and cursors are never affected.
+- With the four rows on, a MegaMod boot to the menu is 12.9 s down to 11.5 s on the reference machine.
+
+**Fixes**
+- The derived cache is rebuilt once after this update (its file format changed). A second running copy of
+  the game now reads the cache instead of running without it; a fresh profile whose Documents folder did
+  not exist yet now gets a cache on its first run; over the size cap the least recently used entries are
+  evicted instead of everything the previous session did not touch; the cache rewrite runs after loading on
+  its writer thread and survives a crash between its two file replaces; a lost update of the usage stamps.
+- A boot crash on a first-run window size with the texture quality at Half: the menu scene load now waits
+  for a pending device reset (the standalone loads that scene on the main thread, retail inside the loader).
+
 ## v1.0.1 (2026-10-23)
 
 Second release of OpenBA, five days after v1.0.0: Linux and macOS packages for the first time,
