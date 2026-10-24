@@ -222,11 +222,9 @@ const Entry kEntries[] = {
       1, [](State& s) -> bool& { return s.ext.item_priority; } },
 
     // TERRAINEDIT (docs/extensions/handins/TERRAINEDIT.md): a brush tool, started from the Terrain page of
-    // the extension
-    // window, that edits the terrain under the mouse. Class B: play diverges (the map is no longer the
-    // generated one) and
-    // no state of its own is recorded, because the save already carries the heights and the cell types the
-    // brush writes.
+    // the extension window, that edits the terrain under the mouse. Class B: play diverges (the map is no
+    // longer the generated one) and no state of its own is recorded, because the save already carries the
+    // heights and the cell types the brush writes.
     { "terrain_edit", Tier::Extension, Class::B, false,
       "Terrain editor",
       "A brush, started from the Terrain page in a game, that reshapes the ground under the mouse. "

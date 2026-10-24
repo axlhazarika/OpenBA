@@ -2,16 +2,17 @@
 // ============================================================================
 // src/ext/terrain_edit/terrain_texture.h -- ext.terrain_edit, the ground texture of an edit (NOT RETAIL)
 // ============================================================================
-// docs/extensions/handins/TERRAINEDIT.md. Standard C++ only, so tests/unit/ext_terrain_edit_test.cpp can check it without the
-// game. The game paints the ground from a texture it builds once, when the world is generated (WorldGeometry::_heightBytes,
-// uploaded as _heightImage; worldgen.cpp wg_BlendTexture_cf440 and Game/worldgen_cells.cpp): four bytes per cell of the
-// height grid, R the rock weight (the brown), G the grass weight, B the ambient occlusion, A never written. This computes the
-// bytes of a cell again from the heights as they are now, by the same formulas and constants, so that ground the brush has
-// lowered stops looking like mountain, a new mountain gets its rock, and a dug lake gets its brown bed and shore.
+// docs/extensions/handins/TERRAINEDIT.md. Standard C++ only, so tests/unit/ext_terrain_edit_test.cpp can
+// check it without the game. The game paints the ground from a texture it builds once, when the world is
+// generated (WorldGeometry::_heightBytes, uploaded as _heightImage; worldgen.cpp wg_BlendTexture_cf440 and
+// Game/worldgen_cells.cpp): four bytes per cell of the height grid, R the rock weight (the brown), G the
+// grass weight, B the ambient occlusion, A never written. This computes the bytes of a cell again from the
+// heights as they are now, by the same formulas and constants, so that ground the brush has lowered stops
+// looking like mountain, a new mountain gets its rock, and a dug lake gets its brown bed and shore.
 //
-// One difference from the game's own: R's scatter is a perlin noise whose seeds the game drew at generation and does not
-// keep. A cell whose height the edit changed takes a smooth value noise of its own instead (the same range, squared); a
-// cell whose height did not change keeps the game's byte.
+// One difference from the game's own: R's scatter is a perlin noise whose seeds the game drew at generation
+// and does not keep. A cell whose height the edit changed takes a smooth value noise of its own instead
+// (the same range, squared); a cell whose height did not change keeps the game's byte.
 // ============================================================================
 
 #include <cmath>
@@ -37,8 +38,9 @@ struct Texel {
     uint8_t occlusion;
 };
 
-// The surface normal of the height grid at (col, row): the game's cf150, central differences of the heights, normal.z from 2.
-// `height(col, row)` is the height in world units at a grid vertex; coordinates are clamped to [0, dim] by the caller's lambda.
+// The surface normal of the height grid at (col, row): the game's cf150, central differences of the
+// heights, normal.z from 2. `height(col, row)` is the height in world units at a grid vertex; coordinates
+// are clamped to [0, dim] by the caller's lambda.
 template <class HeightFn>
 inline void CellNormal(HeightFn height, int dim, int col, int row, float out[3]) {
     auto clampTo = [dim](int v) { return v < 0 ? 0 : (v > dim ? dim : v); };
@@ -53,8 +55,8 @@ inline void CellNormal(HeightFn height, int dim, int col, int row, float out[3])
     out[2] = nz / len;
 }
 
-// The rock byte of a cell: all rock below the floor, else the scatter (a byte, 0 to 255: the game's is a perlin noise squared),
-// and rock ramping in above kRockHigh.
+// The rock byte of a cell: all rock below the floor, else the scatter (a byte, 0 to 255: the game's is a
+// perlin noise squared), and rock ramping in above kRockHigh.
 inline uint8_t RockByte(float height, uint32_t scatter) {
     uint32_t rock = height >= kRockFloor ? scatter : 255u;
     if (height > kRockHigh) {
@@ -81,9 +83,9 @@ inline uint8_t GrassByte(float height, float normalZ) {
     return static_cast<uint8_t>(grass & 0xff);
 }
 
-// The ambient occlusion byte of a cell: the game's cf440 third pass. A circle of radius 10 of neighbours (r^2 < 101): 1 minus
-// the mean of max(dot(the cell's normal, the direction to the neighbour), 0), times the z of the sum of the 3 x 3 normals
-// around the cell, normalised; scaled to 255.
+// The ambient occlusion byte of a cell: the game's cf440 third pass. A circle of radius 10 of neighbours
+// (r^2 < 101): 1 minus the mean of max(dot(the cell's normal, the direction to the neighbour), 0), times
+// the z of the sum of the 3 x 3 normals around the cell, normalised; scaled to 255.
 template <class HeightFn>
 inline uint8_t OcclusionByte(HeightFn height, int dim, int col, int row) {
     float cn[3];
@@ -132,9 +134,9 @@ inline uint8_t OcclusionByte(HeightFn height, int dim, int col, int row) {
     return static_cast<uint8_t>(static_cast<uint32_t>(static_cast<long long>(ao)) & 0xff);
 }
 
-// The rock scatter noise of an edited cell, in [0, 1]: smooth value noise from terrain_edit_math.h, three octaves from a
-// lattice step of 2 cells (the first version used steps of 4 and made splotches bigger than the game's), under a seed of the
-// world's own.
+// The rock scatter noise of an edited cell, in [0, 1]: smooth value noise from terrain_edit_math.h, three
+// octaves from a lattice step of 2 cells (the first version used steps of 4 and made splotches bigger than
+// the game's), under a seed of the world's own.
 inline float ScatterNoise01(int col, int row, uint32_t seed) {
     float sum = 0.0f;
     float norm = 0.0f;
@@ -150,8 +152,8 @@ inline float ScatterNoise01(int col, int row, uint32_t seed) {
     return ClampFloat((sum / norm + 1.0f) * 0.5f, 0.0f, 1.0f);
 }
 
-// The mean and the standard deviation of ScatterNoise01 over a 64 x 64 patch: what to take off and divide by to make it a
-// unit noise.
+// The mean and the standard deviation of ScatterNoise01 over a 64 x 64 patch: what to take off and divide
+// by to make it a unit noise.
 inline void ScatterNoiseStats(uint32_t seed, float& mean, float& spread) {
     double sum = 0.0;
     double sum2 = 0.0;
@@ -170,9 +172,9 @@ inline void ScatterNoiseStats(uint32_t seed, float& mean, float& spread) {
     spread = static_cast<float>(var > 1e-12 ? std::sqrt(var) : 1.0);
 }
 
-// What the game's own scatter looks like on ordinary ground: the mean and the standard deviation of its rock bytes. An edit
-// measures these from the world's own texture (cells between -0.4 and 7.5 high, not repainted) so its noise matches the map it
-// is in, whatever the game's perlin did there.
+// What the game's own scatter looks like on ordinary ground: the mean and the standard deviation of its
+// rock bytes. An edit measures these from the world's own texture (cells between -0.4 and 7.5 high, not
+// repainted) so its noise matches the map it is in, whatever the game's perlin did there.
 struct ScatterLook {
     float mean = 64.0f;
     float spread = 40.0f;

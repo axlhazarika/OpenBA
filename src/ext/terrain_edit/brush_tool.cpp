@@ -1,27 +1,20 @@
 // ============================================================================
 // src/ext/terrain_edit/brush_tool.cpp -- ext.terrain_edit: the brush tool (NOT RETAIL)
 // ============================================================================
-// docs/extensions/handins/TERRAINEDIT.md. A Tool of its own (the game's tools are Tool subclasses the player
-// manager holds
-// at +0x28 and drives every frame). The Terrain page's buttons install it with StartBrush; right click ends
-// it and the
-// manager reinstalls the EditTool, as for every tool.
+// docs/extensions/handins/TERRAINEDIT.md. A Tool of its own (the game's tools are Tool subclasses the
+// player manager holds at +0x28 and drives every frame). The Terrain page's buttons install it with
+// StartBrush; right click ends it and the manager reinstalls the EditTool, as for every tool.
 //
-// While the left mouse button is held over the map (the manager's `active` flag is false over a dialog), each
-// frame
-// paints the current mode (raise, lower, flatten, mountain: terrain_edit_math.h) on the int16 height words (z
-// * 256) of
-// the vertices of a disc, weighted to a bump. Then the dirty chunks rebuild by the game's own path
-// (WorldGeometry::MarkChunksDirty, as the quarry does) and the cells of the disc are classified again from
-// their new
-// height (Map::ClassifyTerrain / SetTerrainType), so a cell raised into a mountain stops being walkable and a
-// cell
-// flattened into the buildable band can be built on. Cells with a building or another blocker are left as
-// they are.
+// While the left mouse button is held over the map (the manager's `active` flag is false over a dialog),
+// each frame paints the current mode (raise, lower, flatten, mountain: terrain_edit_math.h) on the int16
+// height words (z * 256) of the vertices of a disc, weighted to a bump. Then the dirty chunks rebuild by
+// the game's own path (WorldGeometry::MarkChunksDirty, as the quarry does) and the cells of the disc are
+// classified again from their new height (Map::ClassifyTerrain / SetTerrainType), so a cell raised into a
+// mountain stops being walkable and a cell flattened into the buildable band can be built on. Cells with a
+// building or another blocker are left as they are.
 //
 // Precedent: QuarryComponent::ApplyDepth (Component/quarrycomponent_deform.cpp) for the writes, RemovalTool
-// (Player/
-// removaltool.cpp) for the Tool shape and the tile overlay.
+// (Player/removaltool.cpp) for the Tool shape and the tile overlay.
 // ============================================================================
 #include "Player/Tool.h"
 #include "Player/exe_bodies.h"          // PlayerRay_ScreenToCell_101270, PlayerTileRender_DrawOverlay_08c0
@@ -71,8 +64,7 @@ namespace {
 Ext::TerrainEdit::BrushState g_state;
 
 // The undo steps, and the world they were painted on: the map, its height words and their stride. A stroke
-// recorded on
-// one world is never applied to another.
+// recorded on one world is never applied to another.
 Ext::TerrainEdit::UndoStack g_undo;
 // The vertices an edit wrote in the current stroke, as a box of height-grid vertices: where the water mesh is
 // looked at again.
@@ -98,12 +90,10 @@ struct StrokeBox {
 StrokeBox g_box;
 
 // The quads the world's water mesh draws (its lake ranges), by WaterCellKey: where the quad's six indices
-// are, and whether
-// it is one of the edit's (its vertices carry kEditMarker in the normal) or the game's own. An edit never
-// draws a cell twice (a cell drawn
-// twice shows as a pale patch). Built from the mesh the first time it is asked for in a world, kept up to
-// date as strokes
-// change the mesh, and dropped when a stroke is undone.
+// are, and whether it is one of the edit's (its vertices carry kEditMarker in the normal) or the game's
+// own. An edit never draws a cell twice (a cell drawn twice shows as a pale patch). Built from the mesh the
+// first time it is asked for in a world, kept up to date as strokes change the mesh, and dropped when a
+// stroke is undone.
 constexpr int kRiverOverlapRaise = 2;   // water heights are in 1/48 units: 0.04
 
 struct WaterQuad {
@@ -120,10 +110,56 @@ void (*g_frameHook)() = nullptr;  // the Terrain page's slider read
 const void* g_undoMap = nullptr;
 const void* g_undoHeights = nullptr;
 int g_undoStride = 0;
+uint32_t g_undoEpoch = 0;
+
+// The world the undo steps and the water-quad cache belong to is the map, its height words and their
+// stride, and the lock epoch (a new game, a load or a reload takes a new one, so a world allocated at the
+// addresses of the last one is still another world).
+bool SameWorld(const void* map, const void* heights, int stride) {
+    return map == g_undoMap && heights == g_undoHeights && stride == g_undoStride &&
+           g_undoEpoch == Ext::LockEpoch();
+}
+
+// Forget everything that was recorded against the last world: the undo steps, the stroke's box and the
+// cache of the water quads (its positions index that world's mesh).
+void ForgetWorld() {
+    g_undo.Clear();
+    g_box = StrokeBox();
+    g_waterQuads.clear();
+    g_waterQuadsValid = false;
+}
+
+void AdoptWorld(const void* map, const void* heights, int stride) {
+    ForgetWorld();
+    g_undoMap = map;
+    g_undoHeights = heights;
+    g_undoStride = stride;
+    g_undoEpoch = Ext::LockEpoch();
+}
+
+// A vertex is a corner of four cells, and the terrain classifier reads the cell centre from all four
+// corners: a vertex that touches a building or another blocker is left alone, or the building floats or
+// sinks at that edge.
+bool VertexTouchesBlocker(Map* map, int vx, int vy, int offset) {
+    const int size = map->size;
+    const MapCell* cells = map->cells.GetData();
+    for (int dy = -1; dy <= 0; ++dy) {
+        for (int dx = -1; dx <= 0; ++dx) {
+            const int col = vx - offset + dx;
+            const int row = vy - offset + dy;
+            if (col < 0 || row < 0 || col >= size || row >= size) continue;
+            if (cells[static_cast<int64_t>(row) * size + col].blocker.Get() != nullptr) return true;
+        }
+    }
+    return false;
+}
+
+// Water ranges are drawn by a key of the range's number with 0x8000 (lake) or 0x6000 (river) added, decoded
+// with & 0xE000 (geometry_draw.cpp): a list of 0x2000 ranges would make a lake key read as another kind.
+constexpr int kMaxWaterRanges = 0x2000;
 
 // The cell types the terrain classifier assigns (Map::ClassifyTerrain): the brush may retype a cell only
-// while it holds
-// one of these, so a road, a field or any other cell the game gave a meaning to keeps it.
+// while it holds one of these, so a road, a field or any other cell the game gave a meaning to keeps it.
 bool IsNaturalType(uint8_t t) {
     return t == 2 || t == 6 || t == 7 || t == 8 || t == 10;
 }
@@ -160,10 +196,9 @@ float NeighbourAverage(const int16_t* heights, int stride, int vx, int vy) {
 }
 
 // DIAGNOSTIC (the water scoping, docs/extensions/handins/TERRAINEDIT.md section 4): what the world's water
-// mesh holds, as a
-// stderr line when the brush starts. The mesh's vertices are indexed with 16 bits, so the first number to
-// read is how far
-// the vertex count is from 65535; then the draw ranges (the game draws each range as one item).
+// mesh holds, as a stderr line when the brush starts. The mesh's vertices are indexed with 16 bits, so the
+// first number to read is how far the vertex count is from 65535; then the draw ranges (the game draws each
+// range as one item).
 void LogWaterMesh(const WorldGeometry* terrain) {
     const int verts = terrain->_contourVertices.size;
     const int indices = terrain->_contourIndices.size;
@@ -196,11 +231,9 @@ void LogWaterMesh(const WorldGeometry* terrain) {
 // ---- the water an edit makes (docs/extensions/handins/TERRAINEDIT.md, terrain_water.h)
 // --------------------------------
 
-// The mesh's lake ranges hold one quad per cell as six indices (c0 c1 c2 c0 c2 c3); a quad's lower corner is
-// the least x and
-// y of its four vertices, and a position is the coordinate times 48. A quad whose six indices are one vertex
-// is a quad this
-// took out, and is not counted.
+// The mesh's lake ranges hold one quad per cell as six indices (c0 c1 c2 c0 c2 c3); a quad's lower corner
+// is the least x and y of its four vertices, and a position is the coordinate times 48. A quad whose six
+// indices are one vertex is a quad this took out, and is not counted.
 void ScanWaterQuads(const WorldGeometry* terrain) {
     g_waterQuads.clear();
     g_waterQuadsValid = true;
@@ -240,8 +273,7 @@ void ScanWaterQuads(const WorldGeometry* terrain) {
         }
     }
     // The river ranges are strips, not quads, except the ones the edit made (their vertices carry the edit
-    // marker): those are
-    // read the same way.
+    // marker): those are read the same way.
     const GeometryDrawRange* rivers = terrain->_contourRangesA.data;
     if (rivers == nullptr) return;
     for (int r = 0; r < terrain->_contourRangesA.size; ++r) {
@@ -279,8 +311,8 @@ void ScanWaterQuads(const WorldGeometry* terrain) {
 }
 
 // The game's own river triangles (not the edit's) that touch the box of world coordinates [x0, x1] x [y0,
-// y1]: where a river is
-// already drawn, so that a patch leaves those cells to it (two layers of water at one height z-fight).
+// y1]: where a river is already drawn, so that a patch leaves those cells to it (two layers of water at one
+// height z-fight).
 struct RiverCover {
     std::vector<float> tri;   // x0 y0 x1 y1 x2 y2 per triangle
     bool Contains(float px, float py) const {
@@ -292,15 +324,13 @@ struct RiverCover {
         return false;
     }
     // The cell is covered when its four corners and its centre are all inside the river's triangles. A cell
-    // the river's edge
-    // cuts through (its centre inside, a corner outside) is not: skipping it left a triangle of the cell with
-    // no water.
+    // the river's edge cuts through (its centre inside, a corner outside) is not: skipping it left a
+    // triangle of the cell with no water.
     bool Covers(int col, int row) const {
         const float x = static_cast<float>(col);
         const float y = static_cast<float>(row);
-        return Contains(x + 0.5f, y + 0.5f) && Contains(x, y) && Contains(x + 1.0f, y)
-            && Contains(x + 1.0f, y + 1.0f) &&
-               Contains(x, y + 1.0f);
+        return Contains(x + 0.5f, y + 0.5f) && Contains(x, y) && Contains(x + 1.0f, y) &&
+               Contains(x + 1.0f, y + 1.0f) && Contains(x, y + 1.0f);
     }
 };
 
@@ -348,10 +378,9 @@ RiverCover GatherRiverCover(const WorldGeometry* terrain, float x0, float y0, fl
 }
 
 // The mapping of every river triangle (the game's strips, and the edit's own river-style quads except those
-// inside the box
-// [x0, x1] x [y0, y1], which are being made again) with its centre, for the triangles whose centre is inside
-// the box [bx0, bx1]
-// x [by0, by1]. A river-style patch takes each vertex's uv from the nearest of these (WaterStyle::anchors).
+// inside the box [x0, x1] x [y0, y1], which are being made again) with its centre, for the triangles whose
+// centre is inside the box [bx0, bx1] x [by0, by1]. A river-style patch takes each vertex's uv from the
+// nearest of these (WaterStyle::anchors).
 std::vector<Ext::TerrainEdit::UvAnchor> GatherUvAnchors(const WorldGeometry* terrain, float bx0,
     float by0, float bx1, float by1,
                                                        float x0, float y0, float x1, float y1) {
@@ -397,8 +426,8 @@ std::vector<Ext::TerrainEdit::UvAnchor> GatherUvAnchors(const WorldGeometry* ter
 }
 
 // The nearest river triangle to the cell (col, row), among those within `reach` cells: any triangle of a
-// river range (the game's
-// strips, and the edit's own river-style quads), and its flow. False when none is near.
+// river range (the game's strips, and the edit's own river-style quads), and its flow. False when none is
+// near.
 bool NearestRiver(const WorldGeometry* terrain, int col, int row, float reach,
     Ext::TerrainEdit::WaterStyle& out,
                   bool& isEdit) {
@@ -468,8 +497,7 @@ bool AppendToArray(RawArray<T>& array, const T* items, int count, int align) {
 }
 
 // The mesh's two GPU buffers, made again from its arrays (BuildWaterMesh's tail): the old buffer is let go
-// first, the way
-// the buffer's own destructor and constructor do, since Create alone would leave it behind.
+// first, the way the buffer's own destructor and constructor do, since Create alone would leave it behind.
 void UploadWaterMesh(WorldGeometry* terrain) {
     terrain->_waterIndexBuffer.PlatformDestruct();
     terrain->_waterIndexBuffer.PlatformConstruct();
@@ -481,15 +509,12 @@ void UploadWaterMesh(WorldGeometry* terrain) {
         terrain->_contourVertices.data);
 }
 
-// After a stroke: the water of the region it changed is made again from the ground's heights now. The edit's
-// own quads in the
-// region are taken out (their shore weights were made from the heights of an earlier stroke), as are the
-// game's own where the
-// ground no longer reaches the water (all four corners above -0.75), and a new lake range, which every quad
-// carries the one
-// height (z) of the water it touches, holds a quad for each cell of the region that is under water and not
-// drawn by a game quad.
-// The mesh is saved with the world, so the water stays.
+// After a stroke: the water of the region it changed is made again from the ground's heights now. The
+// edit's own quads in the region are taken out (their shore weights were made from the heights of an
+// earlier stroke), as are the game's own where the ground no longer reaches the water (all four corners
+// above -0.75), and a new lake range, which every quad carries the one height (z) of the water it touches,
+// holds a quad for each cell of the region that is under water and not drawn by a game quad. The mesh is
+// saved with the world, so the water stays.
 void AddWaterForStroke(WorldGeometry* terrain) {
     using namespace Ext::TerrainEdit;
     const StrokeBox box = g_box;
@@ -542,9 +567,8 @@ void AddWaterForStroke(WorldGeometry* terrain) {
         }
         zPick = haveEdit ? bestEdit : (haveOther ? bestOther : kDefaultWaterZ);
     }
-    // A patch that touches a river is made river-style, its water flowing the way the river's does there; any
-    // other patch is a
-    // lake, at the height picked above.
+    // A patch that touches a river is made river-style, its water flowing the way the river's does there;
+    // any other patch is a lake, at the height picked above.
     WaterStyle style;
     style.z = zPick;
     {
@@ -556,18 +580,16 @@ void AddWaterForStroke(WorldGeometry* terrain) {
         if (NearestRiver(terrain, midCol, midRow, reach, river, fromEdit)) {
             style = river;
             // Over the game's own strip the patch lies a hair higher, so that where the two overlap (cells
-            // the strip's edge cuts
-            // through) the patch is always in front; at one height the two z-fight and flicker. An earlier
-            // patch of the edit
-            // already has the raise: its height is taken as it is.
+            // the strip's edge cuts through) the patch is always in front; at one height the two z-fight
+            // and flicker. An earlier patch of the edit already has the raise: its height is taken as it
+            // is.
             if (!fromEdit) style.z += kRiverOverlapRaise;
             const float wx0 = static_cast<float>(vx0 - halfGrid);
             const float wy0 = static_cast<float>(vy0 - halfGrid);
             const float wx1 = static_cast<float>(vx1 - halfGrid);
             const float wy1 = static_cast<float>(vy1 - halfGrid);
             style.anchors = GatherUvAnchors(terrain, wx0 - 12.0f, wy0 - 12.0f, wx1 + 12.0f, wy1 + 12.0f,
-                wx0 - 1.0f, wy0 - 1.0f,
-                                            wx1 + 1.0f, wy1 + 1.0f);
+                                            wx0 - 1.0f, wy0 - 1.0f, wx1 + 1.0f, wy1 + 1.0f);
         }
     }
 
@@ -579,8 +601,9 @@ void AddWaterForStroke(WorldGeometry* terrain) {
             if (found == g_waterQuads.end()) continue;
             bool under = false;
             for (int k = 0; k < 4; ++k) {
-                if (height(vx + (k == 1 || k == 2 ? 1 : 0),
-                    vy + (k >= 2 ? 1 : 0)) <= kWaterTest) under = true;
+                const int cx = vx + (k == 1 || k == 2 ? 1 : 0);
+                const int cy = vy + (k >= 2 ? 1 : 0);
+                if (height(cx, cy) <= kWaterTest) under = true;
             }
             if (found->second.edit || !under) {
                 KilledQuad q;
@@ -606,6 +629,13 @@ void AddWaterForStroke(WorldGeometry* terrain) {
     // 3. Apply: the killed quads become one repeated vertex (nothing is drawn); the patch is appended as a
     // new range.
     static_assert(sizeof(WaterVertex) == sizeof(TerrainVertex), "the patch's vertices are the mesh's");
+    const int rangesOfKind = style.river ? riverRangesBefore : rangesBefore;
+    if (!patch.indices.empty() && rangesOfKind >= kMaxWaterRanges) {
+        std::fprintf(stderr, "[TerrainEdit] water: the mesh already holds %d %s ranges, the most that can be "
+                     "drawn: this stroke's water was not changed\n", rangesOfKind,
+                     style.river ? "river" : "lake");
+        return;
+    }
     g_undo.RecordWater(vertsBefore, indicesBefore, rangesBefore, riverRangesBefore);
     for (const KilledQuad& q : killed) {
         g_undo.RecordKilledQuad(q.position, q.indices);
@@ -651,12 +681,14 @@ void AddWaterForStroke(WorldGeometry* terrain) {
                  patch.overflow ? ", stopped short: a range holds 65535" : "");
 }
 
-// ---- the ground texture (docs/extensions/handins/TERRAINEDIT.md, terrain_texture.h) -----------------------------------------
-// The game's ground texture (WorldGeometry::_heightBytes: four bytes per cell of the height grid, R rock, G grass, B shading,
-// uploaded as _heightImage) is made once when the world is. This makes the bytes of the cells an edit changed again from the
-// heights as they are now, and uploads the texture: lowered ground stops being mountain rock, a new mountain gets its rock, a dug
-// lake gets its brown bed and shore. The rock byte is made again only for cells whose height changed (its scatter noise is not
-// the game's); the grass and shading bytes, which read the neighbours, for the 8 x 8 blocks around them and two blocks out.
+// ---- the ground texture (docs/extensions/handins/TERRAINEDIT.md, terrain_texture.h)
+// ----------------------------------------- The game's ground texture (WorldGeometry::_heightBytes: four
+// bytes per cell of the height grid, R rock, G grass, B shading, uploaded as _heightImage) is made once
+// when the world is. This makes the bytes of the cells an edit changed again from the heights as they are
+// now, and uploads the texture: lowered ground stops being mountain rock, a new mountain gets its rock, a
+// dug lake gets its brown bed and shore. The rock byte is made again only for cells whose height changed
+// (its scatter noise is not the game's); the grass and shading bytes, which read the neighbours, for the 8
+// x 8 blocks around them and two blocks out.
 void UploadGroundTexture(WorldGeometry* terrain) {
     const int dim = terrain->_gridSize;
     if (terrain->_heightImage == nullptr || terrain->_heightBytes == nullptr || dim <= 0) return;
@@ -691,13 +723,16 @@ void UpdateGroundTexture(WorldGeometry* terrain) {
         changed.insert(vy * dim + vx);
         for (int by = (vy >> 3) - 2; by <= (vy >> 3) + 2; ++by) {
             for (int bx = (vx >> 3) - 2; bx <= (vx >> 3) + 2; ++bx) {
-                if (bx >= 0 && by >= 0 && bx < blocksPerRow && by < blocksPerRow) blocks.insert(by * blocksPerRow + bx);
+                if (bx >= 0 && by >= 0 && bx < blocksPerRow && by < blocksPerRow) {
+                    blocks.insert(by * blocksPerRow + bx);
+                }
             }
         }
     }
     const uint32_t seed = 0x5eed1234u;
-    // The game's own scatter, measured from this world's texture: the rock bytes of ordinary ground (height between -0.4 and 7.5)
-    // that this stroke has not changed, every 5th cell each way. The edit's noise is scaled to that mean and spread.
+    // The game's own scatter, measured from this world's texture: the rock bytes of ordinary ground (height
+    // between -0.4 and 7.5) that this stroke has not changed, every 5th cell each way. The edit's noise is
+    // scaled to that mean and spread.
     ScatterLook look;
     {
         double sum = 0.0;
@@ -738,7 +773,8 @@ void UpdateGroundTexture(WorldGeometry* terrain) {
                 CellNormal(height, dim, col, row, normal);
                 uint8_t rock = px[0];
                 if (changed.count(cell) != 0) {
-                    const uint32_t scatter = ScatterByte(ScatterNoise01(col, row, seed), noiseMean, noiseSpread, look);
+                    const uint32_t scatter =
+                        ScatterByte(ScatterNoise01(col, row, seed), noiseMean, noiseSpread, look);
                     rock = RockByte(h, scatter);
                 }
                 const uint8_t grass = GrassByte(h, normal[2]);
@@ -755,8 +791,10 @@ void UpdateGroundTexture(WorldGeometry* terrain) {
         }
     }
     if (repainted > 0) UploadGroundTexture(terrain);
-    std::fprintf(stderr, "[TerrainEdit] ground texture: %d cell(s) repainted (the game's own rock scatter here: mean %.1f, "
-                 "spread %.1f)\n", repainted, static_cast<double>(look.mean), static_cast<double>(look.spread));
+    std::fprintf(stderr,
+                 "[TerrainEdit] ground texture: %d cell(s) repainted (the game's own rock scatter here: "
+                 "mean %.1f, spread %.1f)\n",
+                 repainted, static_cast<double>(look.mean), static_cast<double>(look.spread));
 }
 
 // ---- the town's water access (docs/extensions/handins/TERRAINEDIT.md)
@@ -835,8 +873,7 @@ void RefreshWaterAccess(Map* map, int boxMinX, int boxMinY, int boxMaxX, int box
     }
 
     // Write the pairs back, and build the index again: the entries of each block that are pairs (not below
-    // zero, the wells)
-    // are dropped and every pair is filed in its block.
+    // zero, the wells) are dropped and every pair is filed in its block.
     WaterCellPair zero;
     zero.cellA = 0;
     zero.cellB = 0;
@@ -856,12 +893,10 @@ void RefreshWaterAccess(Map* map, int boxMinX, int boxMinY, int boxMaxX, int box
     std::fprintf(stderr, "[TerrainEdit] water access: %d pair(s) before, %zu after\n", oldCount, keep.size());
 }
 
-// After a stroke: every cell of the area it changed (and two cells around) that the game now calls water has
-// its tree, rock
-// or ore deposit taken away. Painting does this as cells are re-typed; this is the check that does not depend
-// on the type a
-// cell was stored with, and it logs what it saw (the stroke's cells that hold a resource, and what the game
-// says each is).
+// After a stroke: every cell of the area it changed (and two cells around) that the game now calls water
+// has its tree, rock or ore deposit taken away. Painting does this as cells are re-typed; this is the check
+// that does not depend on the type a cell was stored with, and it logs what it saw (the stroke's cells that
+// hold a resource, and what the game says each is).
 void RemoveNaturalResource(ComponentEntity* entity);   // below, with the tool
 
 void RemoveResourcesInLakes(Map* map, const StrokeBox& box) {
@@ -916,15 +951,11 @@ void NotifyUndoChanged() {
 }
 
 // A tree, rock or other natural resource stands where the ground was when it was placed: its model's
-// transform carries
-// that height (NaturalResourceComponent::PlaceAtCell), so ground raised or lowered under it buries it or
-// leaves it in the
-// air. This puts it back on the ground: the transform's height is the terrain's at the model's own position,
-// the mesh is
-// given the transform the way PlaceAtCell gives it (rock seating included) and its pose is rebuilt, as
-// RockSeat::SeatAll
-// does for a model that is already in the scene. The saved transform changes with it, so a save keeps the new
-// height.
+// transform carries that height (NaturalResourceComponent::PlaceAtCell), so ground raised or lowered under
+// it buries it or leaves it in the air. This puts it back on the ground: the transform's height is the
+// terrain's at the model's own position, the mesh is given the transform the way PlaceAtCell gives it (rock
+// seating included) and its pose is rebuilt, as RockSeat::SeatAll does for a model that is already in the
+// scene. The saved transform changes with it, so a save keeps the new height.
 void ReseatOccupant(Map* map, ComponentEntity* entity) {
     if (entity == nullptr) return;
     if (entity->FindComponent<NaturalResourceComponent>() == nullptr) return;
@@ -946,12 +977,10 @@ void ReseatOccupant(Map* map, ComponentEntity* entity) {
 }
 
 // A tree, rock or ore deposit on a cell that has become water is taken away: it cannot stand in a lake, and
-// left in place it
-// would sit on the lake bed showing through the water. It goes the way the game takes a resource away when it
-// is not
-// harvested (NaturalResourceComponent::RemoveResource, its first step): the entity is marked for removal and
-// queued, and the
-// game's own teardown frees its cell. An undo does not bring it back.
+// left in place it would sit on the lake bed showing through the water. It goes the way the game takes a
+// resource away when it is not harvested (NaturalResourceComponent::RemoveResource, its first step): the
+// entity is marked for removal and queued, and the game's own teardown frees its cell. An undo does not
+// bring it back.
 void RemoveNaturalResource(ComponentEntity* entity) {
     if (entity == nullptr || entity->FindComponent<NaturalResourceComponent>() == nullptr) return;
     if (((entity->_entityFlags >> 10) & 1) != 0) return;   // already marked
@@ -1036,11 +1065,8 @@ private:
         const int stride = terrain->_fieldD0;    // vertices per edge
         const int offset = size >> 1;            // the map's cells are the middle of the (wider) height grid
         if (strokeStart || !g_undo.Open()) {
-            if (map != g_undoMap || heights != g_undoHeights || stride != g_undoStride) {
-                g_undo.Clear();   // another world: the old strokes do not belong to it
-                g_undoMap = map;
-                g_undoHeights = heights;
-                g_undoStride = stride;
+            if (!SameWorld(map, heights, stride)) {
+                AdoptWorld(map, heights, stride);   // another world: the old strokes do not belong to it
             }
             g_undo.BeginStroke();
             g_box = StrokeBox();
@@ -1058,8 +1084,7 @@ private:
         const int centreRow = cell / size;
         const std::vector<Cell> disc = Disc(centreCol, centreRow, g_state.radius, size);
         // Smooth aims each vertex at the average of its neighbours, read before any vertex of this frame is
-        // written, so
-        // the result does not depend on the order the vertices are visited in.
+        // written, so the result does not depend on the order the vertices are visited in.
         std::vector<float> averages;
         if (g_state.mode == Mode::Smooth) {
             averages.reserve(disc.size());
@@ -1071,10 +1096,10 @@ private:
         for (const Cell& c : disc) {
             const size_t thisIndex = discIndex++;
             if (c.weight <= 0.0f) continue;
-            MapCell& mc = map->cells.GetData()[static_cast<int64_t>(c.row) * size + c.col];
-            if (mc.blocker.Get() != nullptr) continue;            // a building or another blocker stands here
             const int vx = c.col + offset, vy = c.row + offset;
             if (vx < 0 || vy < 0 || vx >= stride || vy >= stride) continue;
+            // a building stands at one of its corners
+            if (VertexTouchesBlocker(map, vx, vy, offset)) continue;
             int16_t& word = heights[static_cast<int64_t>(stride) * vy + vx];
             float target = _flattenTarget;
             if (g_state.mode == Mode::Mountain) {
@@ -1101,6 +1126,7 @@ private:
             const int cls = map->ClassifyTerrain(idx);
             if (cls != mc.terrainType && IsNaturalType(static_cast<uint8_t>(cls))) {
                 g_undo.RecordType(idx, mc.terrainType);
+                g_undo.RecordWrittenType(idx, static_cast<uint8_t>(cls));
                 map->SetTerrainType(idx, static_cast<uint32_t>(cls));
                 if (cls == 7 || cls == 8) RemoveNaturalResource(mc.occupant.Get());   // a lake covers it
             }
@@ -1133,8 +1159,7 @@ void StartBrush() {
     if (game == nullptr || game->m_toolManager == nullptr) return;
     PlayerToolManager* manager = game->m_toolManager;
     // What SelectTool does to install a tool (Dialog/toolbardialog.cpp), without the registry lookup: shut
-    // down and
-    // delete the current tool, then set the new one's three fields and start it.
+    // down and delete the current tool, then set the new one's three fields and start it.
     manager->field_0x20 = nullptr;
     if (manager->currentTool != nullptr) {
         manager->currentTool->Shutdown();
@@ -1157,10 +1182,9 @@ size_t UndoDepth() {
     GameUpdateLoop* game = GameUpdateLoop::_singleton;
     if (g_undo.Depth() > 0 && !g_undo.Open()) {
         const bool here = game != nullptr && game->m_game != nullptr && game->m_worldGeometry != nullptr &&
-                          game->m_game == g_undoMap
-                              && game->m_worldGeometry->_heights.data == g_undoHeights &&
-                          game->m_worldGeometry->_fieldD0 == g_undoStride;
-        if (!here) g_undo.Clear();
+                          SameWorld(game->m_game, game->m_worldGeometry->_heights.data,
+                                    game->m_worldGeometry->_fieldD0);
+        if (!here) ForgetWorld();
     }
     return g_undo.Depth();
 }
@@ -1182,8 +1206,8 @@ bool UndoLast() {
     const int stride = terrain->_fieldD0;
     if (heights == nullptr || stride <= 0) return false;
     FinishStroke();   // a stroke still being painted counts first
-    if (map != g_undoMap || heights != g_undoHeights || stride != g_undoStride) {
-        g_undo.Clear();
+    if (!SameWorld(map, heights, stride)) {
+        ForgetWorld();
         return false;
     }
     Stroke stroke;
@@ -1195,6 +1219,8 @@ bool UndoLast() {
         const int vx = entry.first % stride;
         const int vy = entry.first / stride;
         if (vy >= stride) continue;
+        // something was built here since the stroke
+        if (VertexTouchesBlocker(map, vx, vy, offset)) continue;
         heights[entry.first] = entry.second;
         terrain->MarkChunksDirty(vx, vy);
         for (int dy = -1; dy <= 1; ++dy) {
@@ -1208,8 +1234,7 @@ bool UndoLast() {
     StillTerrain::Bump();   // heightmap words were written
     if (stroke.hasWater) {
         // The stroke changed the water mesh: the quads it took out come back, what it added is cut off, and
-        // the buffers are
-        // made again.
+        // the buffers are made again.
         for (const KilledQuad& q : stroke.killedQuads) {
             if (q.position < 0 || q.position + 6 > terrain->_contourIndices.size) continue;
             for (int j = 0; j < 6; ++j) terrain->_contourIndices.data[q.position + j] = q.indices[j];
@@ -1231,6 +1256,14 @@ bool UndoLast() {
     }
     for (const auto& entry : stroke.types) {
         if (entry.first < 0 || entry.first >= size * size) continue;
+        MapCell& undone = map->cells.GetData()[entry.first];
+        const auto wrote = stroke.written.find(entry.first);
+        // only a cell that is free and still holds the type the stroke gave it: not a road, a field or a
+        // house built since
+        if (undone.blocker.Get() != nullptr || wrote == stroke.written.end() ||
+            undone.terrainType != wrote->second) {
+            continue;
+        }
         map->SetTerrainType(entry.first, static_cast<uint32_t>(entry.second));
         cells.insert(entry.first);
     }

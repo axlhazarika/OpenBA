@@ -1,11 +1,12 @@
 // ============================================================================
 // src/ext/terrain_edit/toolbar_page.cpp -- ext.terrain_edit's page in the extension window (NOT RETAIL)
 // ============================================================================
-// docs/extensions/handins/TERRAINEDIT.md, src/ext/toolbar/toolbar.h. A note, one row of picture buttons (the five
-// brushes and Undo), a size slider, a strength slider and a caption. A brush button picks the mode and starts the brush
-// tool (brush_tool.cpp), which then runs in the world like any of the game's own tools. The sliders are read once a
-// frame while the brush is the active tool (SetFrameHook), so the host needs no slider event. The page's objects are ours
-// (src/ext/ui/Dialog/TerrainEditPage.rsc); the texts are in ExtensionsStringTable.rsc (the TerrainEdit* keys).
+// docs/extensions/handins/TERRAINEDIT.md, src/ext/toolbar/toolbar.h. A note, one row of picture buttons
+// (the five brushes and Undo), a size slider, a strength slider and a caption. A brush button picks the
+// mode and starts the brush tool (brush_tool.cpp), which then runs in the world like any of the game's own
+// tools. The sliders are read once a frame while the brush is the active tool (SetFrameHook), so the host
+// needs no slider event. The page's objects are ours (src/ext/ui/Dialog/TerrainEditPage.rsc); the texts are
+// in ExtensionsStringTable.rsc (the TerrainEdit* keys).
 // ============================================================================
 
 // The runtime type headers first (moddialog.cpp's note: Volume.h's Rectangle).
@@ -35,20 +36,21 @@ namespace TerrainEdit {
 
 namespace {
 
-// Local element ids (the host adds the page's idBase). The tool row's buttons are kModeBase + their place in it: the
-// modes, then Undo.
+// Local element ids (the host adds the page's idBase). The tool row's buttons are kModeBase + their place
+// in it: the modes, then Undo.
 constexpr int32_t kModeBase = 10;
 constexpr int32_t kUndoId   = kModeBase + kModeCount;
 constexpr int32_t kToolCount = kModeCount + 1;
 
-// The strength slider counts in steps of kStrengthStep, from kMinStrength / kStrengthStep to kMaxStrength / kStrengthStep.
+// The strength slider counts in steps of kStrengthStep, from kMinStrength / kStrengthStep to kMaxStrength /
+// kStrengthStep.
 constexpr float kStrengthSliderMin = kMinStrength / kStrengthStep;
 constexpr float kStrengthSliderMax = kMaxStrength / kStrengthStep;
 
 const char* const kModeNames[kModeCount] = { "Raise", "Lower", "Flatten", "Mountain", "Smooth" };
 
-// The page, kept while it is open so the brush can refresh it (the host has no per-frame call for a page). Forgotten in
-// PageClose.
+// The page, kept while it is open so the brush can refresh it (the host has no per-frame call for a page).
+// Forgotten in PageClose.
 Object::InternalPtr<UI::Element> g_page;
 UI::SliderElement* g_size = nullptr;
 UI::SliderElement* g_strength = nullptr;
@@ -82,7 +84,8 @@ void ReadSliders() {
         st.radius = ClampFloat(std::floor(g_size->_value + 0.5f), kMinRadius, kMaxRadius);
     }
     if (g_strength != nullptr) {
-        const float steps = ClampFloat(std::floor(g_strength->_value + 0.5f), kStrengthSliderMin, kStrengthSliderMax);
+        const float steps =
+            ClampFloat(std::floor(g_strength->_value + 0.5f), kStrengthSliderMin, kStrengthSliderMax);
         st.strength = steps * kStrengthStep;
     }
 }
@@ -112,8 +115,8 @@ void PageOpen(UI::Element* page, int32_t idBase) {
         g_strength->_maximum = kStrengthSliderMax;
         g_strength->_value = st.strength / kStrengthStep;
     }
-    std::fprintf(stderr, "[TerrainEdit] page: size slider=%p strength slider=%p\n", static_cast<void*>(g_size),
-                 static_cast<void*>(g_strength));
+    std::fprintf(stderr, "[TerrainEdit] page: size slider=%p strength slider=%p\n",
+                 static_cast<void*>(g_size), static_cast<void*>(g_strength));
     ShowStatus(page);
 }
 
@@ -146,7 +149,8 @@ void PageClose() {
 namespace Toolbar {
 
 const Contribution& TerrainEditPage() {
-    static const Contribution c = { "terrain_edit", "TerrainEditTab", "Dialog/TerrainEditPage.rsc:pageTerrainEdit",
+    static const Contribution c = { "terrain_edit", "TerrainEditTab",
+                                    "Dialog/TerrainEditPage.rsc:pageTerrainEdit",
                                     TerrainEdit::PageOpen, TerrainEdit::PageChanged, TerrainEdit::PageClose };
     return c;
 }

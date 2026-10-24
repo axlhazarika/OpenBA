@@ -3,12 +3,10 @@
 // src/ext/terrain_edit/terrain_undo.h -- ext.terrain_edit, the undo stack (NOT RETAIL)
 // ============================================================================
 // docs/extensions/handins/TERRAINEDIT.md. Standard C++ only, so tests/unit/ext_terrain_edit_test.cpp can
-// check it without the
-// game. One stroke (a held left button) is one undo step: the height words it changed, each as it was before
-// the stroke,
-// and the terrain type of each cell it retyped, as it was before the stroke. The first record of an index
-// wins, so a long
-// stroke over the same ground keeps the original and not the last value.
+// check it without the game. One stroke (a held left button) is one undo step: the height words it changed,
+// each as it was before the stroke, and the terrain type of each cell it retyped, as it was before the
+// stroke. The first record of an index wins, so a long stroke over the same ground keeps the original and
+// not the last value.
 // ============================================================================
 
 #include <cstddef>
@@ -23,8 +21,7 @@ namespace TerrainEdit {
 constexpr size_t kMaxUndoStrokes = 30;   // the oldest stroke is dropped past this
 
 // A water quad a stroke took out of the mesh (its six indices made into one repeated vertex, so nothing is
-// drawn): where it
-// was in the index array, and the indices it had.
+// drawn): where it was in the index array, and the indices it had.
 struct KilledQuad {
     int      position;
     uint16_t indices[6];
@@ -35,11 +32,12 @@ struct Stroke {
     std::unordered_map<int, int16_t> heights;
     // cell index (row * size + col)   -> the type before the stroke
     std::unordered_map<int, uint8_t> types;
+    // cell index -> the type the stroke last wrote there (an undo leaves a cell alone that holds another)
+    std::unordered_map<int, uint8_t> written;
     // The water mesh's sizes from before the stroke added water to it (the vertex, index and feature-range
-    // counts), so an
-    // undo can cut the mesh back. Only strokes that added water have them.
-    // The ground texture's bytes of the cells the stroke repainted (cell index dim * row + col -> R, G, B, A packed as the four
-    // bytes are in memory), as they were before the stroke.
+    // counts), so an undo can cut the mesh back. Only strokes that added water have them. The ground
+    // texture's bytes of the cells the stroke repainted (cell index dim * row + col -> R, G, B, A packed as
+    // the four bytes are in memory), as they were before the stroke.
     std::unordered_map<int, uint32_t> texels;
     std::vector<KilledQuad> killedQuads;   // restored by an undo, before the mesh is cut back
     // The box of height-grid vertices the stroke wrote (where the town's water access is looked at again
@@ -71,6 +69,10 @@ public:
 
     void RecordType(int cell, uint8_t before) {
         if (_open) _current.types.emplace(cell, before);
+    }
+
+    void RecordWrittenType(int cell, uint8_t after) {
+        if (_open) _current.written[cell] = after;
     }
 
     // Once per stroke: the water mesh's sizes before the stroke changed it, and every quad the stroke took

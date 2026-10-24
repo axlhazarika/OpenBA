@@ -40,7 +40,8 @@ inline std::vector<Cell> Disc(int col, int row, float radius, int size) {
     const int r = static_cast<int>(std::ceil(radius));
     for (int dr = -r; dr <= r; ++dr) {
         for (int dc = -r; dc <= r; ++dc) {
-            const int c = col + dc, w = row + dr;
+            const int c = col + dc;
+            const int w = row + dr;
             if (c < 0 || w < 0 || c >= size || w >= size) continue;
             const float d = std::sqrt(static_cast<float>(dc * dc + dr * dr));
             const float f = Falloff(d, radius);
@@ -59,17 +60,14 @@ inline int RaisedWord(int word, float delta) {
     return static_cast<int>(v);
 }
 
-// ---- brush modes
-// -------------------------------------------------------------------------------------------------------
+// ---- brush modes ---------------------------------------------------------------------------------
 // The game classifies a cell from its height (Map::ClassifyTerrain, keystone_a_map.cpp): below -1.4 deep
-// water, below -0.25
-// shallow water, -0.25 to 0.75 flat ground that can be built on (when the slope allows), up to 2.0 steep
-// ground, from 2.0 a
-// mountain. The modes keep to that: nothing here makes water (the water mesh is built once at world
-// generation, so a pit
-// would be a cell the game calls water that is not drawn as water), flatten stays in the buildable band, and
-// the mountain
-// brush aims above the mountain line.
+// water, below -0.25 shallow water, -0.25 to 0.75 flat ground that can be built on (when the slope
+// allows), up to 2.0 steep ground, from 2.0 a mountain. The modes keep to that: flatten stays in the
+// buildable band and the mountain brush aims above the mountain line. Lower goes down to the lake floor,
+// and a cell that falls under the water line becomes water; the page draws that water again when the
+// stroke ends (brush_tool.cpp, terrain_water.h), because the game builds its water mesh only once, at
+// world generation.
 enum class Mode : int { Raise = 0, Lower = 1, Flatten = 2, Mountain = 3, Smooth = 4 };
 constexpr int kModeCount = 5;
 

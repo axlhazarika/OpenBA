@@ -267,6 +267,26 @@ UNIT_TEST(ext_terrain_edit_undo_keeps_the_first_value_of_a_stroke) {
     CHECK(!u.Pop(s));
 }
 
+// An undo gives a cell its old type back only while it still holds the type the stroke wrote there: the stroke
+// keeps the first type before and the last type written, and records nothing outside a stroke.
+UNIT_TEST(ext_terrain_edit_undo_records_the_type_the_stroke_wrote) {
+    using namespace Ext::TerrainEdit;
+    UndoStack u;
+    u.RecordWrittenType(9, 6);   // no stroke open: ignored
+    u.BeginStroke();
+    u.RecordType(9, 2);
+    u.RecordWrittenType(9, 10);
+    u.RecordType(9, 10);          // a later frame retypes the cell again: the type before the stroke stays 2
+    u.RecordWrittenType(9, 6);    // and the type written is the last one
+    u.RecordType(11, 7);
+    u.RecordWrittenType(11, 2);
+    u.CommitStroke();
+    Stroke s;
+    CHECK(u.Pop(s));
+    CHECK(s.types.size() == 2 && s.types.at(9) == 2 && s.types.at(11) == 7);
+    CHECK(s.written.size() == 2 && s.written.at(9) == 6 && s.written.at(11) == 2);
+}
+
 UNIT_TEST(ext_terrain_edit_undo_is_last_in_first_out_and_skips_empty_strokes) {
     using namespace Ext::TerrainEdit;
     UndoStack u;
