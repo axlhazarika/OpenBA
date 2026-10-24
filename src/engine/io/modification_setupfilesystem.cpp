@@ -434,6 +434,18 @@ void Modification::SetupFileSystem() {
     if (_dirty == 0) return;                              // 0x1800aebd8
     LoadTime::Stamp("fs.remount");   // NOT RETAIL: print-only (a package remount begins)
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): ext.menu_entry answers true when
+    // the packages this remount would mount are the ones mounted now (the fingerprint taken at the
+    // end of the last remount). Acts 1-4 are then skipped; act 2's order stamp and act 5's
+    // `_dirty = 0` still run, so SaveList and the Mods dialog read the same values.
+    if (_extRemountSkip != nullptr && _extRemountSkip(*this)) {
+        for (int32_t i = _mods._size - 1; i >= 0; --i)
+            _mods._data[i].order = i;   // act 2, 0x1800aed64
+        _dirty = 0;                     // act 5, 0x1800af447
+        LoadTime::Stamp("fs.remount.skip");   // NOT RETAIL: print-only
+        return;
+    }
+
     // The three singletons, all exported DATA symbols, all class statics now
     // (ENDGAME B.3.9 SS1, B39_RULES D7) — read fresh every call, no lazy cache
     // (B9-10).
@@ -527,6 +539,7 @@ void Modification::SetupFileSystem() {
 
     // ========================= ACT 3 — DIFF =================================
     ReloadArray queue = { nullptr, 0, 0 };                     // [RSP+0x30]
+    int32_t unloads = 0;   // NOT RETAIL (MENUENTRY.md): act 3's ForceUnloads, for _extRemountDone
 
     for (::Object::External* ext =
              extFactoryObj->FindNextAs<::Object::External>(kExternalTypeId, nullptr);
@@ -599,6 +612,7 @@ void Modification::SetupFileSystem() {
                 // ---- drop it, 0x1800af195 ----------------------------------
                 System::Filename raw4(ext->GetPath());   // 0x1800af19d  [RBP-0x?]
                 extFactory->ForceUnload(raw4);                  // 0x1800af1a9
+                ++unloads;   // NOT RETAIL (MENUENTRY.md)
                 // ~raw4 releases here, retail's release right after ForceUnload
             }
 
@@ -646,6 +660,7 @@ void Modification::SetupFileSystem() {
 
     // ========================= ACT 5 — TEARDOWN =============================
     _dirty = 0;                                           // 0x1800af447
+    const int32_t reloads = queue.size;   // NOT RETAIL (MENUENTRY.md): for _extRemountDone
 
     // Each surviving entry's Filename dtor, 0x1800af460 -- the queue's own
     // storage is raw bytes (see ReloadEntry's banner), so the release is
@@ -668,6 +683,10 @@ void Modification::SetupFileSystem() {
         ReleaseInline(&root->element.key);
         MemFree(root);
     }
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): a remount completed; act 3's
+    // counts (the queue is released above, its size was read before the release).
+    if (_extRemountDone != nullptr)
+        _extRemountDone(*this, reloads, unloads);
     LoadTime::Stamp("fs.remount.done");   // NOT RETAIL: print-only
 }
 
