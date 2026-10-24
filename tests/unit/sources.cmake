@@ -125,6 +125,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/platform/common/audio_feed.cpp
   ${CMAKE_SOURCE_DIR}/src/game/Component/statemachine_tick.cpp   # sm_memo_test.cpp: the real StateMachine::Tick
   ${CMAKE_SOURCE_DIR}/src/game/Game/mapquery.cpp                  # still_terrain_test.cpp: the real Map::GetTerrainPos
+  ${CMAKE_SOURCE_DIR}/src/game/Game/maparea.cpp                   # clear_area_road_test.cpp: Map::IsGroundClear / IsAreaEmpty
   ${CMAKE_SOURCE_DIR}/src/engine/collection/set_core.cpp          # set_ported_test.cpp: the four ported AVL cores
   ${CMAKE_SOURCE_DIR}/src/engine/collection/set_avl.cpp           #   element 0x10 (0x18000adc0 / aba0)
   ${CMAKE_SOURCE_DIR}/src/engine/collection/set_avl_e24.cpp       #   element 0x18 (0x180023170)
