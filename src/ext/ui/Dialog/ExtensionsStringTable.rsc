@@ -53,10 +53,6 @@ StringTable resource
 		{ String _name = "ItemPriorityCatFuel";		String _text = "Fuel"; }
 		{ String _name = "ItemPriorityCatClothing";	String _text = "Clothing"; }
 		{ String _name = "ItemPriorityCatHealth";	String _text = "Health"; }
-		{ String _name = "ItemPriorityShowingTool";	String _text = "Tools, best first"; }
-		{ String _name = "ItemPriorityShowingFuel";	String _text = "Fuel, best first"; }
-		{ String _name = "ItemPriorityShowingClothing";	String _text = "Clothing, best first"; }
-		{ String _name = "ItemPriorityShowingHealth";	String _text = "Health items, best first"; }
 		{ String _name = "ItemPriorityParam";		String _text = "@0"; }
 		{ String _name = "ItemPriorityCheckTip";	String _text = "Check to rank this item (it goes to the bottom of the ranking)."; }
 		{ String _name = "ItemPriorityUp";			String _text = "Up"; }

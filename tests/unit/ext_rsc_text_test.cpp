@@ -123,8 +123,8 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 49);
-    if (strings && strings->blocks.size() == 49) {
+    CHECK(strings && strings->blocks.size() == 45);
+    if (strings && strings->blocks.size() == 45) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
         bool found = false;
@@ -191,10 +191,25 @@ UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
     CHECK(f.Find("resource") == nullptr);   // a page, not a dialog: the root object is pageItemPriority
     const Object* page = f.Find("pageItemPriority");
     CHECK(page && page->type == "RibbonDescription");
-    CHECK(f.Find("tableItemPriority") && f.Find("ribbonItemPriorityCell") && f.Find("labelItemPriorityRow") &&
+    CHECK(f.Find("tableItemPriorityTool") && f.Find("tableItemPriorityFuel") &&
+          f.Find("tableItemPriorityClothing") && f.Find("tableItemPriorityHealth") &&
+          f.Find("ribbonItemPriorityCell") && f.Find("labelItemPriorityRow") &&
           f.Find("checkItemPriorityRow") && f.Find("textItemPriorityRank") &&
-          f.Find("ribbonItemPriorityCategories") && f.Find("ribbonItemPriorityMoves") &&
-          f.Find("checkItemPriorityShowAll") && f.Find("textItemPriorityShowing"));
+          f.Find("ribbonItemPriorityMoves") && f.Find("checkItemPriorityShowAll"));
+    // The category strip: one tab per category, each a button and its own list.
+    const Object* strip = f.Find("tabItemPriorityCategories");
+    CHECK(strip && strip->type == "TabDescription" && strip->base == "Mod.rsc:tabMod");
+    if (strip) {
+        const Field* tabs = strip->body.Find("_tabs");
+        CHECK(tabs && tabs->isArray && tabs->blocks.size() == 4);
+        if (tabs && tabs->blocks.size() == 4) {
+            CHECK(tabs->blocks[0].Find("_button") && tabs->blocks[0].Find("_content"));
+        }
+    }
+    const Object* up = f.Find("buttonItemPriorityUp");
+    CHECK(up && up->base == "Mod.rsc:buttonMod");
+    const Object* rank = f.Find("textItemPriorityRank");
+    CHECK(rank && rank->body.Find("_minWidth") && rank->body.Find("_justify"));
     CheckKnownTypes(f, "ItemPriorityPage.rsc");
 }
 

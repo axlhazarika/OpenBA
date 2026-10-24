@@ -2,9 +2,9 @@
 // src/ext/item_priority/toolbar_page.cpp -- ext.item_priority's page in the extension window
 // ============================================================================
 // docs/extensions/handins/ITEMPRIO.md, src/ext/toolbar/toolbar.h. The town ranks the items its citizens fetch
-// from a storage, per category: four buttons choose the category (tools, fuel, clothing, health), and the
-// list shows the items of that category, one cell each: a check box (ranked or not), the item's icon and
-// name, its place in the ranking, and Up / Down. Checking an item ranks it at the bottom, unchecking removes
+// from a storage, per category: a tab strip chooses the category (tools, fuel, clothing, health), and the
+// showing tab's list shows the items of that category, one cell each: a check box (ranked or not), the item's
+// icon and name, its place in the ranking, and Up / Down. Checking an item ranks it at the bottom, unchecking removes
 // it; Up / Down move a ranked item past its neighbour. Every change applies at once (live: no Apply). Ranked
 // items come first, in rank order, then the rest by name. A "Show all items" check box under the list is off
 // by default (the items the town has made or stored, and the ranked ones) and is the player's choice for the
@@ -24,6 +24,7 @@
 #include "ui/ElementDescription.h"
 #include "ui/Element.h"
 #include "ui/RibbonElement.h"
+#include "ui/TabElement.h"
 #include "ui/TableElement.h"
 #include "ui/LabelElement.h"
 #include "ui/Sprite.h"
@@ -60,7 +61,8 @@ namespace ItemPriority {
 
 namespace {
 
-// Local element ids (the host adds `idBase`): the category buttons 10 + their place in the row, the check box
+// Local element ids (the host adds `idBase`): the category tab buttons 10 + their place in the strip, the check
+// box
 // 20, the cells 100 + 3 * their position (+ 0 check, + 1 up, + 2 down).
 constexpr int32_t kCategoryId = 10;
 constexpr int32_t kShowAllId = 20;
@@ -105,12 +107,23 @@ std::string PrettyWords(const std::string& in) {
     return out;
 }
 
-const char* ShowingKey(int category) {
+// The place of `category` in the tab strip (kCategoryOrder); 0 for one that is not in it.
+int CategoryIndex(int category) {
+    for (int i = 0; i < kButtonCount; ++i) {
+        if (kCategoryOrder[i] == category) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+// What a category goes by in the log.
+const char* CategoryName(int category) {
     switch (category) {
-        case kFuel:     return "ItemPriorityShowingFuel";
-        case kClothing: return "ItemPriorityShowingClothing";
-        case kHealth:   return "ItemPriorityShowingHealth";
-        default:        return "ItemPriorityShowingTool";
+        case kFuel:     return "fuel";
+        case kClothing: return "clothing";
+        case kHealth:   return "health";
+        default:        return "tools";
     }
 }
 
@@ -239,9 +252,14 @@ int32_t g_idBase = 0;
 int g_category = kTool;                          // the player's choice for this town
 bool g_showAll = false;                          // the check box; the player's choice for this town
 uint32_t g_town = ~0u;                           // the lock epoch g_category and g_showAll belong to
-Object::InternalPtr<UI::Element> g_table;        // "tableItemPriority"
+Object::InternalPtr<UI::Element> g_tables[kButtonCount];   // "tableItemPriority<Category>", strip order
 Object::InternalPtr<UI::Element> g_showAllCheck; // "checkItemPriorityShowAll"
-Object::InternalPtr<UI::Element> g_showing;      // "textItemPriorityShowing"
+Object::InternalPtr<UI::Element> g_strip;        // "tabItemPriorityCategories"
+
+// The table of the tab that is showing.
+UI::Element* ShownTable() {
+    return g_tables[CategoryIndex(g_category)].Get();
+}
 
 bool Shown(const Row& r) {
     return g_showAll || r.item.inTown || r.rank != kUnranked || r.pinned;   // a ranked item never vanishes
@@ -329,16 +347,23 @@ void Resort() {
 void BuildRows() {
     g_cells.clear();
     g_order.clear();
-    if (g_table.Get() == nullptr) {
+    // The other tabs' tables are emptied: their cells would carry the same ids as this tab's.
+    for (int i = 0; i < kButtonCount; ++i) {
+        UI::Element* other = g_tables[i].Get();
+        if (i != CategoryIndex(g_category) &&
+            ::Object::IsDerivedFromNullSafe(other, UI::TableElement::TypeId())) {
+            static_cast<UI::TableElement*>(other)->SetSize(0, 1);
+        }
+    }
+    if (ShownTable() == nullptr) {
         return;
     }
-    if (!::Object::IsDerivedFromNullSafe(g_table.Get(), UI::TableElement::TypeId())) {
-        std::fprintf(stderr, "[ItemPriority] tableItemPriority is not a TableElement\n");
+    if (!::Object::IsDerivedFromNullSafe(ShownTable(), UI::TableElement::TypeId())) {
+        std::fprintf(stderr, "[ItemPriority] the shown tab's table is not a TableElement\n");
         return;
     }
-    UI::TableElement* table = static_cast<UI::TableElement*>(g_table.Get());
+    UI::TableElement* table = static_cast<UI::TableElement*>(ShownTable());
     RefreshShowAll();
-    Toolbar::SetTableText(g_showing.Get(), ShowingKey(g_category));
 
     const UI::Dialog* dialog = nullptr;
     const ::Object::External* dlgExt =
@@ -403,7 +428,7 @@ void BuildRows() {
         BindCell(k);
     }
     std::fprintf(stderr, "[ItemPriority] %d of %d item(s) shown (%s)\n", static_cast<int>(g_cells.size()),
-                 static_cast<int>(g_rows.size()), ShowingKey(g_category));
+                 static_cast<int>(g_rows.size()), CategoryName(g_category));
 }
 
 // Reads the shown category's items from the game and builds the cells.
@@ -475,29 +500,42 @@ void PageOpen(UI::Element* page, int32_t idBase) {
         g_category = kTool;
         g_showAll = false;
     }
-    // The category buttons are the four children of their row, in the order of kCategoryOrder (they derive
-    // from buttonOk, and a derived element can carry its base's name, so they are not found by name).
-    if (UI::RibbonElement* row = Ext::FindElement<UI::RibbonElement>(page, "ribbonItemPriorityCategories")) {
-        const int n = row->ChildCount();
-        for (int i = 0; i < kButtonCount && i < n; ++i) {
-            row->Child(i).Get()->SetElementId(idBase + kCategoryId + i);
+    // The category buttons are the strip's tab buttons: child 3 + 2i of its TabElement (TabElement.h; the
+    // host numbers the window's own tabs the same way). The strip switches its own tab when one is pressed.
+    g_strip = Object::InternalPtr<UI::Element>(
+        Ext::FindElement<UI::TabElement>(page, "tabItemPriorityCategories"));
+    if (UI::TabElement* strip = static_cast<UI::TabElement*>(g_strip.Get())) {
+        UI::Element** kids = strip->_children.GetData();
+        const int nKids = strip->_children.GetSize();
+        for (int i = 0; i < kButtonCount; ++i) {
+            if (3 + 2 * i < nKids && kids[3 + 2 * i] != nullptr) {
+                kids[3 + 2 * i]->SetElementId(idBase + kCategoryId + i);
+            }
         }
+        strip->SetActiveTab(CategoryIndex(g_category));   // the tab the player was on in this town
     }
     g_showAllCheck = Object::InternalPtr<UI::Element>(
         Ext::FindElement<UI::CheckElement>(page, "checkItemPriorityShowAll"));
     if (g_showAllCheck.Get() != nullptr) {
         g_showAllCheck->SetElementId(idBase + kShowAllId);
     }
-    g_showing = Object::InternalPtr<UI::Element>(
-        Ext::FindElement<UI::TextElement>(page, "textItemPriorityShowing"));
-    g_table = Object::InternalPtr<UI::Element>(
-        Ext::FindElement<UI::TableElement>(page, "tableItemPriority"));
-    if (g_table.Get() == nullptr) {
-        std::fprintf(stderr, "[ItemPriority] no tableItemPriority in the page: empty page\n");
+    static const char* const kTableNames[kButtonCount] = { "tableItemPriorityTool", "tableItemPriorityFuel",
+                                                           "tableItemPriorityClothing",
+                                                           "tableItemPriorityHealth" };   // the strip's order
+    int found = 0;
+    for (int i = 0; i < kButtonCount; ++i) {
+        g_tables[i] =
+            Object::InternalPtr<UI::Element>(Ext::FindElement<UI::TableElement>(page, kTableNames[i]));
+        if (g_tables[i].Get() != nullptr) {
+            ++found;
+        }
+    }
+    if (found == 0) {
+        std::fprintf(stderr, "[ItemPriority] no tableItemPriority<Category> in the page: empty page\n");
         return;
     }
     Rebuild();
-    std::fprintf(stderr, "[ItemPriority] page opened: %s, %s\n", ShowingKey(g_category),
+    std::fprintf(stderr, "[ItemPriority] page opened: %s, %s\n", CategoryName(g_category),
                  g_showAll ? "all items" : "the town's items");
 }
 
@@ -530,9 +568,11 @@ void PageClose() {
     g_rows.clear();
     g_cells.clear();
     g_order.clear();
-    g_table = Object::InternalPtr<UI::Element>();
+    for (Object::InternalPtr<UI::Element>& t : g_tables) {
+        t = Object::InternalPtr<UI::Element>();
+    }
     g_showAllCheck = Object::InternalPtr<UI::Element>();
-    g_showing = Object::InternalPtr<UI::Element>();
+    g_strip = Object::InternalPtr<UI::Element>();
 }
 
 }  // namespace
