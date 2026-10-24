@@ -324,6 +324,15 @@ const Entry kEntries[] = {
       "No fog",
       "Removes the fog that hazes the far map when the camera is zoomed far out.",
       0, [](State& s) -> bool& { return s.ext.no_fog; } },
+    // TEXQUALITY (docs/extensions/handins/TEXQUALITY.md): the large mipmapped world textures are made
+    // without their ext.texture_quality_drop largest levels (half or quarter resolution), so far less
+    // video memory and less decoding at load. Retail has no such setting. Read once at boot (next start).
+    // OFF by default: how sharp the textures are is the player's choice.
+    { "texture_quality", Tier::Extension, Class::A, false,
+      "Reduced texture quality",
+      "Loads the large world textures at half or quarter resolution (the Enhanced tab's Texture quality): "
+      "much less video memory, softer textures. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.texture_quality; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
@@ -375,6 +384,11 @@ const ValueKey kValueKeys[] = {
     // are prefetched: a re-made object is otherwise created on the render thread in the frame that draws it.
     { "create_on_demand_idle_min", "create_on_demand", 0, 120, 0,
       [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
+    // TEXQUALITY: the top mip levels a qualifying texture is made without while the row texture_quality is
+    // on: 0 = Full (the default, so the row or profile=all alone drops nothing; ruled by the user),
+    // 1 = half resolution, 2 = quarter (the combo's Half / Quarter). Read once at boot.
+    { "texture_quality_drop", "texture_quality", 0, 2, 0,
+      [](State& s) -> int32_t& { return s.val.texture_quality_drop; }, nullptr, 0 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

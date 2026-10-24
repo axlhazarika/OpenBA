@@ -355,7 +355,9 @@ private:
     // The helpers slot 3 and the destructor share: the five releases inlined at
     // 0x180002507 / 0x18000292a, and the sampler builder 0x180002720.
     void ReleaseInterfaces();
-    void CreateSamplerState();
+    // NOT RETAIL (ext.texture_quality, docs/extensions/handins/TEXQUALITY.md): `droppedLevels` lowers
+    // MaxLOD by the top levels the texture was created without; 0 = retail's sampler.
+    void CreateSamplerState(int droppedLevels = 0);
 };
 static_assert(sizeof(ImageBufferData) == 0x38, "MemAlloc 0x38 @ 0x1800056c0");
 static_assert(offsetof(ImageBufferData, _owner) == 0x08, "ImageBufferData::_owner (the base's)");

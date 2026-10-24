@@ -163,6 +163,7 @@
 #include "bc4/bc4.h"                         // NOT RETAIL: ext.compress_ao (the BC4 block-row pitch)
 #include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data
 #include "create_on_demand/lazy_create.h"    // NOT RETAIL: ext.create_on_demand
+#include "texture_quality/texture_quality.h" // NOT RETAIL: ext.texture_quality
 
 // The real `Video::ImageBufferData` abstract base. B5 RES: `VideoDX11::
 // ImageBufferData` derives from it in C++, so the compiler chains its destructor
@@ -334,7 +335,9 @@ void ImageBufferData::ReleaseInterfaces() {
 // ============================================================
 // NOT RETAIL (shape only): the descriptor half of 0x180002720 is a free function so that
 // ext.async_gpu_create can build it on the loader and hand it to a worker; the body is unchanged.
-static D3D11_SAMPLER_DESC SamplerDescFor(const ::Video::ImageBuffer* ib) {
+// `droppedLevels` (NOT RETAIL, ext.texture_quality, docs/extensions/handins/TEXQUALITY.md): the top
+// levels the texture was created without; MaxLOD counts the levels it has. 0 = retail's descriptor.
+static D3D11_SAMPLER_DESC SamplerDescFor(const ::Video::ImageBuffer* ib, int droppedLevels = 0) {
     // Both tables are stack locals in the original and are *patched* before
     // being indexed, which is why they are locals here too.
     int addressTable[2] = { D3D11_TEXTURE_ADDRESS_WRAP,       // 1
@@ -383,13 +386,13 @@ static D3D11_SAMPLER_DESC SamplerDescFor(const ::Video::ImageBuffer* ib) {
     desc.BorderColor[3] = 0.0f;
     desc.MinLOD         = 0.0f;
     // 0x180018c50 = 1.0f (verified: bytes 00 00 80 3f).
-    desc.MaxLOD         = (flags & 1) ? (static_cast<float>(ib->GetLevelCount()) - 1.0f) : 0.0f;
+    desc.MaxLOD         = (flags & 1) ? (static_cast<float>(ib->GetLevelCount() - droppedLevels) - 1.0f) : 0.0f;
 
     return desc;
 }
 
-void ImageBufferData::CreateSamplerState() {
-    const D3D11_SAMPLER_DESC desc = SamplerDescFor(_owner);
+void ImageBufferData::CreateSamplerState(int droppedLevels) {
+    const D3D11_SAMPLER_DESC desc = SamplerDescFor(_owner, droppedLevels);
     Dx11Device()->CreateSamplerState(&desc, &sampler);
 }
 
@@ -517,21 +520,22 @@ void ImageBufferData::AttachDepthBuffer() {
 // `encodeBc4` (NOT RETAIL, ext.compress_ao): the R8 levels are copied as they are and the job turns
 // them into BC4 (the cache lookup or the encode) on its worker before the create, so neither runs on
 // the loader.
+// `drop` (NOT RETAIL, ext.texture_quality): the levels Create left out; subresource i is level i + drop.
 static void CreateTextureDeferred(ImageBufferData* self,
                                   const Collection::Array<Collection::Array<uint8_t> >* levels,
                                   const D3D11_TEXTURE2D_DESC& desc, SubresArray* subres,
-                                  bool encodeBc4) {
+                                  bool encodeBc4, int drop) {
     ::Video::ImageBuffer* const ib = self->_owner;
 
     uint64_t total = 0;
-    for (int i = 0; i < levels->GetSize(); ++i)
+    for (int i = drop; i < levels->GetSize(); ++i)
         total += static_cast<uint64_t>(levels->GetData()[i].GetSize());
 
     uint8_t* const bytes = new uint8_t[total > 0 ? total : 1];
     D3D11_SUBRESOURCE_DATA* copy = new D3D11_SUBRESOURCE_DATA[subres->count > 0 ? subres->count : 1];
     uint64_t at = 0;
     for (int i = 0; i < subres->count; ++i) {
-        const Collection::Array<uint8_t>& level = levels->GetData()[i];
+        const Collection::Array<uint8_t>& level = levels->GetData()[i + drop];
         const uint64_t n = static_cast<uint64_t>(level.GetSize());
         if (n != 0) std::memcpy(bytes + at, subres->data[i].pSysMem, n);
         copy[i]         = subres->data[i];
@@ -556,7 +560,7 @@ static void CreateTextureDeferred(ImageBufferData* self,
     }
 
     AsyncCreate::EnqueueTexture(self, Dx11Device(), desc, copy, subres->count, bytes, total, srvDescPtr,
-                                SamplerDescFor(ib), encodeBc4 ? static_cast<uint32_t>(ib->_format) : 0,
+                                SamplerDescFor(ib, drop), encodeBc4 ? static_cast<uint32_t>(ib->_format) : 0,
                                 &self->texture, &self->shaderResourceView,
                                 &self->sampler);
 }
@@ -589,9 +593,17 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     if ((kind & 0xfffffffau) == 0 && kind != 1) bindFlags = D3D11_BIND_RENDER_TARGET;  // 0x20
     if (kind == 1)                              bindFlags |= D3D11_BIND_DEPTH_STENCIL; // 0x40
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/TEXQUALITY.md): ext.texture_quality -- a qualifying
+    // texture seeded from a resource file is made without its `drop` largest levels (the engine's level
+    // reader skipped their bytes, or the array still holds them and they are left out here): the
+    // descriptor at the first kept level's size, the subresources from it (after the faithful loop
+    // below), the sampler's MaxLOD lowered by the same count. 0 for every other image and while the
+    // row is off: retail's create.
+    const int drop = (levels != nullptr && kind == 2) ? TextureQuality::DropFor(*ib, levels->GetSize()) : 0;
+
     D3D11_TEXTURE2D_DESC desc;
-    desc.Width  = static_cast<UINT>(width);
-    desc.Height = static_cast<UINT>(height);
+    desc.Width  = static_cast<UINT>(width >> drop);
+    desc.Height = static_cast<UINT>(height >> drop);
     // flags bit0 set (mipmapped) -> 0 = "generate the full chain".
     desc.MipLevels = static_cast<UINT>((~static_cast<uint8_t>(ib->_flags)) & 1);
     desc.ArraySize = (ib->_dimension == 0) ? 1 : 6;   // 6 = cube faces
@@ -634,6 +646,11 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
                 levelIndex = 0;
             }
         }
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/TEXQUALITY.md): ext.texture_quality -- the
+        // dropped levels' entries go; the rest keep the pitches the loop gave them, which are the
+        // smaller texture's own (DropFor requires both sides a multiple of 4 << drop). 2D only: the
+        // restart above never fires before the last level.
+        subres.count = TextureQuality::DropLeading(subres.data, subres.count, drop);
     }
 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/COMPRESSAO.md): ext.compress_ao -- a 2D R8
@@ -644,8 +661,12 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     std::vector<uint8_t> bc4;
     std::vector<size_t> bc4Offsets;
     bool asBc4 = false;
+    // ext.texture_quality: the shape of the texture made (the first kept level's size). A dropped
+    // texture's levels are a new chain for the cache (its key hashes the levels it is given).
+    const int topWidth  = width >> drop;
+    const int topHeight = height >> drop;
     const bool bc4Candidate = CompressAo::Requested() && levels != nullptr && kind == 2 && ib->_format == 4 &&
-                              ib->_dimension == 0 && (width & 3) == 0 && (height & 3) == 0 &&
+                              ib->_dimension == 0 && (topWidth & 3) == 0 && (topHeight & 3) == 0 &&
                               levels->GetSize() == ib->GetLevelCount();
     const bool deferred = AsyncCreate::Deferring() && levels != nullptr && kind == 2;
 
@@ -670,22 +691,24 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
         CreateOnDemand::DeferTexture(this, ib, desc, pitches.data(), subres.count, srvDescPtr,
                                      bc4Candidate ? static_cast<uint32_t>(ib->_format) : 0, &texture,
                                      &shaderResourceView);
-        CreateSamplerState();
+        CreateSamplerState(drop);
         System::MemoryAllocator::MemFree(subres.data);
         return true;
     }
 
     if (bc4Candidate && !deferred) {
-        std::vector<::CompressAo::Level> in(static_cast<size_t>(levels->GetSize()));
-        for (int i = 0; i < levels->GetSize(); ++i) {
-            in[i].data = levels->GetData()[i].GetData();
-            in[i].size = static_cast<int64_t>(levels->GetData()[i].GetSize());
+        // ext.texture_quality: the kept levels only (level i + drop of the file is subresource i).
+        const int kept = levels->GetSize() - drop;
+        std::vector<::CompressAo::Level> in(static_cast<size_t>(kept));
+        for (int i = 0; i < kept; ++i) {
+            in[i].data = levels->GetData()[i + drop].GetData();
+            in[i].size = static_cast<int64_t>(levels->GetData()[i + drop].GetSize());
         }
-        asBc4 = ::CompressAo::Encode(in.data(), levels->GetSize(), width, height, ib->_format, &bc4, &bc4Offsets);
+        asBc4 = ::CompressAo::Encode(in.data(), kept, topWidth, topHeight, ib->_format, &bc4, &bc4Offsets);
         if (asBc4) {
             desc.Format = DXGI_FORMAT_BC4_UNORM;
             for (int i = 0; i < subres.count; ++i) {
-                const int levelWidth = (width >> i) > 0 ? (width >> i) : 1;
+                const int levelWidth = (topWidth >> i) > 0 ? (topWidth >> i) : 1;
                 subres.data[i].pSysMem     = bc4.data() + bc4Offsets[i];
                 subres.data[i].SysMemPitch = static_cast<UINT>(Bc4::BlockRowPitch(levelWidth));
             }
@@ -696,7 +719,7 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     // bracket a plain texture seeded from a resource file (usage 2: no render target, no depth, not
     // dynamic, so no RTV / DSV) is created on a worker, from a copy of its level bytes.
     if (deferred) {
-        CreateTextureDeferred(this, levels, desc, &subres, bc4Candidate);
+        CreateTextureDeferred(this, levels, desc, &subres, bc4Candidate, drop);
         return true;
     }
 
@@ -707,7 +730,7 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
         std::vector<uint64_t> sizes(static_cast<size_t>(subres.count));
         for (int i = 0; i < subres.count; ++i)
             sizes[static_cast<size_t>(i)] = asBc4 ? bc4Offsets[i + 1] - bc4Offsets[i]
-                                                  : static_cast<uint64_t>(levels->GetData()[i].GetSize());
+                                                  : static_cast<uint64_t>(levels->GetData()[i + drop].GetSize());
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
         const D3D11_SHADER_RESOURCE_VIEW_DESC* srvDescPtr = nullptr;
         if (ib->_dimension == 1) {   // slot 3's cube arm (a usage-2 texture is never a depth buffer)
@@ -720,7 +743,7 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
         const HRESULT shared = ShareGpuData::CreateTexture(Dx11Device(), desc, subres.data, subres.count,
                                                            sizes.data(), srvDescPtr, &texture,
                                                            &shaderResourceView);
-        CreateSamplerState();
+        CreateSamplerState(drop);
         System::MemoryAllocator::MemFree(subres.data);
         return shared == 0;
     }
@@ -773,7 +796,7 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
     // Reached from every path, including a failed CreateTexture2D: the sampler
     // is created regardless, and the scratch array is always freed (the
     // original calls MemFree even when the pointer is null).
-    CreateSamplerState();
+    CreateSamplerState(drop);
     System::MemoryAllocator::MemFree(subres.data);
     return hr == 0;
 }
@@ -796,7 +819,9 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t> 
 // round trip has nothing of ours to rebuild). The context holds its own
 // reference once bound, so ours is released at once. Null on failure: the
 // caller then binds the creation-time sampler.
-static ID3D11SamplerState* AcquirePointSampler(const ::Video::ImageBuffer* ib) {
+// ext.texture_quality (docs/extensions/handins/TEXQUALITY.md): the LOD range is the creation-time
+// sampler's when there is one, so a texture made without its top levels keeps its lowered MaxLOD.
+static ID3D11SamplerState* AcquirePointSampler(const ::Video::ImageBuffer* ib, ID3D11SamplerState* made) {
     const int addressTable[2] = { D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_CLAMP };
     D3D11_SAMPLER_DESC desc;
     desc.Filter         = D3D11_FILTER_MIN_MAG_MIP_POINT;
@@ -812,6 +837,11 @@ static ID3D11SamplerState* AcquirePointSampler(const ::Video::ImageBuffer* ib) {
     desc.BorderColor[3] = 0.0f;
     desc.MinLOD         = 0.0f;
     desc.MaxLOD         = (ib->_flags & 1) ? (static_cast<float>(ib->GetLevelCount()) - 1.0f) : 0.0f;
+    if (made != nullptr) {
+        D3D11_SAMPLER_DESC creation;
+        made->GetDesc(&creation);
+        desc.MaxLOD = creation.MaxLOD;
+    }
     ID3D11SamplerState* state = nullptr;
     if (Dx11Device()->CreateSamplerState(&desc, &state) < 0) return nullptr;
     return state;
@@ -832,7 +862,7 @@ void ImageBufferData::Bind(void* context, unsigned slot) {
     // at an integer ratio >= 2 (Ext::SharpUI::Draw); a comparison (shadow) image
     // keeps its own sampler regardless.
     if (::Video::ImageBufferData::_extPointSampling && ((_owner->_flags >> 6) & 1) == 0) {
-        if (ID3D11SamplerState* point = AcquirePointSampler(_owner)) {
+        if (ID3D11SamplerState* point = AcquirePointSampler(_owner, sampler)) {
             ctx->PSSetSamplers(slot, 1, &point);
             point->Release();
             ctx->PSSetShaderResources(slot, 1, &shaderResourceView);

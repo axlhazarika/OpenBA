@@ -58,4 +58,18 @@ void Skip(IO::Stream* stream, int32_t len) {
     cs->_position += len;
 }
 
+bool SkipIfWithin(IO::Stream* stream, int32_t len) {
+    if (len < 0) return false;
+    if (g_altSkip != nullptr && g_altSkip(stream, len)) return true;
+    IO::CompressedStream* const cs = dynamic_cast<IO::CompressedStream*>(stream);
+    if (cs == nullptr || cs->GetDirection() != IO::kReading) return false;
+    const int32_t n = cs->_headerSize;
+    if (n <= 0 || cs->_headerData == nullptr) return false;
+    // Every block but the last holds a full 32 KB (RangeInStream's reading of the same directory).
+    const int64_t length = static_cast<int64_t>(n - 1) * kBlockBytes + cs->_headerData[n - 1].uncompressedSize;
+    if (static_cast<int64_t>(cs->_position) + len > length) return false;
+    cs->_position += len;
+    return true;
+}
+
 }  // namespace CreateOnDemand

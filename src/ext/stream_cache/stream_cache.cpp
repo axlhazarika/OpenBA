@@ -36,6 +36,7 @@
 #include "ext/registry.h"
 #include "create_on_demand/payload.h"
 #include "create_on_demand/stream_locate.h"
+#include "texture_quality/texture_quality.h"   // ext.texture_quality: the drop the records are keyed on
 #include "engine/UpdateLoop.h"
 #include "io/FileStream.h"
 #include "io/FileSystem.h"
@@ -87,6 +88,7 @@ std::unordered_map<uint64_t, std::unique_ptr<Package>> g_packages;   // by ident
 std::vector<Slot> g_slots;                                            // by pack index
 Stats g_stats;
 bool g_payloadsSkipped = false;   // ext.create_on_demand on: what a load consumes depends on it
+int  g_droppedLevels = 0;         // ext.texture_quality's drop: so does it (TEXQUALITY.md)
 bool g_bootDone = false;          // the menu's bracket has closed: nothing served or recorded after
 
 // A load this thread is inside.
@@ -105,7 +107,7 @@ DerivedCache::Key PackageKey(const Package& p, uint32_t kind, uint32_t ordinal) 
     k.producer   = kProducer;
     k.version    = kVersion;
     k.shape[0]   = p.crc;
-    k.shape[1]   = g_payloadsSkipped ? 1u : 0u;
+    k.shape[1]   = (g_payloadsSkipped ? 1u : 0u) | (static_cast<uint32_t>(g_droppedLevels) << 1);
     k.shape[2]   = kind;
     k.shape[3]   = ordinal;
     k.sourceSize = p.fileCount;
@@ -431,6 +433,7 @@ void Boot() {
         return;
     }
     g_payloadsSkipped = Ext().create_on_demand;
+    g_droppedLevels   = ::TextureQuality::Drop();   // set by Ext::TextureQuality::Boot, which runs first
     ::Object::ExternalFactory::_extLoadBegin = &LoadBegin;
     ::Object::ExternalFactory::_extLoadEnd   = &LoadEnd;
     ::IO::CompressedStream::_extReadTap      = &ReadTap;

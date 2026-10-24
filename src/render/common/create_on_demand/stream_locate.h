@@ -28,6 +28,12 @@ bool Locate(IO::Stream* stream, int32_t len, Locator* out);
 // Advance a stream Locate accepted past `len` bytes, as a Read of them would.
 void Skip(IO::Stream* stream, int32_t len);
 
+// NOT RETAIL (ext.texture_quality, docs/extensions/handins/TEXQUALITY.md): Skip without a Locator, for
+// bytes nobody reads again. True (and the stream advanced): the stream is one g_altSkip takes, or a
+// reading CompressedStream (packed or loose) whose block directory says `len` bytes lie ahead of its
+// position. False: nothing done, the caller reads the bytes.
+bool SkipIfWithin(IO::Stream* stream, int32_t len);
+
 // EXT SEAM (NOT RETAIL, docs/extensions/handins/STREAMCACHE.md): a stream that is not a
 // CompressedStream but knows where its payloads live (ext.stream_cache's record stream, read in
 // the decompressed stream's coordinates). Locate asks g_altLocate when the stream is not a
