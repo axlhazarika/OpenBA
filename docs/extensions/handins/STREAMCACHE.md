@@ -1,5 +1,10 @@
 # STREAMCACHE: the loader's resource streams from the derived cache (issue #13, 2026-10-23)
 
+> **Superseded in part (2026-10-24, STREAMCACHE2.md):** a hit no longer reads the entry's block
+> directory from the package. The record (chunk format 3) carries the directory, the key within a
+> package is (offset, size), and the package identity adds the file size and last write time. The
+> "Serving" and "create_on_demand over a record stream" paragraphs of section 3 describe format 2.
+
 > Branch `issue13/streamcache`, based on `issue13/lazy` (`6892deb79`). Windows only (perf + debug builds,
 > unit, the gate, the resave gate, the MegaMod runs below). Not built: Linux, macOS (the code is
 > backend-neutral standard C++ over the engine's IO classes; the Metal backend's Locate goes through the

@@ -15,15 +15,24 @@
 // at most too narrow -- and a load that reads outside it continues on the compressed stream
 // (segment_stream.h) and the record is widened (Recorder::Seed).
 //
-// RECORD LAYOUT (little-endian, 8-byte aligned, as a Bundle chunk holds it):
-//   +0x00  u64  entry offset in the package      } the entry's identity (EntryId): the record is
-//   +0x08  u32  entry size                       } used only when all four match the entry about
-//   +0x0c  u32  block count                      } to be read
-//   +0x10  u64  Hash64 of the block directory    }
-//   +0x18  u32  decompressed total (what CompressedStream::GetSize answers for the whole stream)
-//   +0x1c  u32  segment count
-//   +0x20  segment count x { u32 pos, u32 len }   in increasing pos, disjoint, not adjacent
+// RECORD LAYOUT (little-endian, 8-byte aligned, as a Bundle chunk holds it; kChunkVersion 3):
+//   +0x00  u64  entry offset in the package      } the entry's identity (EntryId) inside its package
+//   +0x08  u32  entry size                       }
+//   +0x0c  u32  decompressed total (what CompressedStream::GetSize answers for the whole stream)
+//   +0x10  u32  segment count
+//   +0x14  u32  block count n                    } the entry's first 4 + 8n bytes, as the package
+//   +0x18  n x { u32 sourceOffset, u16 compressedSize, u16 uncompressedSize }  } holds them (the
+//                                                  block directory: payload.h)
+//   then   segment count x { u32 pos, u32 len }   in increasing pos, disjoint, not adjacent
 //   then   the segments' bytes back to back, padded with zeros to a multiple of 8
+//
+// THE DIRECTORY IS CACHED, NOT CHECKED (the user's ruling, 2026-10-24; STREAMCACHE2.md). A hit
+// touches nothing of the package: the record is found by (package identity, entry offset, size) and
+// the directory create_on_demand's range checks need is the copy above. The package identity
+// (PackageIdentity below: header crc, version, user version, entry count, name, file size, last
+// write time and every entry's offset and size) is formed once per package at mount, from what the
+// engine already holds and two handle queries. An in-place edit that keeps all of those is served
+// stale until the cache is cleared -- as it already was before for an edit that kept the block sizes.
 //
 // A CHUNK is a 16-byte header { 'STRC', version, record count, 0 } and that many records. A
 // package's bundle is one or more chunks (one per load bracket that recorded something); a later
@@ -58,9 +67,10 @@ namespace StreamCache {
 
 constexpr uint32_t kRecordMax     = 8192;        // bytes a record may hold (see above)
 constexpr uint32_t kChunkMagic    = 0x43525453;  // 'STRC'
-constexpr uint32_t kChunkVersion  = 2;           // 2: records may be widened (segments merge)
+constexpr uint32_t kChunkVersion  = 3;           // 2: records may be widened; 3: the directory is in the record
 constexpr uint32_t kChunkHeader   = 16;
-constexpr uint32_t kRecordHeader  = 32;
+constexpr uint32_t kRecordHeader  = 24;          // up to the directory (the block count is its first u32)
+constexpr uint32_t kDirBlockBytes = 0x8000;      // a directory block's span: CreateOnDemand::kBlockBytes
 constexpr uint32_t kMarkerMagic   = 0x47525453;  // 'STRG'
 constexpr uint32_t kMarkerVersion = 1;
 constexpr uint32_t kMarkerBytes   = 16;
@@ -71,23 +81,45 @@ struct Segment {
     uint32_t len;
 };
 
+// An entry inside its package (the package itself is the bundle's identity).
 struct EntryId {
-    uint64_t offset     = 0;
-    uint32_t size       = 0;
-    uint32_t blockCount = 0;
-    uint64_t dirHash    = 0;
+    uint64_t offset = 0;
+    uint32_t size   = 0;
 };
 
 bool SameEntry(const EntryId& a, const EntryId& b);
 
+// The decompressed length a block directory describes: every block but the last holds a full
+// kDirBlockBytes (RangeInStream's reading). `head` is the entry's first 4 + 8n bytes; 0 when n < 1.
+uint32_t DirectoryTotal(const uint8_t* head);
+
+// What a package's identity is made of; PackageIdentity hashes it (XXH64). The entry table is
+// { offset, size } per entry, in the package's order.
+struct PackageStamp {
+    uint32_t    crc         = 0;   // the header's crc field (the kit's content crc: STREAMCACHE2.md)
+    uint32_t    version     = 0;
+    uint32_t    userVersion = 0;
+    uint32_t    fileCount   = 0;
+    const char* name        = nullptr;
+    int64_t     fileSize    = 0;   // the package file's size on disk
+    uint64_t    writeTime   = 0;   // its last write time (FILETIME units on Windows)
+    std::vector<uint32_t> table;   // 2 x fileCount: offset, size
+};
+uint64_t PackageIdentity(const PackageStamp& s);
+
 // A record inside a chunk's bytes (the chunk outlives the view).
 struct RecordView {
     EntryId        id;
-    uint32_t       total    = 0;
-    uint32_t       segCount = 0;
-    const Segment* segs     = nullptr;   // segCount entries
-    const uint8_t* bytes    = nullptr;   // the segments' bytes, back to back
-    uint32_t       byteCount = 0;        // sum of the segments' len
+    uint32_t       total      = 0;
+    uint32_t       segCount   = 0;
+    uint32_t       blockCount = 0;
+    const uint8_t* head      = nullptr;   // the entry's first 4 + 8 x blockCount bytes (count + directory)
+    const Segment* segs      = nullptr;   // segCount entries
+    const uint8_t* bytes     = nullptr;   // the segments' bytes, back to back
+    uint32_t       byteCount = 0;         // sum of the segments' len
+
+    uint32_t HeadBytes() const { return 4 + 8 * blockCount; }
+    const uint8_t* Begin() const { return head - (kRecordHeader - 4); }   // the record's first byte in its chunk
 
     // Copy [pos, pos + n) of the decompressed stream out of the record; false when the range is
     // not inside one recorded segment (the consumer asked for bytes the recording never read).
@@ -97,7 +129,9 @@ struct RecordView {
 // One load's reads, merged into sorted disjoint segments.
 class Recorder {
 public:
-    void Begin(const EntryId& id, uint32_t total);
+    // `head` is the entry's first 4 + 8n bytes as the package holds them (block count, directory):
+    // copied into the record.
+    void Begin(const EntryId& id, uint32_t total, const uint8_t* head);
     // Begin with a record's segments already in: the load that read outside `view` goes on, and
     // the result replaces `view`.
     void Seed(const RecordView& view);
@@ -121,6 +155,7 @@ private:
         std::vector<uint8_t> bytes;
     };
     EntryId  _id;
+    std::vector<uint8_t> _head;   // block count + directory
     uint32_t _total    = 0;
     uint32_t _consumed = 0;   // bytes held
     bool     _active   = false;
@@ -141,7 +176,7 @@ public:
     // indexed replaces it); false (nothing kept) when the chunk is malformed: a bad header or
     // version, a record past the end, segments out of order.
     bool AddChunk(std::vector<uint8_t> chunk);
-    // The record for `id`, or null.
+    // The record for `id` (offset AND size), or null.
     const RecordView* Find(const EntryId& id) const;
     // Frees every chunk.
     void Clear();
