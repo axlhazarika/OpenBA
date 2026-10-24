@@ -43,15 +43,20 @@ struct Entry {
     ProviderFn  fn;
     void*       user;
 };
-// The registered providers, in registration order. A vector: it was a fixed table of 8 that the current
-// providers fill exactly (docs/extensions/handins/PROVIDERTABLE.md).
-std::vector<Entry> g_table;
+// The registered providers, in registration order. A vector: it was a fixed table of 8 that the providers were
+// about to outgrow (docs/extensions/handins/PROVIDERTABLE.md). Never destroyed: the seam points at Provide()
+// and a loader thread can still call it after main returns, where the old array had no destructor to run.
+std::vector<Entry>& g_table = *new std::vector<Entry>;
 int   g_provided = 0;
 
 }  // namespace
 
 bool Register(const char* prefix, ProviderFn fn, void* user) {
     if (prefix == nullptr || fn == nullptr) return false;
+    // The same (prefix, fn, user) again is already registered: a second Init call changes nothing.
+    for (const Entry& e : g_table) {
+        if (e.fn == fn && e.user == user && std::strcmp(e.prefix, prefix) == 0) return true;
+    }
     if (g_table.empty()) RtObject::g_extProvideSeam = &Provide;   // the engine seam, armed once
     g_table.push_back(Entry{prefix, fn, user});
     return true;
@@ -61,8 +66,9 @@ bool HasProvider(const char* path) {
     if (g_table.empty() || path == nullptr || path[0] == '\0') return false;
     std::string norm(path);
     for (char& c : norm) if (c == '\\') c = '/';
-    for (size_t i = 0; i < g_table.size(); ++i)
-        if (std::strncmp(norm.c_str(), g_table[i].prefix, std::strlen(g_table[i].prefix)) == 0) return true;
+    for (const Entry& e : g_table) {
+        if (std::strncmp(norm.c_str(), e.prefix, std::strlen(e.prefix)) == 0) return true;
+    }
     return false;
 }
 
@@ -120,7 +126,9 @@ Object::External* Provide(const char* path) {
     if (g_table.empty() || path == nullptr || path[0] == '\0') return nullptr;
     std::string norm(path);
     for (char& c : norm) if (c == '\\') c = '/';
-    for (size_t i = 0; i < g_table.size(); ++i) {
+    // The entries there are now: one a provider registers during this walk waits for the next miss.
+    const size_t n = g_table.size();
+    for (size_t i = 0; i < n; ++i) {
         const Entry e = g_table[i];   // a copy: a provider that registers another would reallocate the vector
         if (std::strncmp(norm.c_str(), e.prefix, std::strlen(e.prefix)) != 0) continue;
         Object::External* obj = e.fn(norm.c_str(), e.user);

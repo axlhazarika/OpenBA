@@ -20,7 +20,7 @@ The table was `Entry g_table[8]`, so one more provider than `main` has fits and 
 
 ## 3. The change
 
-The table is a `std::vector<Entry>`. `Register()` appends; `Provide()` copies the entry before it calls the provider's function, because a provider that registered another would reallocate the vector. `HasProvider()` and `Provide()` loop over the vector. The prefixes are string literals, so the stored pointers stay valid. The comment in `Resources.h` that said `Register` fails when the table is full (8 entries) now says it does not.
+The table is a `std::vector<Entry>`. `Register()` appends; `Provide()` copies the entry before it calls the provider's function, because a provider that registered another would reallocate the vector. It walks the entries there are when it starts, so one registered during the walk is first seen by the next miss. The vector is never destroyed (the seam points at `Provide()`, and a loader thread can still call it after `main` returns; the old array had no destructor). `Register()` of an identical (prefix, function, user) a second time changes nothing, because the cap no longer makes a repeat visible. `HasProvider()` and `Provide()` loop over the vector. The prefixes are string literals, so the stored pointers stay valid. The comment in `Resources.h` that said `Register` fails when the table is full (8 entries) now says it does not.
 
 Registration happens once at boot and a lookup runs once per missed resource path, so the cost is the same short loop over the same few entries. The faithful profile registers nothing and pays nothing.
 

@@ -248,7 +248,7 @@ Object::External* ProvideFont(const char* path, void*) {
 
 void InitFonts() {
     if (!Register("Font/SharpFont", &ProvideFont, nullptr) || !Register("Build/SharpFont", &ProvideFont, nullptr))
-        std::fprintf(stderr, "[ExtRes] font provider: the provider table is full\n");
+        std::fprintf(stderr, "[ExtRes] font provider: not registered (null prefix or function)\n");
 }
 
 }  // namespace Resources
