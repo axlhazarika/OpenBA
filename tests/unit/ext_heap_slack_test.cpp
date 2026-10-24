@@ -9,11 +9,15 @@
 // The trace of (range, offset, size, hash) must be identical, and so must every range's retail
 // committed mark at the end. The script frees mostly from the top of the heap, which is what
 // moves the marks, and grows past the first range so a second range is used.
-// Runs on every platform the unit target builds on (the seam sits above the platform twins).
+// Runs on every platform the unit target builds on (the seam sits above the platform twins). Every
+// size, the range size and the budgets are in units of the platform's page (MemoryAllocator::
+// pageSize after Startup: 4 KB on Windows and x64 Linux, 16 KB on Apple silicon), so the script
+// crosses page marks on each; a script that never made retail decommit fails, never passes silently.
 // ============================================================================
 #include "unit.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <random>
 #include <vector>
@@ -33,7 +37,19 @@ struct Handed {
 struct Outcome {
     std::vector<Handed>   trace;
     std::vector<uint64_t> committed;   // retail's mark per range at the end
+    uint64_t              page = 0;    // the allocator's page granularity
 };
+
+// The platform's page granularity, as the allocator sees it (Startup reads it from the seam).
+uint64_t PlatformPage() {
+    RtSystemAllocatorInstallPlatform();
+    System::MemoryAllocator a{};
+    a.minBin = 0xbf;
+    CHECK(a.Startup(1, 0));
+    const uint64_t page = a.pageSize;
+    a.Shutdown();
+    return page;
+}
 
 uint64_t Fnv(const uint8_t* p, uint64_t n) {
     uint64_t h = 1469598103934665603ull;
@@ -54,28 +70,33 @@ int32_t RangeOf(const System::MemoryAllocator& a, const uint8_t* p, uint64_t* of
     return -1;
 }
 
-uint64_t DrawSize(std::mt19937& rng) {
+// Sizes in pages: under one page, 2 .. 66 pages, 64 .. 320 pages, 256 .. 1024 pages.
+uint64_t DrawSize(std::mt19937& rng, uint64_t page) {
     const uint32_t kind = rng() % 100;
-    if (kind < 55) return 1 + rng() % 4096;
-    if (kind < 90) return 8192 + rng() % (256 * 1024);
-    if (kind < 98) return (256 * 1024) + rng() % (1024 * 1024);
-    return (1024 * 1024) + rng() % (3 * 1024 * 1024);
+    if (kind < 55) return 1 + rng() % page;
+    if (kind < 90) return 2 * page + rng() % (64 * page);
+    if (kind < 98) return 64 * page + rng() % (256 * page);
+    return 256 * page + rng() % (768 * page);
 }
 
 // The script: `steps` operations from a fixed seed. Allocation sizes and the choice of what to
 // free are drawn from the seed only, never from addresses, so both runs make the same calls.
-Outcome RunScript(const rt::system::MemoryAllocatorCommitSeam* seam, uint64_t budget, int steps) {
+Outcome RunScript(const rt::system::MemoryAllocatorCommitSeam* seam, uint64_t budget, int steps,
+                  uint64_t page) {
     RtSystemAllocatorInstallPlatform();
     if (seam != nullptr) Ext::HeapSlack::Reset(budget);
     System::MemoryAllocator::_extCommitSeam = seam;
 
     System::MemoryAllocator a{};
     a.minBin = 0xbf;
-    CHECK(a.Startup(8, 0));   // 8 MB ranges: the script's peak needs at least two
+    // 2048-page ranges (8 MB at 4 KB, 32 MB at 16 KB): the script's peak needs at least two.
+    CHECK(a.Startup((2048 * page) >> 20, 0));
+    CHECK_EQ(a.pageSize, page);
 
     std::mt19937 rng(20261024);
     std::vector<uint8_t*> live;
     Outcome out;
+    out.page = page;
     uint8_t fill = 1;
     for (int step = 0; step < steps; ++step) {
         const uint32_t op = rng() % 100;
@@ -88,7 +109,7 @@ Outcome RunScript(const rt::system::MemoryAllocatorCommitSeam* seam, uint64_t bu
             live.erase(live.begin() + static_cast<std::ptrdiff_t>(idx));
             continue;
         }
-        const uint64_t size = DrawSize(rng);
+        const uint64_t size = DrawSize(rng, page);
         const int align = (rng() % 3 == 0) ? 16 : ((rng() % 2) ? 8 : 4);
         uint8_t* p = static_cast<uint8_t*>(a.Allocate(size, align));
         Handed h = {};
@@ -121,16 +142,30 @@ constexpr int kSteps = 6000;
 }  // namespace
 
 UNIT_TEST(ext_heap_slack_every_handed_byte_matches_retail) {
-    const Outcome reference = RunScript(nullptr, 0, kSteps);
+    const uint64_t page = PlatformPage();
+    std::printf("  heap_slack: page %llu bytes\n", static_cast<unsigned long long>(page));
+    const Outcome reference = RunScript(nullptr, 0, kSteps, page);
     CHECK(reference.committed.size() >= 2);   // the script did reach a second range
 
-    const uint64_t budgets[] = { Ext::HeapSlack::kBudgetBytes, 1ull << 20, 3 * 4096, 0 };
+    // 0 first: it is retail's policy with every call counted, so it says whether the script made
+    // retail decommit and recommit at all. If not, nothing below proves anything: fail loudly.
+    const uint64_t budgets[] = { 0, Ext::HeapSlack::kBudgetBytes, 256 * page, 3 * page };
     for (uint64_t budget : budgets) {
-        const Outcome slack = RunScript(Ext::HeapSlack::Seam(), budget, kSteps);
+        const Outcome slack = RunScript(Ext::HeapSlack::Seam(), budget, kSteps, page);
         CHECK(SameOutcome(reference, slack));
         const Ext::HeapSlack::Stats s = Ext::HeapSlack::Read();
         CHECK_EQ(s.untracked, 0ull);
         CHECK(s.peakSlack <= budget);
+        if (s.retailDecommits == 0 || s.retailCommits == 0) {
+            std::printf("  FAIL %s:%d: the script never crossed a page mark (page %llu, budget %llu: "
+                        "retail commits %llu, decommits %llu); resize it for this platform\n",
+                        __FILE__, __LINE__, static_cast<unsigned long long>(page),
+                        static_cast<unsigned long long>(budget),
+                        static_cast<unsigned long long>(s.retailCommits),
+                        static_cast<unsigned long long>(s.retailDecommits));
+            ++unit::Failures();
+            return;
+        }
         if (budget == 0) {
             // A zero budget is retail's policy: every call reaches the platform, nothing is zeroed.
             CHECK_EQ(s.commits, s.retailCommits);
@@ -148,13 +183,14 @@ UNIT_TEST(ext_heap_slack_every_handed_byte_matches_retail) {
 UNIT_TEST(ext_heap_slack_kept_pages_read_zero_when_retail_recommits) {
     // One block at the top of a fresh range: write it, free it (retail decommits down to the range's
     // first page), allocate it again: retail hands out fresh pages, so must the seam.
-    RtSystemAllocatorInstallPlatform();
+    const uint64_t page = PlatformPage();
     Ext::HeapSlack::Reset(Ext::HeapSlack::kBudgetBytes);
     System::MemoryAllocator::_extCommitSeam = Ext::HeapSlack::Seam();
     System::MemoryAllocator a{};
     a.minBin = 0xbf;
-    CHECK(a.Startup(4, 0));
-    const uint64_t n = 512 * 1024;
+    CHECK(a.Startup((1024 * page) >> 20, 0));   // 4 MB at 4 KB pages, 16 MB at 16 KB
+    CHECK_EQ(a.pageSize, page);
+    const uint64_t n = 128 * page;
     uint8_t* p = static_cast<uint8_t*>(a.Allocate(n, 8));
     std::memset(p, 0xAB, static_cast<size_t>(n));
     a.Free(p);
@@ -165,7 +201,6 @@ UNIT_TEST(ext_heap_slack_kept_pages_read_zero_when_retail_recommits) {
     CHECK(q == p);
     // The first page stayed committed in retail too (the range's head tag lives there): it keeps
     // the stale bytes. Every byte past it reads zero.
-    const uint64_t page = a.pageSize;
     const uint64_t firstFresh = page - static_cast<uint64_t>(q - a.ranges[0].base);
     bool zero = true;
     for (uint64_t i = firstFresh; i < n; ++i) zero = zero && q[i] == 0;
