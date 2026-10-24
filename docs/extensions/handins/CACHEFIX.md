@@ -1,7 +1,7 @@
-# CACHEFIX: five fixes to the derived-data cache (caching round 2, item A)
+# CACHEFIX: six fixes to the derived-data cache (caching round 2, item A)
 
-> Branch `worktree-agent-a871f49a4bed7584d`, based on `main` at `62384a4df`. Five `fix:` commits, one
-> per item. Built and tested on Windows only (debug unit build and debug exe). Linux and macOS were not
+> Branch `worktree-agent-a871f49a4bed7584d`, based on `main` at `62384a4df`. Six `fix:` commits: one
+> per item A1-A5, and one for the coordinator's ruling 4. Built and tested on Windows only (debug unit build and debug exe). Linux and macOS were not
 > built: the POSIX twins were written against their neighbours and read carefully, but no compiler saw
 > them. Infrastructure, no extension class: `src/ext/derived_cache/` and its Platform seams.
 
@@ -44,7 +44,7 @@
   means "held and unreadable".
 - On LOCK_SH: not used. A shared flock would have nothing to share with: the writers' exclusion is
   `derived.lock`, the data files carry no lock, and a POSIX reader keeps the inode it opened across the
-  holder's rename. Coordinator: say if a reader-side lock is still wanted.
+  holder's rename. RULED by the coordinator: no LOCK_SH.
 - **FileReplace with a reader open (the question asked).** Windows 10 19045 REFUSES `MoveFileExW(...,
   MOVEFILE_REPLACE_EXISTING)` onto a file another process holds, FILE_SHARE_DELETE or not (measured:
   unit test `ext_derived_cache_rewrite_with_a_reader_open` prints "kept as it was"). What happens: the
@@ -102,16 +102,28 @@
   GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN/_END)`, POSIX a no-op returning false).
 - **Deviation from the plan, on purpose:** background mode wraps the REWRITE only, not the whole
   writer. The appends are on the loader's critical path once 256 MB are queued (`Put` waits), and a
-  very-low I/O priority writer during a cold first launch could stall the loader. Coordinator: say if
-  the whole writer should run in background mode anyway.
+  very-low I/O priority writer during a cold first launch could stall the loader. RULED by the
+  coordinator: background mode stays on the rewrite only.
 - `FileOpenWriteShared(path, sequentialScan)`: `FILE_FLAG_SEQUENTIAL_SCAN` on derived.dat (POSIX:
   `posix_fadvise(SEQUENTIAL)` under `#if defined(POSIX_FADV_SEQUENTIAL)`; macOS has none). Note the
   mapping ignores the flag; it affects the handle reads after `ReleaseMapping` and the appends.
 
+### Stamps for a read-only consumer `3031f5e8a` (coordinator's ruling 4)
+- The gap: with only ext.package_cache using the cache, nothing sent `RequestFlush` and the shared
+  store is never closed, so derived.used was never written and that user had no LRU order.
+- The writer now also writes dirty stamps after the quiet spell (10 s after the cache's last Find /
+  Put, the same end-of-load signal the rewrite's fallback uses); a Find that dirties them wakes the
+  writer. `Store::WriteStampsNow()` writes them on the calling thread, and `OpenShared` registers it
+  with `std::atexit` (the holder only) for a run that ends inside the quiet spell. There is no ext
+  shutdown hook: compress_ao / stream_cache only hook load ends (DeviceData::Slot4 and
+  LoaderLoop::_extLoadDone), and the shared store is never destroyed; `std::atexit` is what
+  `src/app/runtime_init.cpp` already uses for exit-time work. derived.used writes are serialised
+  (`_usedFileMutex`), since the writer and the exit hook may both write it.
+
 ## 2. Test evidence
 
-Unit (`tools/build.sh unit debug --jobs 2`, Windows): **1389 tests, 0 failures, 1 skipped**
-(`ext_sheet_kit_crosscheck`, needs ToolKit, unrelated). Before the branch: 1384. 16 derived-cache tests,
+Unit (`tools/build.sh unit debug --jobs 2`, Windows): **1390 tests, 0 failures, 1 skipped**
+(`ext_sheet_kit_crosscheck`, needs ToolKit, unrelated). Before the branch: 1384. 17 derived-cache tests,
 of them new or changed:
 
 | test | what it pins |
@@ -124,6 +136,7 @@ of them new or changed:
 | `crash_between_the_replaces_is_finished` (new) | crash hook after the dat replace; generations differ by 1 on disk; next Open finishes from idx.new: both kept entries survive with moved offsets, 0 bad payloads, no idx.new left |
 | `new_data_old_index_keeps_the_matching_prefix` (new) | same pair without idx.new: 2 of 3 survive (payload-verified prefix), stable over a second Open |
 | `rewrite_runs_beside_finds` (new) | 64 entries, half superseded, 3 reader threads during the rewrite: 944 finds, 0 wrong |
+| `stamps_of_a_reader_only_session_reach_the_disk` (new) | Find-only sessions: stamps on disk after a Flush; after the quiet spell alone (shortened to 100 ms by `SetQuietSpellForTest`), the earlier session's stamp kept; from `WriteStampsNow` with the store still open |
 | `newest_record_wins...`, `restored_payload_survives_reopen` (updated) | the superseded copy is still served correctly before the rewrite, and gone from the files after it |
 
 Debug exe build (`tools/build.sh build debug --jobs 2`): links; no warning in a touched file.
@@ -151,6 +164,13 @@ cache was last written by `main`'s exe (format 1, 484 MB, MegaMod).
 5. `tools/build.sh run` (the gate, faithful): new game reached, running at frame 40931 after 60 s,
    `standalone_crash.log` empty; no `[DerivedCache]` line (the faithful profile opens no cache).
 
+6. Ruling 4 check: a private user dir (a copy of the functional settings.cfg with
+   `ext.compress_ao=0`, `ext.stream_cache=0`, `ext.package_cache=1`; removed afterwards), `run-menu`
+   twice. Boot 1: only `[PackageCache]` lines (stored, then restored on the remount); 8 s after the menu
+   no derived.used, at 28 s derived.used is there (48 bytes: header with session 1, one record). Boot 2
+   (Find only, nothing stored): derived.used rewritten 10 s after the last use, session 2, the entry's
+   stamp 2.
+
 Not run: the resave gate (nothing here touches the serializer), a MegaMod run (no over-cap eviction in
 game: the vanilla cache is 3 MB against a 4096 MB cap; eviction is covered by the unit tests only), and
 two OpenBA.exe processes on one folder (the harness stood in for the second; overlapping game runs
@@ -162,19 +182,18 @@ splice the logs).
   `EnsureDirChain` (common, over the posix `DirCreate`), `FileOpenWriteShared` + `posix_fadvise`,
   `ThreadBackgroundMode` (no-op), the settings twins' `Utf8ToUtf16` call. The unit tests that encode
   Windows-only behaviour accept both outcomes (`rewrite_with_a_reader_open`).
-- The quiet-spell trigger (10 s after the last use) has no unit test (it would cost 10 s); the explicit
-  `RequestCompact` path is tested.
+- The quiet-spell trigger of the REWRITE has no unit test (the stamps' quiet-spell write has one); the
+  explicit `RequestCompact` path is tested.
 - Fresh-profile run on Linux with an empty HOME (plan's A1 check): not done (no Linux here).
 - No perf measurement (not asked; the machine was shared with other lanes).
 
 ## 4. For the coordinator
 
-- The format bump resets every existing cache once, including the user's real
-  `<Documents>\Banished\Cache` at the first perf run of this exe, and a functional dir shared with
-  lanes still on `main`'s exe will flip between format 1 and 2 (each side resets the other's cache),
-  so cold-cache timings until everyone is on the same exe.
-- A2: LOCK_SH not used (reason above); Windows replace-with-reader keeps the cache instead.
-- A5: background mode on the rewrite only (reason above).
-- Pre-existing, not changed: with only ext.package_cache on, nothing calls `RequestFlush`, so the
-  stamps are written only at Close, which the exe never calls (the shared store is never closed): that
-  configuration never persists derived.used.
+- RULED accepted: the format bump resets every existing cache once, including the user's real
+  `<Documents>\Banished\Cache` at the first run of this exe. A functional dir shared with lanes still
+  on `main`'s exe flips between format 1 and 2 (each side resets the other's cache), so cold-cache
+  timings until everyone is on the same exe.
+- CHANGELOG line, ready to lift: "The derived cache is rebuilt once after this update (its file format
+  changed); a second running copy of the game now reads the cache instead of running without it."
+- RULED: no LOCK_SH (A2); background mode on the rewrite only (A5).
+- Fixed per ruling 4 (`3031f5e8a`): the package_cache-only gap described above.
