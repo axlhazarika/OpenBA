@@ -272,6 +272,11 @@ public:
     // Externals and the loop releases the terrain and minimap images the worker serialises).
     using ExtVideoErrorBarrierFn = void (*)();
     static ExtVideoErrorBarrierFn _extVideoErrorBarrier;   // defined in mainloop_video.cpp
+    // FIX SEAM (NOT RETAIL, docs/retail_bugs.md section 10): fix.boot_device_lost. Null by default
+    // (src/ext/registry_boot.cpp points it at the live bool). While it reads true, OnVideoError and
+    // OnVideoRestart skip the Save::SaveLoad walks when no SaveLoad exists yet (a device loss before
+    // MenuDialogLoopT::Startup's end constructs the first one); retail dereferences the null.
+    static const bool* _extFixBootDeviceLost;   // defined in mainloop_video.cpp
     bool IsRunning(const UpdateLoop* loop) const;                  // 0x1800314b0
     System::Time GetDeltaTime() const;                             // 0x1800314f0  retslot
     System::Time GetFrameTime() const;                             // 0x180031500  retslot
