@@ -9,9 +9,11 @@
 // allocated and zeroed, the block directory read) and the LZF decode of every block the consumed
 // bytes fall in. This extension records, per packed entry, the ranges of the decompressed stream a
 // load consumed and their bytes (stream_record.h), keeps them per package in the derived-data cache
-// (src/ext/derived_cache/, content-addressed: the package's identity, the entry's offset, size and
-// block directory, the build, and whether create_on_demand skips payloads), and at the next start
-// serializes the resource from that record (segment_stream.h) instead of the compressed stream.
+// (src/ext/derived_cache/, keyed by the package's identity -- header, name, file size, last write
+// time, entry table -- and whether create_on_demand skips payloads; within a package by the entry's
+// offset and size), and at the next start serializes the resource from that record
+// (segment_stream.h) instead of the compressed stream. A hit reads nothing of the package: the
+// record carries the entry's block directory (STREAMCACHE2.md).
 //
 // EXACTNESS. The record is the bytes the serializer itself consumed, in order; the stream served
 // from it answers the same reads with the same bytes and the same positions, and anything else --

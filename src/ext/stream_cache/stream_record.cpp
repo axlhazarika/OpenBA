@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "ext/derived_cache/hash64.h"
+
 namespace Ext {
 namespace StreamCache {
 
@@ -37,16 +39,37 @@ uint64_t GetU64(const uint8_t* p) {
     return x;
 }
 
-// A record's bytes in its chunk: the header, the segment table, the bytes padded to a multiple of 8.
+// A record's bytes in its chunk: the header, the directory, the segment table, the bytes padded to a
+// multiple of 8.
 size_t RecordBytes(const RecordView& v) {
     const size_t body = (static_cast<size_t>(v.byteCount) + 7) & ~static_cast<size_t>(7);
-    return kRecordHeader + static_cast<size_t>(v.segCount) * 8 + body;
+    return kRecordHeader + static_cast<size_t>(v.blockCount) * 8 + static_cast<size_t>(v.segCount) * 8 + body;
 }
 
 }  // namespace
 
 bool SameEntry(const EntryId& a, const EntryId& b) {
-    return a.offset == b.offset && a.size == b.size && a.blockCount == b.blockCount && a.dirHash == b.dirHash;
+    return a.offset == b.offset && a.size == b.size;
+}
+
+uint32_t DirectoryTotal(const uint8_t* head) {
+    const uint32_t n = GetU32(head);
+    if (n < 1 || n > 0x10000u) return 0;   // 2 GB of 32 KB blocks: no entry is larger (int32 sizes)
+    uint16_t last = 0;
+    std::memcpy(&last, head + 4 + static_cast<size_t>(n - 1) * 8 + 6, 2);
+    return (n - 1) * kDirBlockBytes + last;
+}
+
+uint64_t PackageIdentity(const PackageStamp& s) {
+    struct Head {
+        uint32_t crc, version, userVersion, fileCount;
+        int64_t  fileSize;
+        uint64_t writeTime;
+    } head{s.crc, s.version, s.userVersion, s.fileCount, s.fileSize, s.writeTime};
+    uint64_t h = DerivedCache::Hash64(&head, sizeof(head));
+    if (s.name != nullptr) h = DerivedCache::Hash64(s.name, std::strlen(s.name), h);
+    if (!s.table.empty()) h = DerivedCache::Hash64(s.table.data(), s.table.size() * sizeof(uint32_t), h);
+    return h;
 }
 
 // ---- RecordView ------------------------------------------------------------------------------
@@ -66,7 +89,7 @@ bool RecordView::Read(uint32_t pos, uint32_t n, uint8_t* dst) const {
 
 // ---- Recorder --------------------------------------------------------------------------------
 
-void Recorder::Begin(const EntryId& id, uint32_t total) {
+void Recorder::Begin(const EntryId& id, uint32_t total, const uint8_t* head) {
     _id       = id;
     _total    = total;
     _consumed = 0;
@@ -74,10 +97,12 @@ void Recorder::Begin(const EntryId& id, uint32_t total) {
     _bad      = false;
     _overflow = false;
     _segs.clear();
+    const uint32_t n = GetU32(head);
+    _head.assign(head, head + 4 + static_cast<size_t>(n) * 8);
 }
 
 void Recorder::Seed(const RecordView& view) {
-    Begin(view.id, view.total);
+    Begin(view.id, view.total, view.head);
     uint32_t at = 0;
     for (uint32_t i = 0; i < view.segCount; ++i) {
         const Segment s = view.segs[i];
@@ -168,10 +193,9 @@ bool Recorder::Finish(std::vector<uint8_t>& chunk) {
     if (ok) {
         PutU64(chunk, _id.offset);
         PutU32(chunk, _id.size);
-        PutU32(chunk, _id.blockCount);
-        PutU64(chunk, _id.dirHash);
         PutU32(chunk, _total);
         PutU32(chunk, static_cast<uint32_t>(_segs.size()));
+        chunk.insert(chunk.end(), _head.begin(), _head.end());   // block count + directory
         for (const Seg& s : _segs) {
             PutU32(chunk, s.pos);
             PutU32(chunk, static_cast<uint32_t>(s.bytes.size()));
@@ -219,13 +243,18 @@ bool Bundle::AddChunk(std::vector<uint8_t> chunk) {
     for (uint32_t i = 0; i < count; ++i) {
         if (at + kRecordHeader > size) return false;
         RecordView v;
-        v.id.offset     = GetU64(base + at);
-        v.id.size       = GetU32(base + at + 8);
-        v.id.blockCount = GetU32(base + at + 12);
-        v.id.dirHash    = GetU64(base + at + 16);
-        v.total         = GetU32(base + at + 24);
-        v.segCount      = GetU32(base + at + 28);
+        v.id.offset  = GetU64(base + at);
+        v.id.size    = GetU32(base + at + 8);
+        v.total      = GetU32(base + at + 12);
+        v.segCount   = GetU32(base + at + 16);
+        v.blockCount = GetU32(base + at + 20);
+        v.head       = base + at + 20;
         at += kRecordHeader;
+        // The directory: at least one block, inside the entry, and describing the recorded total.
+        if (v.blockCount == 0 || 4 + static_cast<uint64_t>(v.blockCount) * 8 > v.id.size) return false;
+        if (at + static_cast<size_t>(v.blockCount) * 8 > size) return false;
+        if (DirectoryTotal(v.head) != v.total) return false;
+        at += static_cast<size_t>(v.blockCount) * 8;
         if (v.segCount == 0 || v.segCount > kRecordMax) return false;
         if (at + static_cast<size_t>(v.segCount) * 8 > size) return false;
         v.segs = reinterpret_cast<const Segment*>(base + at);   // CAST-OK: byte_io (8-byte aligned)
@@ -285,8 +314,8 @@ std::vector<uint8_t> Bundle::Consolidate() const {
     chunk.reserve(kChunkHeader + LiveBytes());
     BeginChunk(chunk);
     for (const RecordView* v : live) {
-        // A record is contiguous in its chunk: the header right before the segment table.
-        const uint8_t* const begin = reinterpret_cast<const uint8_t*>(v->segs) - kRecordHeader;   // CAST-OK: byte_io
+        // A record is contiguous in its chunk, from its header on.
+        const uint8_t* const begin = v->Begin();
         chunk.insert(chunk.end(), begin, begin + RecordBytes(*v));
     }
     EndChunk(chunk, static_cast<uint32_t>(live.size()));

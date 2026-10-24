@@ -59,6 +59,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/ext/rock_seat/rock_seat_math.cpp   # ext_rock_seat_test.cpp (ROCKSEAT)
   ${CMAKE_SOURCE_DIR}/src/ext/large_packages/large_packages_unwrap.cpp   # ext_large_packages_test.cpp (LARGEPKM)
   ${CMAKE_SOURCE_DIR}/src/ext/package_cache/index_codec.cpp      # ext_package_cache_test.cpp (PKGCACHE)
+  ${CMAKE_SOURCE_DIR}/src/ext/menu_entry/fingerprint.cpp         # ext_menu_entry_test.cpp (MENUENTRY)
   ${CMAKE_SOURCE_DIR}/src/ext/sharp_ui/sharp_math.cpp
   ${CMAKE_SOURCE_DIR}/src/ext/resources/font_tables.cpp         # ext_font_raster_test.cpp (block RSCFONT)
   ${CMAKE_SOURCE_DIR}/src/platform/win/font_raster_win.cpp      #   the GDI rasteriser (the posix twin is FreeType over the next file)
@@ -91,6 +92,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/platform/win/settings_win.cpp
   ${CMAKE_SOURCE_DIR}/src/engine/system/widestring.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/win/file_win.cpp
+  ${CMAKE_SOURCE_DIR}/src/platform/common/dir_chain.cpp   # EnsureDirChain: settings twins, ext_derived_cache_test.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/win/file_map_win.cpp   # file_map_read_test.cpp (MAPREAD)
   ${CMAKE_SOURCE_DIR}/src/platform/win/file_rw_win.cpp    # ext_derived_cache_test.cpp (COMPRESSAO)
   ${CMAKE_SOURCE_DIR}/src/ext/derived_cache/derived_cache.cpp   # ext_derived_cache_test.cpp (COMPRESSAO)
@@ -104,6 +106,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/engine/system/compression.cpp       # ext_decode_ahead_test.cpp: the real Decompress
   ${CMAKE_SOURCE_DIR}/src/ext/stream_cache/stream_record.cpp   # ext_stream_cache_test.cpp (STREAMCACHE)
   ${CMAKE_SOURCE_DIR}/src/ext/stream_cache/segment_stream.cpp  #   the record stream and its fallback
+  ${CMAKE_SOURCE_DIR}/src/ext/heap_slack/heap_slack.cpp   # ext_heap_slack_test.cpp (HEAPSLACK)
   ${CMAKE_SOURCE_DIR}/src/platform/common/window_messages.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/common/display_geometry.cpp
   ${CMAKE_SOURCE_DIR}/src/platform/common/cursor_planes.cpp

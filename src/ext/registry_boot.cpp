@@ -21,12 +21,17 @@
 #include "ext/seamless_loops/seamless_loops.h"   // ext.seamless_loops: the SoundBuffer decode seam
 #include "ext/large_packages/large_packages.h"   // fix.large_packages: the FileSystem mount seam
 #include "ext/package_cache/package_cache.h"       // ext.package_cache: the FileSystem index seams
+#include "ext/menu_entry/menu_entry.h"             // ext.menu_entry: the mod scan and remount seams
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
 #include "ext/share_gpu_data/share_gpu_data.h"   // ext.share_gpu_data: the backend's request, at boot
 #include "ext/create_on_demand/create_on_demand.h"   // ext.create_on_demand: the backend's request + seams, at boot
+#include "ext/texture_quality/texture_quality.h"     // ext.texture_quality: the run's drop + the level reader, at boot
 #include "ext/stream_cache/stream_cache.h"           // ext.stream_cache: the resource-record seams, at boot
+#include "ext/visit_replay/visit_replay.h"         // ext.visit_replay: the ExternalFactory::_extVisitReplay seam, at boot
+#include "ext/find_fastpath/find_fastpath.h"       // ext.find_fastpath: the ExternalFactory::_extFindFast seam, at boot
+#include "ext/heap_slack/heap_slack.h"             // ext.heap_slack: the MemoryAllocator::_extCommitSeam seam, at boot
 #include "ext/resources/text_provider.h"        // the Extensions dialog / Enhanced tab resources from the exe's text (KITFREE)
 #include "rsc_text_check.h"                      // src/diag: the kit cross-check, /rsccheck:1 on the command line
 #include "ext/resources/font_provider.h"         // KITFREE RSCFONT: ext.sharp_ui's font variants, provided at run time
@@ -46,6 +51,8 @@
 #include <cstring>
 #include "system/String.h"
 #include "ui/UserInterface.h"   // the fix.ui_scale_layout seam (DESIGN.md hook rule 5)
+#include "engine/MainLoop.h"     // the fix.boot_device_lost seam (DESIGN.md hook rule 5)
+#include "boot_device_lost/boot_device_lost_backend.h"   // fix.boot_device_lost: the backend half
 #include "Game/WorldGeometry.h"  // the ext.terrain_batch seam (DESIGN.md hook rule 5)
 
 namespace Ext {
@@ -125,12 +132,19 @@ void InitFromSettings() {
     // Engine-side fix seams: null by default, pointed at the live bool here
     // (fixes are global and live: the pointer follows the menu toggle).
     ::UI::UserInterface::_extFixScaleLayout = &Fix().ui_scale_layout;
+    // fix.boot_device_lost: one row, two seams -- the engine's SaveLoad-walk skip and the
+    // renderer backend's recovery of a reset that failed on a removed device.
+    ::Engine::MainLoop::_extFixBootDeviceLost = &Fix().boot_device_lost;
+    BootDeviceLostBackend::SetFixFlag(&Fix().boot_device_lost);
     // fix.large_packages: the IO::FileSystem::_extPackagesMounted seam (null under the faithful
     // profile). The boot's .pkg mount ran inside Engine::Startup, before this; every mods mount runs it.
     LargePackages::Sync();
     // ext.package_cache: the IO::FileSystem::_extIndexRestore / _extIndexBuilt seams (null under the
     // faithful profile); the hooks read the row at each mount.
     PackageCache::Sync();
+    // ext.menu_entry: the IO::Modification mod-scan / remount seams and IO::FileSystem::_extPackagesClosed
+    // (null under the faithful profile); the hooks read the row at each scan and remount.
+    MenuEntry::Sync();
     // The save's pseudo-mods (EXT SEAM, Save::SaveLoad::_extExtraMods). Installed
     // ONCE here: the profile is fixed for the run (settings key or /profile at
     // boot; nothing changes it later), so SaveModsProvider() is final now --
@@ -172,6 +186,10 @@ void InitFromSettings() {
     // row off) or with the row off: the decode pays one null test and its PCM is the plain decode.
     ::Audio::SoundBuffer::_extLoopSeam =
         Ext().seamless_loops ? &SeamlessLoops::ApplyToLoopingBuffer : nullptr;
+    // ext.heap_slack (class A, next start): the System::MemoryAllocator::_extCommitSeam seam, set ONCE
+    // here under the allocator lock. Null under the faithful profile or with the row off: a commit or
+    // decommit pays one null test. Ranges already committed are taken over at their next mark move.
+    HeapSlack::Sync();
     // ext.decode_ahead (class A, next start): the IO::CompressedStream::_extDecodeAhead seam, set ONCE
     // here (boot, before the loader's first resource). Null under the faithful profile or with the row
     // off: DecompressFromSource and Release pay one null test each.
@@ -190,10 +208,18 @@ void InitFromSettings() {
     // before the boot's first load (src/render/common/create_on_demand/). Off under the faithful
     // profile (the row is off).
     Ext::CreateOnDemand::Boot();
+    // ext.texture_quality (class A, next start): the run's drop, once, before the boot's first load;
+    // after create_on_demand (whose level reader, when installed, drops the levels itself) and before
+    // stream_cache (whose records are keyed on the drop). Off under the faithful profile.
+    Ext::TextureQuality::Boot();
     // ext.stream_cache (class A, next start): the resource-record seams and the derived cache, once,
     // before the boot's first load; after create_on_demand, whose value the records are keyed on.
     // Off under the faithful profile (the row is off).
     Ext::StreamCache::Boot();
+    // ext.visit_replay / ext.find_fastpath (class A, next start): the resource table's seams
+    // (object/resource_ext.h), once, before the boot's first load. Off under the faithful profile.
+    Ext::VisitReplay::Sync();
+    Ext::FindFastpath::Sync();
     // The extension resources built in the exe (docs/extensions/KITFREE.md): the
     // providers register here, never under a COMMAND-LINE faithful profile
     // (`/profile:faithful`: the gate run, no Extensions button, no Enhanced tab,
@@ -285,6 +311,25 @@ int32_t SetMaxShadowResAndRecord(int32_t size) {
         SetAndRecord(row, false);
     }
     return MaxShadowResChoice();
+}
+
+int32_t TextureQualityChoice() {
+    const Entry* row = FindEntry("texture_quality");
+    const ValueKey* drop = FindValueKey("texture_quality_drop");
+    return Requested(*row) ? Value(*drop) : 0;
+}
+
+int32_t SetTextureQualityAndRecord(int32_t drop) {
+    const Entry& row = *FindEntry("texture_quality");
+    const ValueKey& key = *FindValueKey("texture_quality_drop");
+    if (drop > 0) {
+        const int32_t stored = ClampValue(key, drop);   // 0..1: Quarter was removed by ruling
+        if (Value(key) != stored) SetValueAndRecord(key, stored);
+        if (!Requested(row)) SetAndRecord(row, true);
+    } else if (Requested(row)) {
+        SetAndRecord(row, false);
+    }
+    return TextureQualityChoice();
 }
 
 void PersistSettings() {

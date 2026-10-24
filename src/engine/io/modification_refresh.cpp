@@ -188,6 +188,7 @@
 #include "system/MemoryAllocator.h"
 #include "rt_libm.h"        // rtcrt::StrICmp
 #include "system/Configuration.h"   // io/Persistence.h: RtIo::SettingsSet
+#include "load_time.h"   // [LoadTime] stamps (NOT RETAIL, print-only; block LOADSTAMP)
 
 namespace RtIO {
 
@@ -426,6 +427,7 @@ void Modification::RefreshList() {
         *arr = _savedMods;                                   // 0x180010110
         return;
     }
+    LoadTime::Stamp("mods.refresh");   // NOT RETAIL: print-only (the disk scan of the .pkm files)
 
 
     // The two singletons retail loads at 0x1800af648 / 0x1800af64f. Read through
@@ -456,6 +458,66 @@ void Modification::RefreshList() {
        // retail released packDir then pattern too (0x1800af6b4, 0x1800af6ef).
 
 
+    // 0x1800aff3d .. 0x1800b0113: the registry part of loop 1 and the append, verbatim (a lambda only
+    // so that ext.menu_entry's cached record goes through the very same lines; the read path calls
+    // it where the lines stood, before ~PackageFile).
+    auto applySettings = [&](Mod* const m) {
+        // 0x1800aff3d — the registry key stem: the mod's path with its directory
+        // stripped, kept alive across the temporary's release. `nameRef`
+        // outlives the scope deliberately, same idiom as SaveList's `ref`
+        // (modification.cpp): take the extra reference, then let the block's
+        // close run retail's release of the temporary.
+        char* nameRef;
+        {
+            System::Filename pathTmp(m->file.GetPathFilename(true));   // 0x1800c6740
+            nameRef = pathTmp._data;
+            if (nameRef != nullptr) ++RefCount(nameRef);         // take the ref FIRST
+        }  // ~pathTmp releases here, retail's 0x1800aff.. release ("then drop the temp")
+
+        // 0x1800affc9 — "ModEnabled_<stem>". The comparison against "true"
+        // (0x180155870) is a byte-for-byte inlined strcmp in retail
+        // (0x1800b0013..0x1800b0048) including its `value[0] != 't'` fast path;
+        // `strcmp(v, "true") == 0` is the same predicate on every input. A null
+        // value takes retail's `EDX = -1` arm and a missing entry leaves the
+        // flag at the 0 the record was born with.
+        {
+            // String::Format (0x1800c9730) lands on a Filename-typed local, as
+            // `pattern` above does; `keyStr` is the class for its own RAII
+            // release only. Constructed over the default ctor's null, as the
+            // door that stood here did.
+            System::Filename keyStr;
+            ::new (&keyStr.AsString()) System::String(
+                System::String::Format("%s%s", "ModEnabled_", nameRef));
+            // The settings map is `Collection::Set<Pair<String,String>>`
+            // (RtIo::SettingsSet); 0x18002ace0 is its `Find` (B7 LX).
+            const RtIo::SettingsNode* node =
+                pers->_settingsMap.Find(keyStr.AsString()._data);   // 0x18002ace0
+            if (node != nullptr) {
+                const char* v = node->element.value._data;       // +0x08
+                const int cmp = (v == nullptr) ? -1 : std::strcmp(v, "true");
+                m->enabled = static_cast<uint8_t>(cmp == 0);
+            }
+        }  // ~keyStr releases here
+        // 0x1800b0085 — "ModIndex_<stem>", parsed base 10. A missing entry
+        // leaves `order` at 0.
+        {
+            System::Filename keyStr;
+            ::new (&keyStr.AsString()) System::String(
+                System::String::Format("%s%s", "ModIndex_", nameRef));
+            const RtIo::SettingsNode* node =
+                pers->_settingsMap.Find(keyStr.AsString()._data);   // 0x18002ace0
+            if (node != nullptr) {
+                const char* v = node->element.value._data;       // +0x08
+                m->order = RtCrt_ParseInt10_18007f034(v);        // 0x18007f034
+            }
+        }  // ~keyStr releases here
+
+        // 0x1800b00f9 — append. The only writer of the array in the whole body.
+        arr->SetSize(arr->_size + 1, *m);                        // 0x180028610
+
+        ReleaseInto(&nameRef);                                   // 0x1800b0113
+    };
+
     // -----------------------------------------------------------------------
     // LOOP 1 — one iteration per .pkm found (0x1800af790 .. 0x1800b019f)
     // -----------------------------------------------------------------------
@@ -479,6 +541,19 @@ void Modification::RefreshList() {
         // filesystem_setupdirs.cpp's `sourceDirectory`/`dataDirectory`).
         m->file = foundData[i];
 
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): ext.menu_entry fills the record
+        // of a .pkm unchanged since the last scan (name, size, write time) without reading it, or
+        // reports it as one retail discards; the settings part runs as retail's.
+        if (_extModCached != nullptr) {
+            const int cached = _extModCached(foundData[i], *m);
+            if (cached == kModSkipped)
+                continue;
+            if (cached == kModFilled) {
+                applySettings(m);
+                continue;
+            }
+        }
+
         // 0x1800af830..0x1800af8e6 — the inlined PackageFile constructor:
         // ENDGAME B.3.9 IO, the class's real constructor on the same stack
         // storage (the store list the banner compares, in the same order).
@@ -491,11 +566,15 @@ void Modification::RefreshList() {
         // ReadPackfile-failed path does NOT close: there the file never opened.
         if (!read) {
             pkgObj->IO::PackageFile::~PackageFile();           // 0x1800b4540
+            if (_extModStored != nullptr)   // EXT SEAM (MENUENTRY.md): a discarded file
+                _extModStored(foundData[i], nullptr);
             continue;                                            // ~mod: 0x180011460
         }
         if (pkgObj->_platform != 0) {                            // +0x74
             fs->CloseFile(pkgObj->_file);                        // 0x1800accc0, +0xC0
             pkgObj->IO::PackageFile::~PackageFile();
+            if (_extModStored != nullptr)   // EXT SEAM (MENUENTRY.md): a discarded file
+                _extModStored(foundData[i], nullptr);
             continue;                                            // ~mod
         }
 
@@ -586,60 +665,14 @@ void Modification::RefreshList() {
 
         fs->CloseFile(pkgObj->_file);                            // 0x1800aff2a, +0xC0
 
-        // 0x1800aff3d — the registry key stem: the mod's path with its directory
-        // stripped, kept alive across the temporary's release. `nameRef`
-        // outlives the scope deliberately, same idiom as SaveList's `ref`
-        // (modification.cpp): take the extra reference, then let the block's
-        // close run retail's release of the temporary.
-        char* nameRef;
-        {
-            System::Filename pathTmp(m->file.GetPathFilename(true));   // 0x1800c6740
-            nameRef = pathTmp._data;
-            if (nameRef != nullptr) ++RefCount(nameRef);         // take the ref FIRST
-        }  // ~pathTmp releases here, retail's 0x1800aff.. release ("then drop the temp")
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): the record as read, before the
+        // settings part (enabled 0, order 0), for the next scan of an unchanged .pkm.
+        if (_extModStored != nullptr)
+            _extModStored(foundData[i], m);
 
-        // 0x1800affc9 — "ModEnabled_<stem>". The comparison against "true"
-        // (0x180155870) is a byte-for-byte inlined strcmp in retail
-        // (0x1800b0013..0x1800b0048) including its `value[0] != 't'` fast path;
-        // `strcmp(v, "true") == 0` is the same predicate on every input. A null
-        // value takes retail's `EDX = -1` arm and a missing entry leaves the
-        // flag at the 0 the record was born with.
-        {
-            // String::Format (0x1800c9730) lands on a Filename-typed local, as
-            // `pattern` above does; `keyStr` is the class for its own RAII
-            // release only. Constructed over the default ctor's null, as the
-            // door that stood here did.
-            System::Filename keyStr;
-            ::new (&keyStr.AsString()) System::String(
-                System::String::Format("%s%s", "ModEnabled_", nameRef));
-            // The settings map is `Collection::Set<Pair<String,String>>`
-            // (RtIo::SettingsSet); 0x18002ace0 is its `Find` (B7 LX).
-            const RtIo::SettingsNode* node =
-                pers->_settingsMap.Find(keyStr.AsString()._data);   // 0x18002ace0
-            if (node != nullptr) {
-                const char* v = node->element.value._data;       // +0x08
-                const int cmp = (v == nullptr) ? -1 : std::strcmp(v, "true");
-                m->enabled = static_cast<uint8_t>(cmp == 0);
-            }
-        }  // ~keyStr releases here
-        // 0x1800b0085 — "ModIndex_<stem>", parsed base 10. A missing entry
-        // leaves `order` at 0.
-        {
-            System::Filename keyStr;
-            ::new (&keyStr.AsString()) System::String(
-                System::String::Format("%s%s", "ModIndex_", nameRef));
-            const RtIo::SettingsNode* node =
-                pers->_settingsMap.Find(keyStr.AsString()._data);   // 0x18002ace0
-            if (node != nullptr) {
-                const char* v = node->element.value._data;       // +0x08
-                m->order = RtCrt_ParseInt10_18007f034(v);        // 0x18007f034
-            }
-        }  // ~keyStr releases here
-
-        // 0x1800b00f9 — append. The only writer of the array in the whole body.
-        arr->SetSize(arr->_size + 1, *m);                        // 0x180028610
-
-        ReleaseInto(&nameRef);                                   // 0x1800b0113
+        // 0x1800aff3d .. 0x1800b0113 -- the settings part and the append, moved verbatim into
+        // `applySettings` above (ext.menu_entry serves a cached record through the same lines).
+        applySettings(m);
         pkgObj->IO::PackageFile::~PackageFile();                // 0x1800b0172 ~PackageFile
         // ~mod at the end of the iteration: 0x1800b017c
     }
@@ -658,7 +691,12 @@ void Modification::RefreshList() {
     // leftmost node, then take the successor repeatedly (leftmost of the right
     // subtree, else climb while we are a right child).
     // -----------------------------------------------------------------------
-    for (int32_t i = 0; i < _mods._size; ++i) {
+    LoadTime::Stamp("mods.refresh.overrides");   // NOT RETAIL: print-only (loop 2)
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): ext.menu_entry rebuilds every
+    // mod's `files` from the last scan when the same .pkm files (name, size, write time) were found
+    // in the same order; the loop then runs over no mod.
+    const bool overridesRestored = _extOverridesRestore != nullptr && _extOverridesRestore(*this);
+    for (int32_t i = 0; !overridesRestored && i < _mods._size; ++i) {
         for (int32_t j = 0; j < _mods._size; ++j) {
             if (i == j) continue;                                // CMP R13,R15 ; JZ
             Mod* const mods = arr->_data;                        // re-read, as retail does
@@ -709,6 +747,8 @@ void Modification::RefreshList() {
             }
         }
     }
+    if (!overridesRestored && _extOverridesBuilt != nullptr)   // EXT SEAM (MENUENTRY.md)
+        _extOverridesBuilt(*this);
 
     // 0x1800b0338 — the sort. PORTED (BATCH 8b,
     // src/engine/io/modification_sort.cpp), called by name. The third
@@ -723,6 +763,7 @@ void Modification::RefreshList() {
     for (int32_t i = 0; i < found.size; ++i) ReleaseInto(&foundData[i]._data);
     ::System::MemoryAllocator::MemFree(found.data);
     found.data = nullptr; found.size = 0; found.capacity = 0;
+    LoadTime::Stamp("mods.refresh.done");   // NOT RETAIL: print-only
 
     // -----------------------------------------------------------------------
     // The oracle. See the banner for why running theirs SECOND is legal here.

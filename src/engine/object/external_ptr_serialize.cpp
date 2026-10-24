@@ -178,6 +178,7 @@
 #include "io/Stream.h"
 #include "object/External.h"
 #include "object/external_visit.h"   // block VISITPASS: the mode-1 visit
+#include "object/external_compiled.h" // NOT RETAIL: FindOrLoadHitRow (VISITREPLAY.md)
 #include "system/Filename.h"
 #include "system/String.h"
 
@@ -225,6 +226,7 @@ bool ExternalPtrSerializeBody(External* cur, IO::Serializer& ser,
     // Encoding slot 2, fetched off the STREAM, not the Serializer.
     if (ser._stream->_encoding->GetKind() == 3) {
         if (cur == nullptr) return false;
+        ++RtObject::g_ptrCensus.visit;   // NOT RETAIL, print-only (VISITREPLAY.md section 1)
 
         // `scratch = cur->GetPath(); found = FindOrLoad(scratch); if (found)
         // (void)found->IsDerivedFrom(T)` -- the answer genuinely discarded, retail
@@ -241,6 +243,13 @@ bool ExternalPtrSerializeBody(External* cur, IO::Serializer& ser,
     ExternalFactory* factory = ExternalFactory::_singleton;      // r14
     System::Filename path;                                       // [rbp+0x40]
     IO::Stream* stream = ser._stream;
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): ext.find_fastpath's reference-id
+    // arm. `refRow` is the row a reference id already named (the load tail then runs FindOrLoad's hit
+    // arm on it); `refStore` asks the extension to remember what the faithful tail finds.
+    const ExtFindFast* const fast = ExternalFactory::_extFindFast;
+    void* refRow = nullptr;
+    bool refStore = false;
+    uint32_t refStoreId = kNoReferenceId;
 
     if (factory->_referenceModeEnabled) {
         // ---- mode 2: reference id ------------------------------------------
@@ -266,10 +275,17 @@ bool ExternalPtrSerializeBody(External* cur, IO::Serializer& ser,
         }
 
         if (stream->_direction == IO::kReading) {                // 0x1800043c1
-            System::Filename tmp = factory->GetPathForReferenceId(refId);  // [rbp+0x48]
-            // 0x1800043dd release-then-adopt plus the AdjustDelimiters that
-            // follows it IS `Filename::operator=`, 0x180006770.
-            path = tmp;
+            // EXT SEAM (NOT RETAIL, VISITREPLAY.md): the id already named a row.
+            if (fast != nullptr && factory->_pathStack._size == 0)
+                refRow = fast->findRef(*factory, refId);
+            if (refRow == nullptr) {
+                System::Filename tmp = factory->GetPathForReferenceId(refId);  // [rbp+0x48]
+                // 0x1800043dd release-then-adopt plus the AdjustDelimiters that
+                // follows it IS `Filename::operator=`, 0x180006770.
+                path = tmp;
+                refStore = fast != nullptr && factory->_pathStack._size == 0;
+                refStoreId = refId;
+            }
         }
         // falls into the load tail
     } else {
@@ -292,7 +308,22 @@ bool ExternalPtrSerializeBody(External* cur, IO::Serializer& ser,
     // Saving skips it entirely: retail re-tests the direction here and jumps
     // straight to the release below.
     if (stream->_direction == IO::kReading) {
-        External* found = ExternalFactory::_singleton->FindOrLoadAs<External>(path);
+        // NOT RETAIL, print-only (VISITREPLAY.md section 1).
+        if (factory->_referenceModeEnabled)
+            ++RtObject::g_ptrCensus.read2;
+        else
+            ++RtObject::g_ptrCensus.read3;
+        External* found = nullptr;
+        if (refRow != nullptr) {
+            // EXT SEAM (NOT RETAIL, VISITREPLAY.md): FindOrLoad(GetPathForReferenceId(id))'s hit arm
+            // on the row the id named; src/ext/find_fastpath/find_fastpath.cpp has the argument.
+            const External* hit = RtObject::RtObject_ExternalFactory_FindOrLoadHitRow(factory, refRow);
+            found = const_cast<External*>(hit);   // CAST-OK: const_api
+        } else {
+            found = ExternalFactory::_singleton->FindOrLoadAs<External>(path);
+            if (refStore && found != nullptr)
+                fast->storeRef(*factory, refStoreId, path._data, path.GetLength());
+        }
         External* result = nullptr;
         if (found != nullptr && found->IsDerivedFrom(typeInfo.typeId)) {
             // CMOVNE: the loaded object survives only if it IS a T. A resource

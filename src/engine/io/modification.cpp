@@ -590,6 +590,14 @@ namespace IO {
 // (ENDGAME B.3.9 IO, D7); RtIoPortInit redirects the minted row onto it.
 Modification* Modification::_singleton = nullptr;
 
+// ext.menu_entry (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): src/ext/menu_entry/ sets them.
+int (*Modification::_extModCached)(const System::Filename& file, RtIO::Mod& out) = nullptr;
+void (*Modification::_extModStored)(const System::Filename& file, const RtIO::Mod* record) = nullptr;
+bool (*Modification::_extOverridesRestore)(Modification& mod) = nullptr;
+void (*Modification::_extOverridesBuilt)(const Modification& mod) = nullptr;
+bool (*Modification::_extRemountSkip)(Modification& mod) = nullptr;
+void (*Modification::_extRemountDone)(Modification& mod, int32_t reloads, int32_t unloads) = nullptr;
+
 int Modification::GetCount() const {
     return _mods._size;
 }

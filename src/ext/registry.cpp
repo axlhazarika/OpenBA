@@ -74,6 +74,16 @@ const Entry kEntries[] = {
       "start.",
       0, [](State& s) -> bool& { return s.fix.large_packages; } },
 
+    // docs/retail_bugs.md section 10 (known_port_issues rows 1332 / 1334): a graphics device lost
+    // during start-up recovers. Two seams: MainLoop's video error / restart pair skips the save-list
+    // walks while there is no save list yet, and the renderer backend runs the device-lost recovery
+    // when a swap-chain reset fails on a removed device (retail recovers only from Present).
+    // Off (the faithful profile): retail's spin or crash.
+    { "boot_device_lost", Tier::Fix, Class::None, true,
+      "Graphics reset during start-up",
+      "A graphics driver reset while the game is starting up no longer crashes it.",
+      0, [](State& s) -> bool& { return s.fix.boot_device_lost; } },
+
     // Extensions. Each one adds a field to Ext::Extensions and a row here:
     // Tier::Extension, its Class, default true for class A / false for B or C, and for class B or C its
     // formatVersion (>= 1). The id is [a-z0-9_]+ (the unit tests check every row).
@@ -317,6 +327,40 @@ const Entry kEntries[] = {
       "Keeps the combined file list of the mounted mods in the cache folder, so starting the game or "
       "reloading mods skips rebuilding it. Same game data.",
       0, [](State& s) -> bool& { return s.ext.package_cache; } },
+    // MENUENTRY (docs/extensions/handins/MENUENTRY.md, issue #13): entering the main menu rescans
+    // every .pkm and then remounts every package, even when nothing changed. The scan takes each
+    // unchanged .pkm's record (same name, size, write time) from the last scan, and the remount is
+    // skipped when what it would mount is what is mounted. Read at each menu entry (live).
+    { "menu_entry", Tier::Extension, Class::A, true,
+      "Quick return to the menu",
+      "Skips rescanning and remounting the mod files when returning to the main menu if none of "
+      "them changed. Same game data.",
+      0, [](State& s) -> bool& { return s.ext.menu_entry; } },
+    // VISITREPLAY (docs/extensions/handins/VISITREPLAY.md, issue #13): each loader bracket's first
+    // touch of a resource re-walks what it references; the rows that walk reaches are recorded and
+    // the next bracket reaches the same rows from the record. Read once at boot (next start).
+    { "visit_replay", Tier::Extension, Class::A, true,
+      "Remembered resource links",
+      "Remembers which resources each resource uses, so the loading after the menu, a new game or a "
+      "load skips walking them again. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.visit_replay; } },
+    // VISITREPLAY section B4: FindOrLoad's hit arm answered from a request (or a save's reference
+    // id) that already named a row. Read once at boot (next start).
+    { "find_fastpath", Tier::Extension, Class::A, true,
+      "Faster resource lookups",
+      "Remembers where each resource a load asks for already is, so loading a large mod set or a save "
+      "skips looking it up again. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.find_fastpath; } },
+    // HEAPSLACK (docs/extensions/handins/HEAPSLACK.md, issue #13): the allocator keeps the pages it
+    // would decommit at the top of a range (up to 64 MB in all) and zeroes them itself when retail
+    // would have committed them fresh. Same bytes in every allocation. Read once at boot (next start).
+    // ON by default: a MegaMod start without the derived cache 15.75 -> 14.35 s to the menu; warm
+    // starts and the stress town are unchanged.
+    { "heap_slack", Tier::Extension, Class::A, true,
+      "Fewer memory round trips",
+      "Keeps recently freed memory ready instead of handing it back to the system and asking for it "
+      "again, so large mod sets load faster. Same game data. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.heap_slack; } },
     // NOFOG (docs/extensions/handins/NOFOG.md): the fog is taken off the finished lighting each frame, so
     // the far map stays clear when the camera is zoomed out. Class A: a picture-only change, no sim effect,
     // nothing saved, live. OFF by default: how the map looks is the player's choice (like eye_camera).
@@ -324,6 +368,15 @@ const Entry kEntries[] = {
       "No fog",
       "Removes the fog that hazes the far map when the camera is zoomed far out.",
       0, [](State& s) -> bool& { return s.ext.no_fog; } },
+    // TEXQUALITY (docs/extensions/handins/TEXQUALITY.md): the large mipmapped world textures are made
+    // without their ext.texture_quality_drop largest levels (half or quarter resolution), so far less
+    // video memory and less decoding at load. Retail has no such setting. Read once at boot (next start).
+    // OFF by default: how sharp the textures are is the player's choice.
+    { "texture_quality", Tier::Extension, Class::A, false,
+      "Reduced texture quality",
+      "Loads the large world textures at half or quarter resolution (the Enhanced tab's Texture quality): "
+      "much less video memory, softer textures. Takes effect at the next start.",
+      0, [](State& s) -> bool& { return s.ext.texture_quality; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
@@ -375,6 +428,13 @@ const ValueKey kValueKeys[] = {
     // are prefetched: a re-made object is otherwise created on the render thread in the frame that draws it.
     { "create_on_demand_idle_min", "create_on_demand", 0, 120, 0,
       [](State& s) -> int32_t& { return s.val.create_on_demand_idle_min; }, nullptr, 0 },
+    // TEXQUALITY: the top mip levels a qualifying texture is made without while the row texture_quality is
+    // on: 0 = Full (the default, so the row or profile=all alone drops nothing; ruled by the user),
+    // 1 = half resolution (the combo's Half). Read once at boot. Quarter (2) was removed by the user's
+    // ruling (too blurry): the range is 0..1, so a 2 from an older settings.cfg CLAMPS to 1 (ClampValue,
+    // a range key). The code below the key still takes any drop N (texture_quality.h).
+    { "texture_quality_drop", "texture_quality", 0, 1, 0,
+      [](State& s) -> int32_t& { return s.val.texture_quality_drop; }, nullptr, 0 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

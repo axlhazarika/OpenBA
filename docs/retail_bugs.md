@@ -368,3 +368,36 @@ Fix: `fix.large_packages` (tier 1), default on: a mounted package larger than 2 
 entry offsets, unwrapped from its index and validated, and its packed reads seek 64-bit; packages
 up to 2 GiB are read exactly as retail. `src/ext/large_packages/`,
 docs/extensions/handins/LARGEPKM.md.
+
+## 10. A graphics device lost before the main menu crashes the device-lost recovery
+
+**Symptom.** A GPU driver reset (TDR) or any device removal during the boot's loader and splash
+frames, before the main menu has finished starting, ends the game with an access violation
+(READ of 0x58) inside `Engine::MainLoop::OnVideoError` instead of the device-lost round trip
+that later losses get. Reproduced by injection (`BANISHED_FORCE_DEVICE_LOST=10`,
+`docs/known_port_issues.md` row 1332) and by real driver resets on a first-run boot with a second
+fullscreen game taking the foreground (row 1334).
+
+**Retail mechanism.**
+- `MainLoop::OnVideoError` (Runtime `0x1800dc5e0`) drops every save thumbnail by walking
+  `Save::SaveLoad::_singleton->_saves` with no null test (`0x1800dcc30`: the count at `+0x58`
+  is read straight off the singleton); `MainLoop::OnVideoRestart` (`0x1800dc3b0`) calls
+  `SaveLoad::OnVideoRestart` (`0x1800c0f10`) on the same singleton.
+- The first `Save::SaveLoad` is constructed at the very end of `MenuDialogLoopT::Startup`
+  (exe `0x14009b930`: `MemAlloc(0x90)` then `SaveLoad::SaveLoad`, after `SetCursor` and the
+  menu fades). Until then the singleton is null, and the boot already presents frames (the
+  loader loops and the splash), so a loss there reaches the walk with a null singleton.
+
+**Proof it is retail.** Read in Ghidra (both bodies above); the port's walk is a transcription
+and crashed at the same READ of 0x58 with the fix off.
+
+**Lever.** The two walks: skip them while no SaveLoad exists (there are no save thumbnails to
+drop or rebuild yet).
+
+Fix: `fix.boot_device_lost` (tier 1), default on, two seams. `OnVideoError` step 5 and
+`OnVideoRestart` step 3 are skipped while `Save::SaveLoad::_singleton` is null (seam
+`Engine::MainLoop::_extFixBootDeviceLost`); with a SaveLoad both run as retail. And the DX11
+backend's `ContextData::BeginCommands` runs the device-lost recovery when a swap-chain reset
+fails on a removed device (retail recovers only from Present, which such a reset never reaches;
+seam `BootDeviceLostBackend::SetFixFlag`, `src/render/common/boot_device_lost/`). Off under
+`/profile:faithful`: retail's spin in the reset, or the crash above.

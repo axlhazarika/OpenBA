@@ -219,6 +219,7 @@
 #include "options.h"
 #include "dx11_backend_access.h"
 #include "async_gpu_create/async_create.h"   // NOT RETAIL: ext.async_gpu_create
+#include "boot_device_lost/boot_device_lost.h"   // NOT RETAIL: fix.boot_device_lost
 #include "system/Error.h"   // ENDGAME B.3.4b System callers: System::Error (-Iruntime/types)
 // ENDGAME B.3.5 block VC: `Video::Viewport` and `Video::Context`.
 #include "video/Context.h"
@@ -424,6 +425,10 @@ ContextData::~ContextData() {
 // ENDGAME B.3.5 block J: the `if (!GetImports())` forward-to-original readiness
 // guard is GONE with the four imports this slot used (and B5 D9 deleted the
 // forwarding template itself: it was never instantiated).
+// Finish's device-lost recovery (below Finish's neighbour EndCommands).
+static void RecoverLostDevice(::Video::Device* device, DeviceData* dd,
+                              ID3D11Device* d3dDevice, HRESULT hr);
+
 bool ContextData::BeginCommands() {
     ::Video::Context* const ctx = _owner;
     ctx->_trianglesSubmitted = 0;
@@ -434,9 +439,31 @@ bool ContextData::BeginCommands() {
     ::Video::Device* const device = ctx->_device;
     if (device->settingsChanged != 0) {
         // 0x180004340 — DeviceData swap-chain resize/recreate. Lane L6's
-        // function; its result is discarded exactly as the original discards
-        // it (`XOR AL,AL`).
-        Dx11_DeviceData_Resize(Dx11DeviceDataOf(device));   // B5 DEV-A: typed
+        // function; retail discards its result (`XOR AL,AL`).
+        DeviceData* const dd = Dx11DeviceDataOf(device);   // B5 DEV-A: typed
+        const int resized = Dx11_DeviceData_Resize(dd);
+
+        // FIX SEAM (NOT RETAIL, docs/retail_bugs.md section 10, known_port_issues row
+        // 1334): with fix.boot_device_lost on, a reset that failed on a REMOVED
+        // device enters Finish's device-lost recovery here. Retail reaches that
+        // recovery only from Present, which a failed reset never gets to: once the
+        // device is gone ResizeBuffers answers DXGI_ERROR_DEVICE_REMOVED on every
+        // retry, so the frame loop spun in the reset forever, or the first read-back
+        // (the cursor's staging Map) crashed on the dead device. A reset refused for
+        // any other reason (SetFullscreenState without the foreground, a hidden or
+        // minimised window) leaves the device alive and is retried as retail retries.
+        // Row off (and under the faithful profile): retail's retry, spin or crash.
+        if (resized == 0 && BootDeviceLost::On()) {
+            ID3D11Device* const d3dDevice = dd->d3dDevice;
+            const HRESULT removed = d3dDevice->GetDeviceRemovedReason();
+            if (removed != 0) {
+                std::fprintf(stderr, "[DeviceLost] reset failed on a removed device "
+                                     "(reason 0x%08lx): device-lost recovery\n",
+                             static_cast<unsigned long>(removed));
+                std::fflush(stderr);
+                RecoverLostDevice(device, dd, d3dDevice, removed);
+            }
+        }
         return false;
     }
 
@@ -507,6 +534,73 @@ static_assert(static_cast<int>(DXGI_FORMAT_B8G8R8A8_UNORM) == 0x57,
               "the literal 0x57 stored at 0x180001778");
 
 // ============================================================
+// Finish's device-lost recovery from step 5 on (0x18000184f..), unchanged. NOT RETAIL
+// (structure only): lifted out of Finish so BeginCommands can run it too (see there);
+// Finish calls it exactly where these lines used to be.
+// ============================================================
+static void RecoverLostDevice(::Video::Device* device, DeviceData* dd,
+                              ID3D11Device* d3dDevice, HRESULT hr) {
+    // B5 W0: the ONLY place dx11 read its own hand table by INDEX. Retail
+    // (0x18000184f / 0x18000185c) dispatches slots 3 and 2 of the DeviceData;
+    // the abstract base `Video::DeviceData` declares those slots by name in
+    // retail order, so the by-name call reaches retail slots 3 and 2 of the
+    // compiler's DeviceData table (B5 DEV-A: DeviceData is a real subclass).
+    // B5 CTX: `Video::Device::deviceData` is already that typed base pointer,
+    // so the base needs no cast (B5 DEV-A: and OwnerDeviceData's bridge is the
+    // single dx11 downcast Dx11DeviceDataOf now; DeviceData wears the compiler's table).
+    ::Video::DeviceData* const ddBase = device->deviceData;
+    ::Video::Device*     const owner  = ddBase->_owner;   // DeviceData+0x08
+
+    void (*const onLost)() = owner->onVideoError;          // Device+0x50
+    std::fprintf(stderr, "[DeviceLost] hr=0x%08lx onLost=%p -> %s\n",
+                 static_cast<unsigned long>(hr), (void*)onLost,
+                 onLost ? "calling" : "*** NULL, notification SKIPPED ***");
+    // B5 CTX (B5_RULES §6 a): diagnostic only — DEVLOST_FINDING noted the
+    // removed reason is never logged. A query, not a state change.
+    std::fprintf(stderr, "[DeviceLost] removed reason=0x%08lx\n",
+                 static_cast<unsigned long>(d3dDevice->GetDeviceRemovedReason()));
+    std::fflush(stderr);
+    if (onLost) onLost();
+
+    // NOT RETAIL (ext.async_gpu_create): creates queued against the lost device finish first.
+    AsyncCreate::Drain();
+    owner->ReleaseDynamic();
+
+    dd->d3dDevice = nullptr;
+
+    ddBase->Shutdown();                           // retail slot 3
+    const bool created = ddBase->CreateDevice();  // retail slot 2
+
+    if (!created) {
+        // Same five strings, same fallback, same order of tests as
+        // 0x18000189a-0x1800018f6. They are our own literals rather than the
+        // .rdata copies in the shipped DLL; System::Error::SetText copies the
+        // text, so the observable result is identical.
+        const char* msg;
+        if      (hr == DXGI_ERROR_INVALID_CALL)           msg = "D3D11 Error: DXGI_ERROR_INVALID_CALL!";
+        else if (hr == DXGI_ERROR_DEVICE_REMOVED)         msg = "D3D11 Error: DXGI_ERROR_DEVICE_REMOVED!";
+        else if (hr == DXGI_ERROR_DEVICE_HUNG)            msg = "D3D11 Error: DXGI_ERROR_DEVICE_HUNG!";
+        else if (hr == DXGI_ERROR_DEVICE_RESET)           msg = "D3D11 Error: DXGI_ERROR_DEVICE_RESET!";
+        else if (hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR)  msg = "D3D11 Error: DXGI_ERROR_DRIVER_INTERNAL_ERROR!";
+        else                                              msg = "D3D11 Error: UNKNOWN!";
+        System::Error::SetText(msg, true);
+        System::Error::Display();
+        return;
+    }
+
+    owner->RecreateDynamic();
+
+    void (*const onRestored)() = owner->onVideoRestart;    // Device+0x58
+    std::fprintf(stderr, "[DeviceLost] recreate OK; onRestored=%p -> %s\n",
+                 (void*)onRestored,
+                 onRestored ? "calling" : "*** NULL, notification SKIPPED ***");
+    std::fflush(stderr);
+    if (onRestored) onRestored();
+    std::fprintf(stderr, "[DeviceLost] device-lost round trip COMPLETE\n");
+    std::fflush(stderr);
+}
+
+// ============================================================
 // Slot 3 — void Finish()  (0x1800017c0)
 //
 // Present, then the whole device-lost recovery path.
@@ -573,64 +667,7 @@ void ContextData::Finish() {
         hr = d3dDevice->GetDeviceRemovedReason();
     if (hr == 0) return;
 
-    // B5 W0: the ONLY place dx11 read its own hand table by INDEX. Retail
-    // (0x18000184f / 0x18000185c) dispatches slots 3 and 2 of the DeviceData;
-    // the abstract base `Video::DeviceData` declares those slots by name in
-    // retail order, so the by-name call reaches retail slots 3 and 2 of the
-    // compiler's DeviceData table (B5 DEV-A: DeviceData is a real subclass).
-    // B5 CTX: `Video::Device::deviceData` is already that typed base pointer,
-    // so the base needs no cast (B5 DEV-A: and OwnerDeviceData's bridge is the
-    // single dx11 downcast Dx11DeviceDataOf now; DeviceData wears the compiler's table).
-    ::Video::DeviceData* const ddBase = device->deviceData;
-    ::Video::Device*     const owner  = ddBase->_owner;   // DeviceData+0x08
-
-    void (*const onLost)() = owner->onVideoError;          // Device+0x50
-    std::fprintf(stderr, "[DeviceLost] hr=0x%08lx onLost=%p -> %s\n",
-                 static_cast<unsigned long>(hr), (void*)onLost,
-                 onLost ? "calling" : "*** NULL, notification SKIPPED ***");
-    // B5 CTX (B5_RULES §6 a): diagnostic only — DEVLOST_FINDING noted the
-    // removed reason is never logged. A query, not a state change.
-    std::fprintf(stderr, "[DeviceLost] removed reason=0x%08lx\n",
-                 static_cast<unsigned long>(d3dDevice->GetDeviceRemovedReason()));
-    std::fflush(stderr);
-    if (onLost) onLost();
-
-    // NOT RETAIL (ext.async_gpu_create): creates queued against the lost device finish first.
-    AsyncCreate::Drain();
-    owner->ReleaseDynamic();
-
-    dd->d3dDevice = nullptr;
-
-    ddBase->Shutdown();                           // retail slot 3
-    const bool created = ddBase->CreateDevice();  // retail slot 2
-
-    if (!created) {
-        // Same five strings, same fallback, same order of tests as
-        // 0x18000189a-0x1800018f6. They are our own literals rather than the
-        // .rdata copies in the shipped DLL; System::Error::SetText copies the
-        // text, so the observable result is identical.
-        const char* msg;
-        if      (hr == DXGI_ERROR_INVALID_CALL)           msg = "D3D11 Error: DXGI_ERROR_INVALID_CALL!";
-        else if (hr == DXGI_ERROR_DEVICE_REMOVED)         msg = "D3D11 Error: DXGI_ERROR_DEVICE_REMOVED!";
-        else if (hr == DXGI_ERROR_DEVICE_HUNG)            msg = "D3D11 Error: DXGI_ERROR_DEVICE_HUNG!";
-        else if (hr == DXGI_ERROR_DEVICE_RESET)           msg = "D3D11 Error: DXGI_ERROR_DEVICE_RESET!";
-        else if (hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR)  msg = "D3D11 Error: DXGI_ERROR_DRIVER_INTERNAL_ERROR!";
-        else                                              msg = "D3D11 Error: UNKNOWN!";
-        System::Error::SetText(msg, true);
-        System::Error::Display();
-        return;
-    }
-
-    owner->RecreateDynamic();
-
-    void (*const onRestored)() = owner->onVideoRestart;    // Device+0x58
-    std::fprintf(stderr, "[DeviceLost] recreate OK; onRestored=%p -> %s\n",
-                 (void*)onRestored,
-                 onRestored ? "calling" : "*** NULL, notification SKIPPED ***");
-    std::fflush(stderr);
-    if (onRestored) onRestored();
-    std::fprintf(stderr, "[DeviceLost] device-lost round trip COMPLETE\n");
-    std::fflush(stderr);
+    RecoverLostDevice(device, dd, d3dDevice, hr);
 }
 static_assert(static_cast<unsigned>(DXGI_ERROR_DEVICE_REMOVED) == 0x887a0005u, "hr constant");
 static_assert(static_cast<unsigned>(DXGI_ERROR_DEVICE_RESET)   == 0x887a0007u, "hr constant");

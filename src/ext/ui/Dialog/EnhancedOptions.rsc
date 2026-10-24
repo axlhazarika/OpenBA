@@ -15,6 +15,7 @@ StringTable aoStrings
 		{ String _name = "BetterTrees";		String _text = "Better trees"; }
 		{ String _name = "MaxShadowRes";	String _text = "Max shadow resolution"; }
 		{ String _name = "SeamlessLoops";	String _text = "Seamless ambient loops"; }
+		{ String _name = "TextureQuality";	String _text = "Texture quality"; }
 		{ String _name = "DerivedCache";	String _text = "Data cache on disk: @0"; }
 		{ String _name = "DerivedCacheClear";	String _text = "Clear cache"; }
 	]
@@ -71,6 +72,18 @@ ButtonDescription buttonEnhanced : "Options.rsc:buttonGame"
 	ElementDescription _content = "labelEnhanced";
 }
 
+// Texture quality (TEXQUALITY): 0 = the bool row ext.texture_quality off (every level, retail), 1 = on
+// with ext.texture_quality_drop 1 (seen after the next start). Full and Half only: Quarter was removed by
+// the user's ruling (too blurry).
+StringTable textureQualityItems
+{
+	Entry _strings
+	[
+		{ String _name = "Item0";		String _text = "Full";					}
+		{ String _name = "Item1";		String _text = "Half (next start)";		}
+	]
+}
+
 // The tab button, the combos and the slider derive from the Options tabs' own objects
 // (Options.rsc:buttonGame, comboAutosave, sliderUI: the packages hold only objects a game dialog
 // reaches, and the exe derives at run time, KITFREE.md); each base sets only fields overridden
@@ -100,8 +113,8 @@ LabelDescription labelEnhanced
 	String _spriteName = "OptionsEnhanced";
 }
 
-// The page: Options.rsc:gameOptionsTable's shape, six rows (AO combo, AO slider, Better trees, shadow,
-// loops, the derived-data cache's size + its "Clear cache" button: COMPRESSAO).
+// The page: Options.rsc:gameOptionsTable's shape, seven rows (AO combo, AO slider, Better trees, shadow,
+// loops, texture quality (TEXQUALITY), the derived-data cache's size + its "Clear cache" button: COMPRESSAO).
 TableDescription enhancedOptions
 {
 	int _leftPad = 6;
@@ -112,7 +125,7 @@ TableDescription enhancedOptions
 	Alignment _alignment = TopLeft;
 
 	int _width = 2;
-	int _height = 6;
+	int _height = 7;
 
 	TableItem _items
 	[
@@ -121,14 +134,16 @@ TableDescription enhancedOptions
 		{ int _x = 0; int _y = 2; ElementDescription _element = "textBetterTrees"; }
 		{ int _x = 0; int _y = 3; ElementDescription _element = "textMaxShadowRes"; }
 		{ int _x = 0; int _y = 4; ElementDescription _element = "textSeamlessLoops"; }
-		{ int _x = 0; int _y = 5; ElementDescription _element = "textDerivedCache"; }
+		{ int _x = 0; int _y = 5; ElementDescription _element = "textTextureQuality"; }
+		{ int _x = 0; int _y = 6; ElementDescription _element = "textDerivedCache"; }
 
 		{ int _x = 1; int _y = 0; ElementDescription _element = "comboAoQuality"; }
 		{ int _x = 1; int _y = 1; ElementDescription _element = "sliderAoOpacity"; }
 		{ int _x = 1; int _y = 2; ElementDescription _element = "comboBetterTrees"; }
 		{ int _x = 1; int _y = 3; ElementDescription _element = "comboMaxShadowRes"; }
 		{ int _x = 1; int _y = 4; ElementDescription _element = "comboSeamlessLoops"; }
-		{ int _x = 1; int _y = 5; ElementDescription _element = "buttonDerivedCacheClear"; }
+		{ int _x = 1; int _y = 5; ElementDescription _element = "comboTextureQuality"; }
+		{ int _x = 1; int _y = 6; ElementDescription _element = "buttonDerivedCacheClear"; }
 	]
 }
 
@@ -145,6 +160,7 @@ TextDescription textAoOpacity : "textAoOption" { String _text = "AoOpacity"; }
 TextDescription textBetterTrees : "textAoOption" { String _text = "BetterTrees"; }
 TextDescription textMaxShadowRes : "textAoOption" { String _text = "MaxShadowRes"; }
 TextDescription textSeamlessLoops : "textAoOption" { String _text = "SeamlessLoops"; }
+TextDescription textTextureQuality : "textAoOption" { String _text = "TextureQuality"; }
 TextDescription textDerivedCache : "textAoOption" { String _text = "DerivedCache"; }
 
 // The derived-data cache's "Clear cache" (COMPRESSAO): SharedElements.rsc's Apply button with our
@@ -193,4 +209,11 @@ ComboDescription comboSeamlessLoops : "Options.rsc:comboAutosave"
 	int _minWidth = 180;
 	int _bottomPad = 3;
 	StringTable _initialData = "EnhancedOptions.rsc:seamlessLoopsItems";
+}
+
+ComboDescription comboTextureQuality : "Options.rsc:comboAutosave"
+{
+	int _minWidth = 180;
+	int _bottomPad = 3;
+	StringTable _initialData = "EnhancedOptions.rsc:textureQualityItems";
 }

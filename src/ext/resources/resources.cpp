@@ -109,6 +109,8 @@ void Pin(Object::External* obj, const char* expandedPath) {
     // The factory's own insert first (the key is the expanded path, as
     // FindOrLoad sets it), then the pin as a second touch so the reference
     // visit runs; FindOrLoad's own Add after this is a hit that changes nothing.
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): a `_path` write.
+    Object::NotifyResourceEvent(Object::ResourceEvent::PathWrite, nullptr, obj, expandedPath);
     obj->_path = System::Filename(expandedPath);
     f->Add(obj);
     const int32_t savedBit = f->_cleanBitIndex;
@@ -144,6 +146,8 @@ Object::External* Provide(const char* path) {
 
 void SetPath(Object::External* obj, const char* path) {
     if (obj == nullptr || path == nullptr) return;
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): a `_path` write.
+    Object::NotifyResourceEvent(Object::ResourceEvent::PathWrite, nullptr, obj, path);
     obj->_path = System::Filename(path);
 }
 

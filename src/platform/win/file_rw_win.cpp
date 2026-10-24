@@ -18,6 +18,13 @@ FileHandle FileOpenExclusive(const PathChar* path) {
     return reinterpret_cast<FileHandle>(h);  // CAST-OK: win32
 }
 
+FileHandle FileOpenWriteShared(const PathChar* path, bool sequentialScan) {
+    const DWORD flags = FILE_ATTRIBUTE_NORMAL | (sequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0);
+    HANDLE h = CreateFileW(reinterpret_cast<LPCWSTR>(path), GENERIC_READ | GENERIC_WRITE,  // CAST-OK: win32
+                           FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, flags, nullptr);
+    return reinterpret_cast<FileHandle>(h);  // CAST-OK: win32
+}
+
 int32_t FileTruncate(FileHandle h, int64_t size) {
     if (size < 0) return 0;
     LARGE_INTEGER d;

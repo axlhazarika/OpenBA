@@ -618,6 +618,9 @@ void FileSystem::ClosePackages() {
     // so are their 64-bit offsets. The next LoadPackages rebuilds them.
     _extWidePackages = nullptr;
     _extWideCount    = 0;
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/MENUENTRY.md): the packages are gone; ext.menu_entry
+    // forgets its remount fingerprint unless this close is the remount's own.
+    if (_extPackagesClosed != nullptr) _extPackagesClosed(*this);
 
 }
 

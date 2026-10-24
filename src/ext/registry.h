@@ -64,6 +64,7 @@ struct Fixes {
     bool rock_seat         = true;   // docs/retail_bugs.md §7, src/ext/rock_seat/ (docs/extensions/handins/ROCKSEAT.md): render only
     bool terrain_resort    = true;   // docs/retail_bugs.md §8, src/ext/terrain_resort/ (docs/extensions/handins/TERRAINRESORT.md)
     bool large_packages    = true;   // docs/retail_bugs.md §9, src/ext/large_packages/ (docs/extensions/handins/LARGEPKM.md): engine seam IO::FileSystem::_extPackagesMounted
+    bool boot_device_lost  = true;   // docs/retail_bugs.md §10 (engine seam Engine::MainLoop::_extFixBootDeviceLost, backend seam BootDeviceLostBackend::SetFixFlag)
 };
 
 // One bool per registered extension (settings key `ext.<id>`). Each extension
@@ -106,7 +107,12 @@ struct Extensions {
     bool share_gpu_data = false; // class A, next start: src/ext/share_gpu_data/, backend seam ShareGpuDataBackend (docs/extensions/handins/SHAREGPUDATA.md)
     bool package_cache = false; // class A, live at each mount: src/ext/package_cache/, seams IO::FileSystem::_extIndexRestore / _extIndexBuilt + the derived cache (docs/extensions/handins/PKGCACHE.md)
     bool create_on_demand = false; // class A, next start: src/ext/create_on_demand/, backend seam CreateOnDemandBackend + seams IO::FileSystem::_extHandleClosing, Video::ImageBuffer::_extLevelSource, Graphics::MeshInstance::_extMeshAssigned (docs/extensions/handins/CREATEONDEMAND.md)
+    bool texture_quality = false; // class A, next start: src/ext/texture_quality/, backend seam TextureQualityBackend + the level readers (docs/extensions/handins/TEXQUALITY.md)
+    bool menu_entry = false; // class A, live at each menu entry: src/ext/menu_entry/, seams IO::Modification::_extModCached / _extModStored / _extOverridesRestore / _extOverridesBuilt / _extRemountSkip / _extRemountDone + IO::FileSystem::_extPackagesClosed (docs/extensions/handins/MENUENTRY.md)
     bool stream_cache = false; // class A, next start: src/ext/stream_cache/, seams Object::ExternalFactory::_extLoadBegin/_extLoadEnd, IO::CompressedStream::_extReadTap, Engine::LoaderLoop::_extLoadDone, CreateOnDemand::g_altLocate/g_altSkip + the derived cache (docs/extensions/handins/STREAMCACHE.md)
+    bool visit_replay = false; // class A, next start: src/ext/visit_replay/, seam Object::ExternalFactory::_extVisitReplay (docs/extensions/handins/VISITREPLAY.md)
+    bool find_fastpath = false; // class A, next start: src/ext/find_fastpath/, seam Object::ExternalFactory::_extFindFast (docs/extensions/handins/VISITREPLAY.md)
+    bool heap_slack = false; // class A, next start: src/ext/heap_slack/, seam System::MemoryAllocator::_extCommitSeam (docs/extensions/handins/HEAPSLACK.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.
@@ -132,6 +138,7 @@ struct Values {
     int32_t max_shadow_size = 4096; // ext.max_shadow_size 4096 | 8192 (owner max_shadow_res): the sun map at High (FAA-SHADOW2)
     int32_t rock_seat_mode = 2; // ext.rock_seat_mode 1..2 (owner fix rock_seat): 1 sink to the lowest ground under the rock, 2 tilt to the slope (the default, ROCKSEAT.md)
     int32_t create_on_demand_idle_min = 0; // ext.create_on_demand_idle_min 0..120 (owner create_on_demand): minutes unused before a made object is given back, 0 = never, the default until re-makes are prefetched (CREATEONDEMAND.md section 7)
+    int32_t texture_quality_drop = 0; // ext.texture_quality_drop 0..1 (owner texture_quality): the top mip levels a qualifying texture is made without, 0 = Full (the default: the row or profile=all alone drops nothing), 1 = Half; an older 2 (Quarter, removed by ruling) clamps to 1; read once at boot (TEXQUALITY.md)
     int32_t derived_cache_mb = 4096; // ext.derived_cache_mb 256..65536 (owner compress_ao, the cache's first user): the derived-data cache's cap in MB (COMPRESSAO.md)
 };
 
@@ -381,6 +388,13 @@ int32_t SetValueAndRecord(const ValueKey& k, int64_t v);
 int32_t SetMaxShadowResAndRecord(int32_t size);
 // The same choice read back: 0 while the row is off (requested), else ext.max_shadow_size.
 int32_t MaxShadowResChoice();
+// "Texture quality" as one choice (TEXQUALITY; the Enhanced tab's combo): 0 = the row
+// ext.texture_quality off (ext.texture_quality_drop kept), 1 = the drop key (clamped to its range,
+// 0..1 since Quarter was removed by ruling), then the row on. Recorded only: the drop is read once at
+// boot (next start). The caller flushes. Returns the requested choice now (0 or 1).
+int32_t SetTextureQualityAndRecord(int32_t drop);
+// The same choice read back: 0 while the row is off (requested), else ext.texture_quality_drop.
+int32_t TextureQualityChoice();
 void PersistSettings();
 
 }  // namespace Ext

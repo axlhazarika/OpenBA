@@ -7,8 +7,12 @@
 //     or past a segment fails);
 //   * a failed read, a failed load, an empty recording, an overlap mismatch or more than kRecordMax
 //     bytes drop the record; a recording seeded from a record widens it;
-//   * a chunk of several records round-trips through a Bundle, is found by its full identity only,
-//     a later chunk's record replaces an earlier one, and a malformed chunk is refused whole;
+//   * a chunk of several records round-trips through a Bundle, is found by its offset and size, a
+//     later chunk's record replaces an earlier one, and a malformed chunk is refused whole;
+//   * a record carries the entry's block count and directory byte for byte (through widening and
+//     consolidation), a directory that disagrees with the total or the entry is refused, and the
+//     package identity changes with every field it is made of (an identical copy with a new
+//     modification time included: one cold run, then warm again);
 //   * a SegmentStream serves the record's bytes in the decompressed stream's coordinates, and a
 //     read outside the record falls back to the engine's own CompressedStream over the same entry
 //     (positioned where the read was) for the rest of the load; without an opener it fails;
@@ -44,17 +48,37 @@ std::vector<uint8_t> Pattern(uint32_t n, uint8_t seed) {
 
 EntryId Id(uint64_t offset) {
     EntryId id;
-    id.offset     = offset;
-    id.size       = 1000;
-    id.blockCount = 3;
-    id.dirHash    = 0x1234567890abcdefull ^ offset;
+    id.offset = offset;
+    id.size   = 1000;
     return id;
+}
+
+// An entry's first 4 + 8n bytes for a stream of `total` decompressed bytes: n = the 32 KB blocks,
+// each stored after the directory (sourceOffset), compressed sizes arbitrary but nonzero.
+std::vector<uint8_t> Head(uint32_t total) {
+    const uint32_t n = total == 0 ? 1 : (total + kBlockBytes - 1) / kBlockBytes;
+    std::vector<uint8_t> h(4 + static_cast<size_t>(n) * 8);
+    std::memcpy(h.data(), &n, 4);
+    for (uint32_t b = 0; b < n; ++b) {
+        const uint32_t src = 4 + n * 8 + b * 1000;
+        const uint16_t c16 = static_cast<uint16_t>(500 + b);
+        const uint16_t u16 = static_cast<uint16_t>(b + 1 < n ? kBlockBytes : total - b * kBlockBytes);
+        std::memcpy(h.data() + 4 + 8 * b, &src, 4);
+        std::memcpy(h.data() + 4 + 8 * b + 4, &c16, 2);
+        std::memcpy(h.data() + 4 + 8 * b + 6, &u16, 2);
+    }
+    return h;
+}
+
+void BeginT(Recorder& r, const EntryId& id, uint32_t total) {
+    const std::vector<uint8_t> h = Head(total);
+    r.Begin(id, total, h.data());
 }
 
 // A recorder fed the reads [a,b) of `plain` in the given order; the record appended to `chunk`.
 bool RecordReads(Recorder& r, const EntryId& id, const std::vector<uint8_t>& plain,
                  const std::vector<std::pair<uint32_t, uint32_t>>& reads, std::vector<uint8_t>& chunk) {
-    r.Begin(id, static_cast<uint32_t>(plain.size()));
+    BeginT(r, id, static_cast<uint32_t>(plain.size()));
     for (const auto& rd : reads) r.Note(rd.first, rd.second, plain.data() + rd.first);
     return r.Finish(chunk);
 }
@@ -237,7 +261,7 @@ UNIT_TEST(ext_stream_cache_record_overlaps_merge_or_drop) {
     // an overlap whose bytes disagree drops the record
     std::vector<uint8_t> other = plain;
     other[5] ^= 0xff;
-    r.Begin(Id(2), 20000);
+    BeginT(r, Id(2), 20000);
     r.Note(0, 10, plain.data());
     r.Note(4, 10, other.data() + 4);
     CHECK(r.Bad());
@@ -254,13 +278,13 @@ UNIT_TEST(ext_stream_cache_record_dropped_when_not_storable) {
     const size_t header = chunk.size();
     Recorder r;
     // a failed read
-    r.Begin(Id(2), 20000);
+    BeginT(r, Id(2), 20000);
     r.Note(0, 4, plain.data());
     r.Fail();
     CHECK(!r.Finish(chunk));
     CHECK_EQ(chunk.size(), header);
     // over the limit
-    r.Begin(Id(3), 20000);
+    BeginT(r, Id(3), 20000);
     r.Note(0, kRecordMax, plain.data());
     CHECK(r.Storable());
     r.Note(kRecordMax + 8, 1, plain.data() + kRecordMax + 8);
@@ -268,12 +292,12 @@ UNIT_TEST(ext_stream_cache_record_dropped_when_not_storable) {
     CHECK(!r.Finish(chunk));
     CHECK_EQ(chunk.size(), header);
     // over the limit by widening
-    r.Begin(Id(3), 20000);
+    BeginT(r, Id(3), 20000);
     r.Note(0, kRecordMax, plain.data());
     r.Note(kRecordMax - 4, 8, plain.data() + kRecordMax - 4);
     CHECK(r.Overflowed());
     // nothing read
-    r.Begin(Id(4), 20000);
+    BeginT(r, Id(4), 20000);
     CHECK(!r.Finish(chunk));
     // exactly the limit, as one read
     CHECK(RecordReads(r, Id(5), plain, {{0, kRecordMax}}, chunk));
@@ -346,15 +370,9 @@ UNIT_TEST(ext_stream_cache_bundle_round_trip_and_identity) {
     std::vector<uint8_t> out(5000);
     CHECK(whole->Read(0, 5000, out.data()));
     CHECK(out == plain);
-    // the identity is all four fields
+    // within its package the identity is the offset and the size
     EntryId other = Id(100);
     other.size = 1001;
-    CHECK(b.Find(other) == nullptr);
-    other = Id(100);
-    other.dirHash ^= 1;
-    CHECK(b.Find(other) == nullptr);
-    other = Id(100);
-    other.blockCount = 4;
     CHECK(b.Find(other) == nullptr);
     CHECK(b.Find(Id(101)) == nullptr);
     CHECK(b.Find(Id(100)) != nullptr);
@@ -398,9 +416,10 @@ UNIT_TEST(ext_stream_cache_bundle_refuses_malformed_chunks) {
     bad = good;
     {
         uint8_t tmp[8];
-        std::memcpy(tmp, bad.data() + kChunkHeader + kRecordHeader, 8);
-        std::memcpy(bad.data() + kChunkHeader + kRecordHeader, bad.data() + kChunkHeader + kRecordHeader + 8, 8);
-        std::memcpy(bad.data() + kChunkHeader + kRecordHeader + 8, tmp, 8);
+        const size_t segs = kChunkHeader + kRecordHeader + 8;   // past the one-block directory
+        std::memcpy(tmp, bad.data() + segs, 8);
+        std::memcpy(bad.data() + segs, bad.data() + segs + 8, 8);
+        std::memcpy(bad.data() + segs + 8, tmp, 8);
     }
     CHECK(!b.AddChunk(bad));
     // empty and header-only
@@ -739,4 +758,129 @@ UNIT_TEST(ext_stream_cache_read_back_falls_back_when_the_start_is_missing) {
     CHECK_EQ(r.next, 0u);
     CHECK_EQ(r.read, 0u);
     CHECK_EQ(f.Records(), static_cast<size_t>(0));
+}
+
+UNIT_TEST(ext_stream_cache_record_carries_the_directory) {
+    // The record holds the entry's block count and directory byte for byte (a hit answers
+    // create_on_demand's range checks from it); a real three-block entry's head round-trips.
+    const std::vector<uint8_t> plain = Pattern(70000, 21);
+    const std::vector<uint8_t> entry = BuildEntry(plain);
+    const uint32_t headBytes = 4 + 3 * 8;
+    CHECK_EQ(DirectoryTotal(entry.data()), 70000u);
+    EntryId id;
+    id.offset = 4242;
+    id.size   = static_cast<uint32_t>(entry.size());
+    std::vector<uint8_t> chunk;
+    BeginChunk(chunk);
+    Recorder r;
+    r.Begin(id, DirectoryTotal(entry.data()), entry.data());
+    r.Note(0, 64, plain.data());
+    r.Note(66000, 8, plain.data() + 66000);
+    CHECK(r.Finish(chunk));
+    EndChunk(chunk, 1);
+    Bundle b;
+    CHECK(b.AddChunk(chunk));
+    const RecordView* v = b.Find(id);
+    CHECK(v != nullptr);
+    CHECK_EQ(v->blockCount, 3u);
+    CHECK_EQ(v->HeadBytes(), headBytes);
+    CHECK(std::memcmp(v->head, entry.data(), headBytes) == 0);
+    CHECK_EQ(v->total, 70000u);
+    // a seeded (widened) record keeps the same directory
+    r.Seed(*v);
+    r.Note(30000, 4, plain.data() + 30000);
+    std::vector<uint8_t> chunk2;
+    BeginChunk(chunk2);
+    CHECK(r.Finish(chunk2));
+    EndChunk(chunk2, 1);
+    CHECK(b.AddChunk(chunk2));
+    v = b.Find(id);
+    CHECK_EQ(v->segCount, 3u);
+    CHECK(std::memcmp(v->head, entry.data(), headBytes) == 0);
+    // and so does the consolidated chunk
+    Bundle c;
+    CHECK(c.AddChunk(b.Consolidate()));
+    CHECK(std::memcmp(c.Find(id)->head, entry.data(), headBytes) == 0);
+    // a directory that does not describe the recorded total, or does not fit the entry, is refused
+    std::vector<uint8_t> bad = chunk;
+    bad[kChunkHeader + kRecordHeader + 2 * 8 + 6] ^= 1;   // the last block's uncompressed size
+    CHECK(!Bundle().AddChunk(bad));
+    bad = chunk;
+    const uint32_t tiny = 20;                             // 4 + 3 x 8 > 20
+    std::memcpy(bad.data() + kChunkHeader + 8, &tiny, 4);
+    CHECK(!Bundle().AddChunk(bad));
+    // the old format (version 2) is not read: a stale cache rebuilds
+    bad = chunk;
+    const uint32_t v2 = 2;
+    std::memcpy(bad.data() + 4, &v2, 4);
+    CHECK_EQ(ChunkRecordCount(bad), 0u);
+    CHECK(!Bundle().AddChunk(bad));
+}
+
+UNIT_TEST(ext_stream_cache_package_identity) {
+    PackageStamp s;
+    s.crc         = 0xdf769ff1u;
+    s.version     = 0x10007ff;
+    s.userVersion = 10;
+    s.fileCount   = 3;
+    s.name        = "MegaMod3";
+    s.fileSize    = 1910799586;
+    s.writeTime   = 0x01dc4e1234567890ull;
+    s.table       = {16, 100, 116, 2000, 2116, 64};
+    const uint64_t id = PackageIdentity(s);
+    CHECK_EQ(PackageIdentity(s), id);   // a function of the stamp alone
+    PackageStamp t = s;
+    t.fileSize += 1;
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.writeTime += 1;                   // an identical copy with a new modification time
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.crc ^= 1;
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.version += 1;
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.userVersion += 1;
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.name = "MegaMod4";
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.table[3] += 1;                    // one entry's size
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.table[2] += 4;                    // one entry's offset
+    CHECK(PackageIdentity(t) != id);
+    t = s;
+    t.fileCount = 2;
+    t.table.resize(4);                  // an entry fewer
+    CHECK(PackageIdentity(t) != id);
+
+    // The cache by identity, as the stream cache keys it: the copy with a new time finds nothing
+    // (one cold run), records under its own identity, and the next start hits.
+    std::vector<std::pair<uint64_t, std::vector<uint8_t>>> store;
+    auto find = [&store](uint64_t key) -> const std::vector<uint8_t>* {
+        for (const auto& kv : store) {
+            if (kv.first == key) return &kv.second;
+        }
+        return nullptr;
+    };
+    const std::vector<uint8_t> plain = Pattern(5000, 3);
+    std::vector<uint8_t> chunk;
+    BeginChunk(chunk);
+    Recorder r;
+    CHECK(RecordReads(r, Id(116), plain, {{0, 5000}}, chunk));
+    EndChunk(chunk, 1);
+    store.emplace_back(id, chunk);
+    t = s;
+    t.writeTime += 10000000;            // touched one second later, same bytes
+    const uint64_t copy = PackageIdentity(t);
+    CHECK(find(copy) == nullptr);       // cold
+    store.emplace_back(copy, chunk);    // the cold run's recording
+    Bundle warm;
+    CHECK(find(copy) != nullptr);
+    CHECK(warm.AddChunk(*find(copy)));
+    CHECK(warm.Find(Id(116)) != nullptr);   // warm again
 }

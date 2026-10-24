@@ -381,6 +381,30 @@ public:
     // are the same eight bytes. Written by the ??0Modification door
     // (engine/singleton_ctors.cpp) and ??1Modification (iobase_vtables.cpp).
     static Modification* _singleton;
+
+    // ---- ext.menu_entry (NOT RETAIL, docs/extensions/handins/MENUENTRY.md) -------------------
+    // Engine-side seams (DESIGN.md hook rule 5), null by default and under the faithful profile.
+    //
+    // RefreshList, loop 1, per .pkm found: _extModCached fills `out` (a fresh stack Mod whose
+    // `file` is set) with the record ReadPackfile and the path-set loop would build, and answers
+    // kModRead (nothing cached: read the file), kModFilled (filled; the settings part runs as
+    // retail's) or kModSkipped (the file is one retail discards: unreadable or another
+    // platform's). _extModStored hands the record a read built (null: the file was discarded).
+    // Loop 2: _extOverridesRestore true = every mod's `files` was rebuilt as the loop would;
+    // _extOverridesBuilt runs after the loop did run.
+    static constexpr int kModRead = 0;
+    static constexpr int kModFilled = 1;
+    static constexpr int kModSkipped = 2;
+    static int (*_extModCached)(const System::Filename& file, RtIO::Mod& out);
+    static void (*_extModStored)(const System::Filename& file, const RtIO::Mod* record);
+    static bool (*_extOverridesRestore)(Modification& mod);
+    static void (*_extOverridesBuilt)(const Modification& mod);
+    // SetupFileSystem: _extRemountSkip runs after the `_dirty` test; true = the package state a
+    // remount would build is the one mounted now, and acts 1-4 are skipped (the order stamp and
+    // `_dirty = 0` still run). _extRemountDone runs at the end of act 5 of a remount that ran,
+    // with act 3's counts (queued reloads, ForceUnloads).
+    static bool (*_extRemountSkip)(Modification& mod);
+    static void (*_extRemountDone)(Modification& mod, int32_t reloads, int32_t unloads);
 };
 
 static_assert(sizeof(Modification) == 0x28, "ctor 0x1800b04b0 zeroes +0x08..+0x27");

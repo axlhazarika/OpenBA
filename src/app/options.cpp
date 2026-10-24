@@ -204,6 +204,7 @@ void OptionsInit() {
     // ── perf: profiling and frame pacing ─────────────────────────────────────
     {   const char* v = Raw("BANISHED_SAMPLE");
         if (v && v[0] != '0') o.sample = std::atoi(v) > 1 ? std::atoi(v) : 1000; }
+    o.streamCacheShadow = On("BANISHED_STREAMCACHE_SHADOW");
     o.fpsCap            = Raw("BANISHED_FPS_CAP");
     o.fpsHeadroom       = Raw("BANISHED_FPS_HEADROOM");
     // (the BANISHED_PERF_* knobs are retired: options.h, PERFXEXT)

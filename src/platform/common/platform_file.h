@@ -76,6 +76,11 @@ int32_t  FileDelete(const PathChar* path);                        // DeleteFileW
 // and unlinks on EXDEV (plans/THREADS.md F.1).
 int32_t  FileMove(const PathChar* from, const PathChar* to);
 int32_t  DirCreate(const PathChar* path);                         // CreateDirectoryW(path, NULL)
+// NOT RETAIL: DirCreate on every prefix of `dir` (either separator), so the missing parents are made
+// too; an existing directory, a drive ("C:") or a UNC host fail harmlessly. true when `dir` is a
+// directory afterwards. One body over DirCreate / PathAttributes (src/platform/common/dir_chain.cpp):
+// the settings twins' WriteFileAtomic and the derived cache's Store::Open.
+bool     EnsureDirChain(const PathChar* dir);
 
 // ---- settings.cfg's file layer (D4_RULES C3; not retail) ---------------------
 // src/platform/win/settings_win.cpp's ReadWholeFile / WriteFileAtomic, with the
@@ -191,5 +196,14 @@ inline uint32_t FileMapRead(const FileMapping& m, uint64_t pos, uint32_t bytes, 
 // 1 on success. A mapped file cannot be truncated on Windows: truncate before FileMapOpen.
 FileHandle FileOpenExclusive(const PathChar* path);
 int32_t    FileTruncate(FileHandle h, int64_t size);
+// The cache's data files while derived.lock is held: read / write, created when absent, and readable
+// by another process meanwhile (the lock loser reads them with FileOpenReadShared, whose share mode
+// allows this handle's writes), which may also rename over or delete them. A second writer is
+// refused. Windows: CreateFileW(GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+// OPEN_ALWAYS, NORMAL). POSIX: open(O_RDWR | O_CREAT, 0644) and no flock: derived.lock is the
+// writers' exclusion, and a reader keeps the inode it opened across a rename. `sequentialScan`
+// (derived.dat: appended to, read in whole payloads) adds FILE_FLAG_SEQUENTIAL_SCAN (POSIX:
+// posix_fadvise(POSIX_FADV_SEQUENTIAL) where the platform has it; macOS has not).
+FileHandle FileOpenWriteShared(const PathChar* path, bool sequentialScan);
 
 }  // namespace Platform

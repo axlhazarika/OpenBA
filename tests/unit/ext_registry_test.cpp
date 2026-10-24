@@ -45,7 +45,7 @@ UNIT_TEST(ext_registry_table_shape) {
     // The three fixes block FIXPILOT wires, default ON, no class.
     for (const char* id : {"icon_slide", "residence_goto", "tavern_counter", "start_barn_height",
                            "ui_scale_layout", "rock_seat", "terrain_resort",
-                           "large_packages"}) {
+                           "large_packages", "boot_device_lost"}) {
         const Ext::Entry& e = E(id);
         CHECK(e.tier == Ext::Tier::Fix);
         CHECK(e.cls == Ext::Class::None);
@@ -66,9 +66,10 @@ UNIT_TEST(ext_registry_table_shape) {
         // The unit_* test rows keep OFF: the lock tests below start from nothing on.
         // eye_camera is class A but changes how the game is played: the player's call, OFF.
         // no_fog is class A but changes how the map looks: the player's call, OFF.
+        // texture_quality is class A but lowers texture detail: the player's call, OFF (TEXQUALITY).
         if (e.tier == Ext::Tier::Extension && std::strncmp(e.id, "unit_", 5) != 0)
             CHECK(e.defaultOn == (e.cls == Ext::Class::A && std::strcmp(e.id, "eye_camera") != 0 &&
-                                  std::strcmp(e.id, "no_fog") != 0));
+                                  std::strcmp(e.id, "no_fog") != 0 && std::strcmp(e.id, "texture_quality") != 0));
     }
     CHECK(!Ext::ValidId("a.b"));
     CHECK(!Ext::ValidId("Abc"));

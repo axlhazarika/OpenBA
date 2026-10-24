@@ -340,7 +340,22 @@ bool GameLoadDialogLoopT::Update(const System::Time& time) {
     // exclusivity, which retail gets for free by never having the work on two
     // threads in the first place. The chunking still lands behind a drawn
     // splash — just after the loader has finished rather than beside it.
-    if (!EngineLoader::IsBusy()) {
+    //
+    // ...and NOT while a device reset is pending (Video::Device::settingsChanged, set by
+    // ApplyChangedSettings, cleared by DeviceData_Resize only when the whole rebuild succeeded).
+    // The reset releases DeviceData::colorBuffer before it rebuilds the swap chain, and a failed
+    // step (SetFullscreenState answering DXGI_ERROR_NOT_CURRENTLY_AVAILABLE while another window
+    // holds the foreground, seen on a first-run window being clamped to the desktop) leaves it null
+    // until a later BeginCommands retries. LoadSceneA1 loads the menu scene's FrameCopyImageBuffer,
+    // whose constructor aliases that buffer (ImageBufferData::AttachColorBuffer): on our main thread,
+    // between the failed reset and its retry, that was a null AddRef (4/4 on the short-settings
+    // route). Retail runs this load inside the loader's load (above), not from the main thread's
+    // splash update; the split onto the main thread is ours, so its ordering against the main
+    // thread's reset retry is ours to keep. Waiting adds no check to a retail body: the load runs
+    // unchanged, one frame after the reset that BeginCommands is already retrying.
+    const ::Video::Device* const videoDevice = ::Video::Device::_singleton;
+    const bool resetPending = videoDevice != nullptr && videoDevice->settingsChanged != 0;
+    if (!EngineLoader::IsBusy() && !resetPending) {
         if (ChunkedSceneLoader::IsArmed()) {
             UI::UserInterface* ui = &_ui;
             int64_t revealCap = (::System::Timer::_ticksPerSecond > 0)

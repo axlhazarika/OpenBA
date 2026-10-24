@@ -17,6 +17,8 @@
 // ============================================================================
 
 #include "platform_settings.h"
+#include "platform_file.h"   // EnsureDirChain: WriteFileAtomic's parent directories
+#include "posix_path.h"      // Posix::Utf8ToUtf16
 
 #include <fcntl.h>
 #include <pwd.h>
@@ -43,18 +45,6 @@ bool HomeDir(std::string& out) {
     out = pw.pw_dir;
     while (out.size() > 1 && out.back() == '/') out.pop_back();
     return true;
-}
-
-// mkdir on every prefix of `dir`, ignoring failures (an existing directory fails
-// harmlessly; a real failure surfaces at the open that follows), as settings_win.cpp.
-void CreateDirectoryChain(const std::string& dir) {
-    for (size_t i = 1; i <= dir.size(); ++i) {
-        if (i == dir.size() || dir[i] == '/' || dir[i] == '\\') {
-            std::string prefix = dir.substr(0, i);
-            for (char& c : prefix) if (c == '\\') c = '/';
-            ::mkdir(prefix.c_str(), 0777);
-        }
-    }
 }
 
 std::string NativeSlashes(const char* s) {
@@ -132,7 +122,7 @@ bool WriteFileAtomic(const char* pathUtf8, const char* data, size_t n) {
 
     const size_t cut = path.find_last_of('/');
     if (cut != std::string::npos && cut > 0)
-        CreateDirectoryChain(path.substr(0, cut));
+        Platform::EnsureDirChain(Posix::Utf8ToUtf16(path.c_str(), cut).c_str());   // platform_file.h
 
     const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
     if (fd < 0)

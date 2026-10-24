@@ -36,6 +36,7 @@
 #include "compress_ao/bc4_chain.h"           // NOT RETAIL: ext.compress_ao (the load's summary)
 #include "share_gpu_data/share_create.h"     // NOT RETAIL: ext.share_gpu_data (the load's summary)
 #include "create_on_demand/lazy_create.h"    // NOT RETAIL: ext.create_on_demand (the load's summary)
+#include "texture_quality/texture_quality.h" // NOT RETAIL: ext.texture_quality (the load's summary)
 
 namespace VideoDX11 {
 
@@ -58,6 +59,9 @@ namespace VideoDX11 {
 //
 // NOT RETAIL (ext.create_on_demand, docs/extensions/handins/CREATEONDEMAND.md): and the deferred
 // creates' summary (when anything changed since the last).
+//
+// NOT RETAIL (ext.texture_quality, docs/extensions/handins/TEXQUALITY.md): and the dropped levels'
+// summary (when anything changed since the last; nothing while the row is off).
 void DeviceData::Slot4(bool loading) {
     if (loading) {
         AsyncCreate::Begin();
@@ -66,6 +70,7 @@ void DeviceData::Slot4(bool loading) {
         ::CompressAo::LoadEnd();
         ShareGpuData::LoadEnd();
         CreateOnDemand::LoadEnd();
+        ::TextureQuality::PrintIfChanged("load end (run total)");
     }
 }
 

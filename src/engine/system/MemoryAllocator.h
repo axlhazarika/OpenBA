@@ -226,6 +226,25 @@ static_assert(offsetof(MemoryRange, base) == 0x00, "MemoryRange::base");
 static_assert(offsetof(MemoryRange, end) == 0x08, "MemoryRange::end");
 static_assert(offsetof(MemoryRange, committed) == 0x10, "MemoryRange::committed");
 
+struct RtSysMemPlatform;
+
+// ---------------------------------------------------------------------------
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): ext.heap_slack.
+// Null by default (DESIGN.md §3 hook rule 5). When set, the three places that
+// move a range's committed mark (CommitToPage, ReleaseToPage and Allocate's
+// inlined CommitToPage) still compute and store retail's mark exactly; only the
+// platform call that would follow is handed to the seam, which may keep the
+// pages committed and zero them itself when retail would have received them
+// fresh. `have` / `need` are byte offsets from `base`, page-aligned, as retail
+// computes them. Called with the allocator lock held (the raw members' callers).
+// ---------------------------------------------------------------------------
+struct MemoryAllocatorCommitSeam {
+    // retail: g_plat.commit(base + have, need - have), need > have
+    void (*commit)(const RtSysMemPlatform& plat, uint8_t* base, uint64_t have, uint64_t need);
+    // retail: g_plat.decommit(base + need, have - need), need < have
+    void (*decommit)(const RtSysMemPlatform& plat, uint8_t* base, uint64_t need, uint64_t have);
+};
+
 } // namespace system
 } // namespace rt
 
@@ -259,6 +278,11 @@ public:
     // src/engine/system/allocator.cpp. PUBLIC: foreign files read it directly
     // (the crash log, the engine_funcs snapshot, RunStartupSelfTests).
     static MemoryAllocator* _singleton;
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): ext.heap_slack's commit /
+    // decommit seam, null under the faithful profile. Set only through
+    // RtSystemAllocatorSetCommitSeam (below), under the allocator lock. A static: no layout change.
+    static const rt::system::MemoryAllocatorCommitSeam* _extCommitSeam;
 
     // ---- statics ------------------------------------------------------------
     // ?MemAlloc@MemoryAllocator@System@@SAPEAX_KH@Z   0x1800c7a50
@@ -450,6 +474,11 @@ extern "C" void RtSystemAllocatorSetCutoverArmer(RtAllocCutoverArmer fn);
 // cutover armer and prints `[RtAlloc] ARMED` / `[RtAlloc] ATTEST`. Called once,
 // from RuntimeInit() (src/app/runtime_init.cpp).
 void RtSystemAllocatorArm();
+
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/HEAPSLACK.md): installs (or clears, with null)
+// MemoryAllocator::_extCommitSeam while holding the live allocator's lock, so no commit or
+// decommit is half-way through either policy. src/ext/heap_slack/heap_slack.cpp, once at boot.
+void RtSystemAllocatorSetCommitSeam(const rt::system::MemoryAllocatorCommitSeam* seam);
 
 // (The DLL-present detour-installer and lock-retire seams died with the DLL, ENDGAME A.3.)
 

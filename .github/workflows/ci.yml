@@ -122,8 +122,28 @@ jobs:
         run: |
           CMAKE_EXTRA="-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 $CCACHE_LAUNCHERS" \
             tools/build.sh build debug
+      # Hang watchdog: a unit test that deadlocks otherwise burns the 60-minute job limit and leaves no
+      # trace. After 12 minutes every thread's stack is sampled (`sample`), printed, and the run fails.
       - name: Unit tests (debug)
-        run: tools/build.sh unit debug
+        run: |
+          tools/build.sh unit debug &
+          pid=$!
+          for i in $(seq 1 144); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            upid=$(pgrep -x unit | head -1)
+            echo "::error::unit still running after 12 minutes: thread stacks follow"
+            if [ -n "$upid" ]; then
+              sample "$upid" 2 -mayDie -file /tmp/unit.sample || true
+              cat /tmp/unit.sample || true
+              kill -9 "$upid" 2>/dev/null || true
+            fi
+            kill -9 "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          wait "$pid"
       - name: ccache statistics
         if: always()
         run: ccache -s

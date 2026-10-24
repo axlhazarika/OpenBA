@@ -159,6 +159,9 @@ void RtObject_ExternalFactory_SerializeReferenceTable(ExternalFactory* self,
                                                       ::IO::Stream* stream) {
     ++g_c.calls;
 
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/VISITREPLAY.md): `_references` is rebuilt.
+    ::Object::NotifyResourceEvent(::Object::ResourceEvent::RefTable, nullptr, nullptr, nullptr);
+
     // ---- MUTATION A: tear the reference table down --------------------------
     // 1800bcb80. `this` for the teardown is the SET (`ADD RCX,0x20`), not the
     // factory: retail loads RCX = this+0x20. The callee ignores it, but a port
