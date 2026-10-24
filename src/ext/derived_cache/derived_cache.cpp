@@ -861,10 +861,14 @@ void Store::WriterMain() {
         const bool quiet    = std::chrono::steady_clock::now() >= deadline;
         if (_usedDirty && (_flushRequested || _stop || quiet)) {
             _writing = true;
+            const bool write = !_disabled.load(std::memory_order_acquire);
             lock.unlock();
-            if (!_disabled.load(std::memory_order_acquire)) WriteUsedList();
+            if (write) WriteUsedList();
             lock.lock();
-            _usedDirty      = false;
+            // WriteUsedList cleared _usedDirty when it took its snapshot; a stamp made while the file
+            // was being written set it again and must stay set (clearing it here lost those stamps:
+            // the flaky eviction test). Only a disabled store, which writes nothing, clears it here.
+            if (!write) _usedDirty = false;
             _flushRequested = false;
             _writing        = false;
             _cv.notify_all();

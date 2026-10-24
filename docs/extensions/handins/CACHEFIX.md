@@ -123,8 +123,15 @@
 ## 2. Test evidence
 
 Unit (`tools/build.sh unit debug --jobs 2`, Windows): **1390 tests, 0 failures, 1 skipped**
-(`ext_sheet_kit_crosscheck`, needs ToolKit, unrelated). Before the branch: 1384. 17 derived-cache tests,
-of them new or changed:
+(`ext_sheet_kit_crosscheck`, needs ToolKit, unrelated). Before the branch: 1384. 17 derived-cache tests.
+After the flaky-test fix (`fix: derived cache Flush waits for a requested rewrite`): 20/20 consecutive
+runs each of `eviction_merges_sessions_and_survives_a_lost_used_list` (1/10 before the fix) and
+`stamps_of_a_reader_only_session_reach_the_disk`, the derived-cache tests linked alone
+(`scratchpad/t-cachefix/mini/`). The cause: the writer cleared the dirty flag of the usage stamps AFTER
+writing derived.used, losing any stamp a Find made while the file was being written (key 11 kept the
+session-3 stamp instead of 4, so the wrong entry was evicted). Flush already waited for a requested
+rewrite (`_compactNow` is cleared only after it and its stamps write), and the eviction tie-break is
+deterministic (stamp, then file position); neither changed. New or changed tests:
 
 | test | what it pins |
 |---|---|
