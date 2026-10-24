@@ -88,8 +88,8 @@ void SetParameterText(UI::Element* e, const char* text) {
     }
 }
 
-// The rank number ends at the right of its box: the text is moved right by the box width less its own width.
-constexpr int32_t kRankWidth = 30;   // textItemPriorityRank's _minWidth
+// The rank number ends at the right of its column: the left pad is the column width less the text's own width.
+constexpr int32_t kRankWidth = 30;   // the rank column: padding + text
 void SetRankText(UI::Element* e, const char* text) {
     SetParameterText(e, text);
     if (UI::TextElement* t = AsText(e)) {

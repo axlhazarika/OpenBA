@@ -229,11 +229,10 @@ LabelDescription labelItemPriorityRow : "TownHall.rsc:storageItem"
 }
 
 // The item's place in the ranking ("1" for the best), or a dash while it is not ranked; the controller sets it.
-// A fixed width; the controller pads its left so "1", "10" and "-" end at the same place and the buttons stay in
+// A fixed width: the controller pads its left (a pad counts toward the box, so there is no _minWidth) so "1", "10" and "-" end at the same place and the buttons stay in
 // line (the engine justifies only wrapped text, and only against its other lines).
 TextDescription textItemPriorityRank : "Extensions.rsc:textProfile"
 {
-	int _minWidth = 30;
 	String _text = "ItemPriorityParam";
 }
 
