@@ -868,9 +868,11 @@ void Store::WriterMain() {
             // WriteUsedList cleared _usedDirty when it took its snapshot; a stamp made while the file
             // was being written set it again and must stay set (clearing it here lost those stamps:
             // the flaky eviction test). Only a disabled store, which writes nothing, clears it here.
+            // The flush request stays up until the store is clean (below): cleared here, a stamp
+            // landing during this write left Flush waiting on _usedDirty while this thread waited
+            // for a quiet spell that readers kept pushing back (the macOS CI hang).
             if (!write) _usedDirty = false;
-            _flushRequested = false;
-            _writing        = false;
+            _writing = false;
             _cv.notify_all();
             continue;
         }
@@ -903,6 +905,9 @@ void Store::WriterMain() {
             _cv.notify_all();
             continue;
         }
+        // Nothing left to do: the queue is empty, the stamps are on disk (or the store is disabled)
+        // and no rewrite is pending, so a Flush in progress is satisfied.
+        _flushRequested = false;
         _cv.notify_all();
         if (waiting || (_usedDirty && !disabled))
             _cv.wait_until(lock, deadline);
