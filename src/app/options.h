@@ -125,6 +125,9 @@ struct Options {
 
     // ── perf: profiling and frame pacing ─────────────────────────────────────
     int         sample               = 0;      // tools/sample_report.py, perf/README.md — sampling profiler Hz; 0 = off
+    bool        streamCacheShadow    = false;  // BANISHED_STREAMCACHE_SHADOW — ext.stream_cache: on every hit also read the entry's
+                                               //   block directory from the package and compare it with the cached copy
+                                               //   (docs/extensions/handins/STREAMCACHE2.md; set by hand, no script)
     const char* fpsCap               = nullptr;// perf/README.md — "off"/"false"/0 disables the limiter, else a target FPS
     const char* fpsHeadroom          = nullptr;// src/app/frame_limiter.cpp — % above the refresh rate [no tool reader]
     // RETIRED 2026-10-12 (PERFXEXT, docs/extensions/handins/PERFXEXT.md): the PerfX knobs

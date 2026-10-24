@@ -32,8 +32,9 @@
 #include "ext/stream_cache/segment_stream.h"
 #include "ext/stream_cache/stream_record.h"
 #include "ext/derived_cache/derived_cache.h"
-#include "ext/derived_cache/hash64.h"
 #include "ext/registry.h"
+#include "options.h"                  // Opt().streamCacheShadow (read once at boot)
+#include "platform_file.h"            // Platform::FileSize64 / FileLastWrite: the package's identity
 #include "create_on_demand/payload.h"
 #include "create_on_demand/stream_locate.h"
 #include "texture_quality/texture_quality.h"   // ext.texture_quality: the drop the records are keyed on
@@ -80,6 +81,7 @@ struct Stats {
     uint64_t chunksRead = 0, chunksSkipped = 0;          // read back; below a marker's start, not read
     uint64_t consolidated = 0, consolidatedBytes = 0;    // live-record chunks put at the boot's end
     double   chunkLoadMs = 0;     // reading the stored chunks back (Find + parse)
+    uint64_t shadowChecked = 0, shadowMismatch = 0;      // BANISHED_STREAMCACHE_SHADOW
 };
 
 DerivedCache::Store* g_store = nullptr;
@@ -123,25 +125,50 @@ DerivedCache::Key MarkerKey(const Package& p, uint32_t marker) {
     return PackageKey(p, 1, marker);
 }
 
-// The package's identity: its header fields, its name and its whole entry table (offset and size of
-// every entry), so a rebuilt package is another identity even at the same path.
+// The package's identity (stream_record.h, PackageIdentity): its header fields, its name, its file
+// size and last write time and its whole entry table (offset and size of every entry), so a rebuilt
+// or replaced package is another identity even at the same path. Formed once per package: the
+// header and the table are what the engine already holds, the size and the time two queries on the
+// package's open handle -- nothing of the package's bytes is read. A record is then trusted by
+// (identity, entry offset, size) alone: the ruling of 2026-10-24 (STREAMCACHE2.md).
 uint64_t Identity(const IO::PackageFile& pkg) {
-    struct Head {
-        uint32_t crc, version, userVersion, fileCount;
-    } head{pkg._crc, static_cast<uint32_t>(pkg._version), static_cast<uint32_t>(pkg._userVersion),
-           static_cast<uint32_t>(pkg._entries._size)};
-    uint64_t h = DerivedCache::Hash64(&head, sizeof(head));
-    if (pkg._name._data != nullptr) h = DerivedCache::Hash64(pkg._name._data, std::strlen(pkg._name._data), h);
+    PackageStamp s;
+    s.crc         = pkg._crc;
+    s.version     = static_cast<uint32_t>(pkg._version);
+    s.userVersion = static_cast<uint32_t>(pkg._userVersion);
+    s.fileCount   = static_cast<uint32_t>(pkg._entries._size);
+    s.name        = pkg._name._data;
+    const Platform::FileHandle h = pkg._file.winHandle;
+    if (h != nullptr && h != Platform::kInvalidFileHandle) {
+        s.fileSize = Platform::FileSize64(h);
+        uint64_t t = 0;
+        if (Platform::FileLastWrite(h, &t) != 0) s.writeTime = t;
+    }
     if (pkg._entries._data != nullptr && pkg._entries._size > 0) {
         // Offset and size of every entry (not the entry's name, a String pointer per run).
-        std::vector<uint32_t> table(static_cast<size_t>(pkg._entries._size) * 2);
+        s.table.resize(static_cast<size_t>(pkg._entries._size) * 2);
         for (int32_t i = 0; i < pkg._entries._size; ++i) {
-            table[static_cast<size_t>(i) * 2]     = pkg._entries._data[i].offset;
-            table[static_cast<size_t>(i) * 2 + 1] = pkg._entries._data[i].size;
+            s.table[static_cast<size_t>(i) * 2]     = pkg._entries._data[i].offset;
+            s.table[static_cast<size_t>(i) * 2 + 1] = pkg._entries._data[i].size;
         }
-        h = DerivedCache::Hash64(table.data(), table.size() * sizeof(uint32_t), h);
     }
-    return h;
+    return PackageIdentity(s);
+}
+
+// Under g_mu, BANISHED_STREAMCACHE_SHADOW only (a harness check, STREAMCACHE2.md): the hit's entry
+// read from the package as the miss path reads it, compared with the record's cached count and
+// directory. A difference is a package the identity failed to tell apart.
+void ShadowCompare(const RecordView& rec, const RtIO::FileInfo& fi, uint32_t crc) {
+    IO::FileSystem* const sys = IO::FileSystem::_singleton;
+    ++g_stats.shadowChecked;
+    const uint8_t* const live = sys->PackedMapSpan(fi, 0, static_cast<int32_t>(rec.HeadBytes()));
+    if (live != nullptr && std::memcmp(live, rec.head, rec.HeadBytes()) == 0) return;
+    if (g_stats.shadowMismatch < 16) {
+        std::fprintf(stderr, "[StreamCache] SHADOW MISMATCH package %08x entry %llu size %u blocks %u%s\n", crc,
+                     static_cast<unsigned long long>(rec.id.offset), rec.id.size, rec.blockCount,
+                     live == nullptr ? " (not mapped)" : "");
+    }
+    ++g_stats.shadowMismatch;
 }
 
 // Under g_mu. The Package of pack index `index`, made (and its stored chunks loaded) on first use.
@@ -220,50 +247,59 @@ IO::Stream* LoadBegin(IO::CompressedFileStream& cfs) {
         ++g_stats.loose;
         return nullptr;
     }
+    EntryId id;
+    id.offset = static_cast<uint64_t>(entry);
+    id.size   = static_cast<uint32_t>(fi.size);
+
+    {
+        // A hit reads nothing of the package: the record is the entry's (package identity, offset,
+        // size) and carries the entry's directory.
+        std::lock_guard<std::mutex> lk(g_mu);
+        Package* const pkg = PackageAt(static_cast<uint32_t>(fi.handle) >> 24);
+        if (pkg == nullptr) {
+            ++g_stats.loose;
+            return nullptr;
+        }
+        a.package = pkg;
+        const RecordView* const rec = pkg->bundle.Find(id);
+        if (rec != nullptr) {
+            if (rec->segCount == 1 && rec->byteCount == rec->total) ++g_stats.hitsWhole;
+            else ++g_stats.hitsElided;
+            if (Opt().streamCacheShadow) ShadowCompare(*rec, fi, pkg->crc);
+            // From the engine allocator: IO::Stream's class operator delete frees there
+            // (root_operator_delete.cpp), as every stream the engine makes.
+            void* const mem = RtSystem::RtMemAlloc(sizeof(SegmentStream), 8);
+            a.stream = ::new (mem) SegmentStream(rec, handle, entry, &OpenFallback, nullptr);
+            return a.stream;
+        }
+    }
+
+    // A miss: the entry's block count and directory from the package mapping, recorded with the
+    // stream. (The package lock is not held over the mapping's page faults.)
     const uint8_t* const head = sys->PackedMapSpan(fi, 0, 4);
     if (head == nullptr) {
         ++g_stats.loose;
+        a.package = nullptr;
         return nullptr;
     }
     int32_t n = 0;
     std::memcpy(&n, head, 4);
     if (n <= 0 || static_cast<int64_t>(n) * 8 + 4 > fi.size) {
         ++g_stats.loose;
+        a.package = nullptr;
         return nullptr;
     }
-    const uint8_t* const dir = sys->PackedMapSpan(fi, 4, n * 8);
-    if (dir == nullptr) {
+    // The count and the directory are contiguous in the mapping: one span.
+    const uint8_t* const entryHead = sys->PackedMapSpan(fi, 0, 4 + n * 8);
+    if (entryHead == nullptr) {
         ++g_stats.loose;
+        a.package = nullptr;
         return nullptr;
     }
-    EntryId id;
-    id.offset     = static_cast<uint64_t>(entry);
-    id.size       = static_cast<uint32_t>(fi.size);
-    id.blockCount = static_cast<uint32_t>(n);
-    id.dirHash    = DerivedCache::Hash64(dir, static_cast<size_t>(n) * 8);
-    uint16_t lastUncompressed = 0;
-    std::memcpy(&lastUncompressed, dir + static_cast<size_t>(n - 1) * 8 + 6, 2);
-    const uint32_t total = static_cast<uint32_t>(n - 1) * ::CreateOnDemand::kBlockBytes + lastUncompressed;
-
+    const uint32_t total = DirectoryTotal(entryHead);
     std::lock_guard<std::mutex> lk(g_mu);
-    Package* const pkg = PackageAt(static_cast<uint32_t>(fi.handle) >> 24);
-    if (pkg == nullptr) {
-        ++g_stats.loose;
-        return nullptr;
-    }
-    a.package = pkg;
-    const RecordView* const rec = pkg->bundle.Find(id);
-    if (rec != nullptr) {
-        if (rec->segCount == 1 && rec->byteCount == rec->total) ++g_stats.hitsWhole;
-        else ++g_stats.hitsElided;
-        // From the engine allocator: IO::Stream's class operator delete frees there
-        // (root_operator_delete.cpp), as every stream the engine makes.
-        void* const mem = RtSystem::RtMemAlloc(sizeof(SegmentStream), 8);
-        a.stream = ::new (mem) SegmentStream(rec, handle, entry, &OpenFallback, nullptr);
-        return a.stream;
-    }
     ++g_stats.misses;
-    a.recorder.Begin(id, total);
+    a.recorder.Begin(id, total, entryHead);
     return nullptr;
 }
 
@@ -382,6 +418,11 @@ void LoadDone(const std::type_info& loop) {
                  g_stats.chunkBytesPut / 1048576.0, (unsigned long long)g_stats.chunksRead,
                  (unsigned long long)g_stats.chunksSkipped, (unsigned long long)g_stats.consolidated,
                  g_stats.consolidatedBytes / 1048576.0);
+    if (Opt().streamCacheShadow) {
+        std::fprintf(stderr,
+                     "[StreamCache] shadow (run total): %llu hits checked against the package, %llu mismatches\n",
+                     (unsigned long long)g_stats.shadowChecked, (unsigned long long)g_stats.shadowMismatch);
+    }
     if (bootEnds) {
         // The boot's last bracket: the derived cache may rewrite its files now (derived_cache.h,
         // "THE REWRITE"), on its writer thread.
@@ -395,8 +436,10 @@ void LoadDone(const std::type_info& loop) {
 }
 
 // ext.create_on_demand's Locate / Skip over a record stream: the same Locator the compressed stream
-// gives (the package mapping, the entry, the decompressed position), checked against the mapped
-// entry's own block directory.
+// gives (the package mapping, the entry, the decompressed position), the range checked against the
+// entry's block directory as the record caches it -- RangeInStream reads the same 4 + 8n bytes it
+// would read from the mapping, without touching the package. The payload's bytes are read from the
+// mapping only when the renderer materialises it (Redecode).
 bool AltLocate(IO::Stream* stream, int32_t len, ::CreateOnDemand::Locator* out) {
     SegmentStream* const ss = dynamic_cast<SegmentStream*>(stream);
     if (ss == nullptr || len < 0) return false;
@@ -409,8 +452,7 @@ bool AltLocate(IO::Stream* stream, int32_t len, ::CreateOnDemand::Locator* out) 
     loc.pos   = static_cast<int32_t>(ss->GetCurrentPos());
     loc.len   = len;
     if (loc.entry + loc.size > map->map.size) return false;
-    const uint8_t* const bytes = map->map.data + loc.entry;
-    if (!::CreateOnDemand::RangeInStream(bytes, loc.size, loc.pos, loc.len)) return false;
+    if (!::CreateOnDemand::RangeInStream(ss->Record()->head, loc.size, loc.pos, loc.len)) return false;
     *out = std::move(loc);
     return true;
 }
