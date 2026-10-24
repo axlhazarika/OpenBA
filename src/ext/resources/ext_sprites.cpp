@@ -121,7 +121,7 @@ Object::External* ProvideSprites(const char* path, void* /*user*/) {
 
 void InitSprites() {
     if (!Register(kPrefix, &ProvideSprites, nullptr))
-        std::fprintf(stderr, "[ExtRes] sprites: provider table full, %s not registered\n", kPrefix);
+        std::fprintf(stderr, "[ExtRes] sprites: null prefix or function, %s not registered\n", kPrefix);
 }
 
 }  // namespace Resources
