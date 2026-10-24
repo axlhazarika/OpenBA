@@ -183,6 +183,25 @@ game: the vanilla cache is 3 MB against a 4096 MB cap; eviction is covered by th
 two OpenBA.exe processes on one folder (the harness stood in for the second; overlapping game runs
 splice the logs).
 
+### Flush beside first-time Finds (`f48bcddc0` + the re-arming Flush), found by CI on macOS
+
+`ext_derived_cache_rewrite_runs_beside_finds` hung three times on the macos-15 runner (runs 40111273469,
+40117003008 and the first CI run of `main` after PR #32), each time right after the rewrite's log line.
+A 12-minute watchdog in `ci.yml` sampled the threads (`sample`): the main thread in `Flush()`'s
+condition wait, the writer in its quiet-spell `wait_until`, the three readers busy in `Find`. No mutex
+was held across the wait: Flush and the writer disagreed about whether there was work.
+
+Two gaps, one mechanism. Each key is stamped once a session and a stamp sets `_usedDirty`. On the
+runner the readers manage 32-73 Finds during the whole rewrite (first-fit mutexes: the rewrite's
+`_fileMutex` / `_mutex` traffic starves them), so keys are still stamped for the first time after the
+compaction. (1) The writer cleared `_flushRequested` after one used-list write; a stamp during that
+write kept the store dirty with no request pending (`f48bcddc0`: the request stays until the store is
+clean). (2) Once the writer did see a clean store and dropped the request, the next first-time stamp
+re-dirtied it: `Flush` waited for `!_usedDirty`, the writer waited for a quiet spell the Finds kept
+pushing back. `Flush` now re-raises the request on every wake, so a late stamp is written before it
+returns; the stamps are finite, so it ends. Windows and Linux never showed it: ~2000 Finds cover all
+64 keys before the rewrite's first used-list write.
+
 ## 3. Not tested
 
 - Linux and macOS: not built or run (CI will build and run `unit` there). The POSIX pieces:

@@ -785,9 +785,16 @@ void Store::Put(const Key& key, std::vector<uint8_t> payload) {
 void Store::Flush() {
     if (!_open || _readOnly) return;
     std::unique_lock<std::mutex> lock(_mutex);
-    _flushRequested = true;
-    _cv.notify_all();
-    _cv.wait(lock, [&] { return (_queue.empty() && !_writing && !_usedDirty && !_compactNow) || _stop; });
+    for (;;) {
+        if (_stop || (_queue.empty() && !_writing && !_usedDirty && !_compactNow)) return;
+        // Asked again on every wake. A Find on another thread stamps a key the moment after the
+        // writer saw a clean store and dropped the request; without a new one the writer waits for
+        // a quiet spell those Finds keep pushing back (the macOS CI hang, thread stacks in
+        // docs/extensions/handins/CACHEFIX.md). Each key is stamped once a session, so this ends.
+        _flushRequested = true;
+        _cv.notify_all();
+        _cv.wait(lock);
+    }
 }
 
 void Store::RequestFlush() {
