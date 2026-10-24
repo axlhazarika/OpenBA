@@ -26,6 +26,7 @@
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
 #include "ext/share_gpu_data/share_gpu_data.h"   // ext.share_gpu_data: the backend's request, at boot
 #include "ext/create_on_demand/create_on_demand.h"   // ext.create_on_demand: the backend's request + seams, at boot
+#include "ext/texture_quality/texture_quality.h"     // ext.texture_quality: the run's drop + the level reader, at boot
 #include "ext/stream_cache/stream_cache.h"           // ext.stream_cache: the resource-record seams, at boot
 #include "ext/resources/text_provider.h"        // the Extensions dialog / Enhanced tab resources from the exe's text (KITFREE)
 #include "rsc_text_check.h"                      // src/diag: the kit cross-check, /rsccheck:1 on the command line
@@ -190,6 +191,10 @@ void InitFromSettings() {
     // before the boot's first load (src/render/common/create_on_demand/). Off under the faithful
     // profile (the row is off).
     Ext::CreateOnDemand::Boot();
+    // ext.texture_quality (class A, next start): the run's drop, once, before the boot's first load;
+    // after create_on_demand (whose level reader, when installed, drops the levels itself) and before
+    // stream_cache (whose records are keyed on the drop). Off under the faithful profile.
+    Ext::TextureQuality::Boot();
     // ext.stream_cache (class A, next start): the resource-record seams and the derived cache, once,
     // before the boot's first load; after create_on_demand, whose value the records are keyed on.
     // Off under the faithful profile (the row is off).
@@ -285,6 +290,24 @@ int32_t SetMaxShadowResAndRecord(int32_t size) {
         SetAndRecord(row, false);
     }
     return MaxShadowResChoice();
+}
+
+int32_t TextureQualityChoice() {
+    const Entry* row = FindEntry("texture_quality");
+    const ValueKey* drop = FindValueKey("texture_quality_drop");
+    return Requested(*row) ? Value(*drop) : 0;
+}
+
+int32_t SetTextureQualityAndRecord(int32_t drop) {
+    const Entry& row = *FindEntry("texture_quality");
+    const ValueKey& key = *FindValueKey("texture_quality_drop");
+    if (drop == 1 || drop == 2) {
+        if (Value(key) != drop) SetValueAndRecord(key, drop);
+        if (!Requested(row)) SetAndRecord(row, true);
+    } else if (Requested(row)) {
+        SetAndRecord(row, false);
+    }
+    return TextureQualityChoice();
 }
 
 void PersistSettings() {

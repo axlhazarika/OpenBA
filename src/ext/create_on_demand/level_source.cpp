@@ -15,13 +15,22 @@
 // are read as retail reads them, and the levels already skipped are re-decoded into their arrays,
 // so Create sees every byte, the eager way. Anything not a packed compressed stream is left to
 // retail's read untouched (false, before anything is consumed).
+//
+// ext.texture_quality (docs/extensions/handins/TEXQUALITY.md): for an image whose top levels the run
+// drops (render/common/texture_quality/texture_quality.h DropFor), the dropped levels' sizes are read
+// and their bytes skipped like the rest, but no Locator is kept: the record holds the kept levels
+// only, and they are the only ones ever re-decoded. A stream that is not locatable takes ext.
+// texture_quality's eager read instead (its dropped levels skipped or thrown away). In the fallback
+// above, a dropped level is read and freed, never re-decoded.
 // ============================================================================
 
 #include "ext/create_on_demand/level_source.h"
 
 #include "create_on_demand/pending_levels.h"
 #include "create_on_demand/stream_locate.h"
+#include "ext/texture_quality/texture_quality.h"
 #include "io/Serializer.h"
+#include "texture_quality/texture_quality.h"
 #include "video/ImageBuffer.h"
 
 namespace Ext { namespace CreateOnDemand {
@@ -29,15 +38,25 @@ namespace Ext { namespace CreateOnDemand {
 bool ReadLevels(IO::Serializer& ser, Video::ImageBuffer& image, int32_t count, Video::ImageBuffer::LevelArray& levels) {
     // The images ImageBufferData::Create turns into a texture from their levels.
     if (count <= 0 || image._kind != 2 || image.Width() == 0 || image.Height() == 0) return false;
+    // ext.texture_quality: 0 unless the run drops levels and this image qualifies.
+    const ::TextureQuality::Verdict verdict = ::TextureQuality::ClassifyImage(image, count);
+    const int drop = verdict == ::TextureQuality::Verdict::Drop ? ::TextureQuality::Drop() : 0;
+    ::TextureQuality::NoteImage(image, count, verdict);
     IO::Stream* const stream = ser._stream;
     {
         ::CreateOnDemand::Locator probe;
-        if (!::CreateOnDemand::Locate(stream, 0, &probe)) return false;
+        if (!::CreateOnDemand::Locate(stream, 0, &probe)) {
+            if (drop == 0) return false;
+            Ext::TextureQuality::ReadDropped(ser, count, levels, drop);
+            return true;
+        }
     }
     ::CreateOnDemand::PendingLevels& pending = ::CreateOnDemand::ThreadPendingLevels();
     pending.Clear();
-    pending.levels.reserve(static_cast<size_t>(count));
+    pending.levels.reserve(static_cast<size_t>(count - drop));
     Collection::Array<uint8_t>* const e = levels.GetData();
+    int64_t droppedBytes = 0;
+    int64_t keptBytes    = 0;
     for (int32_t i = 0; i < count; ++i) {
         // Retail's size read (RtVideo_SerializeBlobArray seeds it with the empty array's size).
         int32_t size = e[i]._size;
@@ -45,6 +64,11 @@ bool ReadLevels(IO::Serializer& ser, Video::ImageBuffer& image, int32_t count, V
         ::CreateOnDemand::Locator loc;
         if (size >= 0 && ::CreateOnDemand::Locate(stream, size, &loc)) {
             ::CreateOnDemand::Skip(stream, size);
+            if (i < drop) {   // ext.texture_quality: a dropped level, never re-decoded
+                droppedBytes += size;
+                continue;
+            }
+            keptBytes += size;
             pending.levels.push_back(std::move(loc));
             continue;
         }
@@ -52,15 +76,28 @@ bool ReadLevels(IO::Serializer& ser, Video::ImageBuffer& image, int32_t count, V
         e[i].SetSize(size);
         ser.Serialize(size, e[i]._data, nullptr);
         RtVideo_SerializeBlobArray(ser, count - i - 1, e + i + 1);
-        for (int32_t k = 0; k < i; ++k) {
-            const ::CreateOnDemand::Locator& skipped = pending.levels[static_cast<size_t>(k)];
+        for (int32_t k = drop; k < i; ++k) {
+            const ::CreateOnDemand::Locator& skipped = pending.levels[static_cast<size_t>(k - drop)];
             e[k].SetSize(skipped.len);
             ::CreateOnDemand::Redecode(skipped, e[k]._data);
         }
         pending.Clear();
+        if (drop > 0) {
+            // ext.texture_quality: the dropped levels this read decoded are given back (Create skips them).
+            int64_t discarded = 0;
+            for (int32_t k = i; k < drop && k < count; ++k) {
+                discarded += e[k]._size;
+                e[k].DestroyAndFree();
+            }
+            int64_t kept = 0;
+            for (int32_t k = drop; k < count; ++k)
+                kept += e[k]._size;
+            ::TextureQuality::NoteDropped(false, droppedBytes, discarded, kept);
+        }
         return true;
     }
     pending.image = &image;
+    if (drop > 0) ::TextureQuality::NoteDropped(true, droppedBytes, 0, keptBytes);
     return true;
 }
 
