@@ -26,6 +26,10 @@ SpriteSheet resource
 		{ String _name = "ExtensionsEntry_tavern_counter";	String _source = "Sprite/Extensions/Entry_tavern_counter.png"; }
 		{ String _name = "ExtensionsEntry_start_barn_height";	String _source = "Sprite/Extensions/Entry_start_barn_height.png"; }
 		{ String _name = "ExtensionsEntry_ui_scale_layout";	String _source = "Sprite/Extensions/Entry_ui_scale_layout.png"; }
+		{ String _name = "ExtensionsEntry_rock_seat";	String _source = "Sprite/Extensions/Entry_rock_seat.png"; }
+		{ String _name = "ExtensionsEntry_terrain_resort";	String _source = "Sprite/Extensions/Entry_terrain_resort.png"; }
+		{ String _name = "ExtensionsEntry_large_packages";	String _source = "Sprite/Extensions/Entry_large_packages.png"; }
+		{ String _name = "ExtensionsEntry_boot_device_lost";	String _source = "Sprite/Extensions/Entry_boot_device_lost.png"; }
 		{ String _name = "ExtensionsEntry_eye_camera";	String _source = "Sprite/Extensions/Entry_eye_camera.png"; }
 		{ String _name = "ExtensionsEntry_sharp_ui";	String _source = "Sprite/Extensions/Entry_sharp_ui.png"; }
 		{ String _name = "ExtensionsEntry_fast_paths";	String _source = "Sprite/Extensions/Entry_fast_paths.png"; }
@@ -54,11 +58,18 @@ SpriteSheet resource
 		{ String _name = "ExtensionsEntry_item_priority";	String _source = "Sprite/Extensions/Entry_item_priority.png"; }
 		{ String _name = "ToolbarExtensions";	String _source = "Sprite/Extensions/Toolbar_extensions.png"; }	// the toolbar's one extension button (ExtensionsWindow.rsc, src/ext/toolbar)
 		{ String _name = "ExtensionsEntry_terrain_batch";	String _source = "Sprite/Extensions/Entry_terrain_batch.png"; }
+		{ String _name = "ExtensionsEntry_decode_ahead";	String _source = "Sprite/Extensions/Entry_decode_ahead.png"; }
 		{ String _name = "ExtensionsEntry_load_progress";	String _source = "Sprite/Extensions/Entry_load_progress.png"; }
+		{ String _name = "ExtensionsEntry_async_gpu_create";	String _source = "Sprite/Extensions/Entry_async_gpu_create.png"; }
 		{ String _name = "ExtensionsEntry_compress_ao";	String _source = "Sprite/Extensions/Entry_compress_ao.png"; }
 		{ String _name = "ExtensionsEntry_share_gpu_data";	String _source = "Sprite/Extensions/Entry_share_gpu_data.png"; }
 		{ String _name = "ExtensionsEntry_create_on_demand";	String _source = "Sprite/Extensions/Entry_create_on_demand.png"; }
+		{ String _name = "ExtensionsEntry_stream_cache";	String _source = "Sprite/Extensions/Entry_stream_cache.png"; }
 		{ String _name = "ExtensionsEntry_package_cache";	String _source = "Sprite/Extensions/Entry_package_cache.png"; }
 		{ String _name = "ExtensionsEntry_menu_entry";	String _source = "Sprite/Extensions/Entry_menu_entry.png"; }
+		{ String _name = "ExtensionsEntry_visit_replay";	String _source = "Sprite/Extensions/Entry_visit_replay.png"; }
+		{ String _name = "ExtensionsEntry_find_fastpath";	String _source = "Sprite/Extensions/Entry_find_fastpath.png"; }
+		{ String _name = "ExtensionsEntry_heap_slack";	String _source = "Sprite/Extensions/Entry_heap_slack.png"; }
+		{ String _name = "ExtensionsEntry_texture_quality";	String _source = "Sprite/Extensions/Entry_texture_quality.png"; }
 	]
 }
