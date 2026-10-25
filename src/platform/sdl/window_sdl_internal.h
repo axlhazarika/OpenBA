@@ -18,9 +18,14 @@ namespace Window {
 // SDL_WINDOW_HIGH_PIXEL_DENSITY, so SDL points are pixels. A Darwin build that opts a
 // window into high density fills the body in; every coordinate crossing the seam is then
 // scaled by it.
+// P7: times the render scale (platform_window_hooks.h RenderScale), 1.0 but on Android.
 float PixelDensity(SDL_Window* window);
 
 namespace Sdl {
+
+// P7: the window's size in ENGINE pixels: SDL_GetWindowSizeInPixels times the render scale
+// (display_sdl.cpp). Every window pixel size the engine is told goes through it; 0 x 0 for null.
+void WindowSizeInEnginePixels(SDL_Window* window, int* w, int* h);
 
 // The one game window window_sdl.cpp's Create made; nullptr before / after.
 SDL_Window* GameWindow();

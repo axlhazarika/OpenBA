@@ -60,6 +60,32 @@ VkDescriptorSetLayout g_setLayouts[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 VkPipelineLayout g_pipelineLayout = VK_NULL_HANDLE;
 uint32_t g_dynamicCbs = 0;
 
+// ---- P7: the push-descriptor path (pipelines.h) ----
+struct StageMasks {
+    uint32_t set = 0;
+    uint32_t cb = 0;
+    uint32_t tex = 0;
+    uint32_t smp = 0;
+};
+struct PairMasks {
+    StageMasks vs;
+    StageMasks ps;
+};
+struct MasksHash {
+    size_t operator()(const PairMasks& m) const {
+        return static_cast<size_t>(HashBytes(&m, sizeof(PairMasks)));
+    }
+};
+struct MasksEqual {
+    bool operator()(const PairMasks& a, const PairMasks& b) const {
+        return std::memcmp(&a, &b, sizeof(PairMasks)) == 0;
+    }
+};
+bool g_push = false;
+std::mutex g_pushLock;
+std::vector<std::pair<StageMasks, VkDescriptorSetLayout>> g_pushSetLayouts;
+std::unordered_map<PairMasks, PairLayout, MasksHash, MasksEqual> g_pushLayouts;   // nodes: stable pointers
+
 // ---- the registries ----
 std::mutex g_shaderLock;
 std::unordered_map<uint64_t, ShaderEntry*> g_shaders;
@@ -221,10 +247,25 @@ std::vector<uint8_t> LoadCacheBlob() {
 
 void SaveCacheBlob() {
     if (!g_persist || !g_cache) return;
+    // P7: the warm-up worker may add a pipeline between the size query and the copy (the background
+    // write runs early in a session, while it still works); the copy then answers VK_INCOMPLETE. The
+    // pair is retried with a fresh size; a write that still fails says so.
+    std::vector<uint8_t> file;
     size_t size = 0;
-    if (vkGetPipelineCacheData(LiveDevice(), g_cache, &size, nullptr) != VK_SUCCESS || size == 0) return;
-    std::vector<uint8_t> file(sizeof(CacheHeader) + size);
-    if (vkGetPipelineCacheData(LiveDevice(), g_cache, &size, file.data() + sizeof(CacheHeader)) != VK_SUCCESS) return;
+    VkResult r = VK_INCOMPLETE;
+    for (int attempt = 0; attempt < 4 && r == VK_INCOMPLETE; ++attempt) {
+        size = 0;
+        r = vkGetPipelineCacheData(LiveDevice(), g_cache, &size, nullptr);
+        if (r != VK_SUCCESS) break;
+        if (size == 0) return;
+        size += size / 8 + 4096;   // room for what the worker adds meanwhile
+        file.assign(sizeof(CacheHeader) + size, 0);
+        r = vkGetPipelineCacheData(LiveDevice(), g_cache, &size, file.data() + sizeof(CacheHeader));
+    }
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[Vulkan] pipeline cache: not written (vkGetPipelineCacheData: %s)\n", ResultName(r));
+        return;
+    }
     file.resize(sizeof(CacheHeader) + size);
     CacheHeader h;
     FillHeader(&h);
@@ -250,6 +291,17 @@ const VkFormat kVertexFormat[9] = {
     VK_FORMAT_R8G8B8A8_UINT,         // 7  DXGI_FORMAT_R8G8B8A8_UINT
     VK_FORMAT_R8G8B8A8_UNORM,        // 8  DXGI_FORMAT_R8G8B8A8_UNORM
 };
+
+// P7: the attribute format of engine element format `format` for a shader input of numeric type
+// `numeric` (Shaders::IoElement). Vulkan requires the two to agree (VUID-VkGraphicsPipelineCreateInfo-
+// Input-08733); D3D11 does not check and reinterprets the bits. The one mismatch the retail shaders
+// have is format 7 (the byte-4 element, R8G8B8A8_UINT) feeding an int4 input: it is read as
+// R8G8B8A8_SINT, the same value for every byte below 128. A byte of 128 or more would read negative
+// here and positive on D3D11 (docs/known_port_issues.md, "Vulkan backend": not seen, not ruled out).
+VkFormat AttributeFormat(uint8_t format, uint8_t numeric) {
+    if (format == 7 && numeric == Shaders::IoElement::kSint) return VK_FORMAT_R8G8B8A8_SINT;
+    return kVertexFormat[format];
+}
 
 bool SameSemantic(const std::string& a, const char* b) {
     if (a.size() != std::strlen(b)) return false;
@@ -282,7 +334,7 @@ bool BuildVertexInput(const std::vector<LayoutElement>& elements, const Shaders:
         VkVertexInputAttributeDescription a{};
         a.location = in.location;
         a.binding = e.stream;
-        a.format = kVertexFormat[e.format];
+        a.format = AttributeFormat(e.format, in.numeric);
         a.offset = e.offset;
         attributes->push_back(a);
         streamMask |= 1u << (e.stream & 31);
@@ -331,6 +383,71 @@ VkShaderModule LinkedPixelModule(const ShaderEntry* vs, const ShaderEntry* ps, s
                  static_cast<unsigned long long>(ps->hash), static_cast<unsigned long long>(vs->hash),
                  hit ? "cache" : "converted");
     return module;
+}
+
+StageMasks MasksOf(uint32_t set, const Shaders::ShaderReflection* refl) {
+    StageMasks m;
+    m.set = set;
+    if (refl) {
+        m.cb = refl->constantBufferMask & ((1u << Shaders::kMaxConstantBuffers) - 1u);
+        m.tex = refl->textureMask & ((1u << Shaders::kMaxTextures) - 1u);
+        m.smp = refl->samplerMask & ((1u << Shaders::kMaxTextures) - 1u);
+    }
+    return m;
+}
+
+uint32_t BindingCount(const StageMasks& m) {
+    return static_cast<uint32_t>(__builtin_popcount(m.cb) + __builtin_popcount(m.tex) + __builtin_popcount(m.smp));
+}
+
+// g_pushLock held. The set layout of one stage's masks (made once): the pixel set is a push set with
+// plain uniform buffers, the vertex set a pool set with dynamic ones (pipelines.h, THE PAIR LAYOUTS).
+VkDescriptorSetLayout PairSetLayoutLocked(const StageMasks& m) {
+    for (const auto& entry : g_pushSetLayouts) {
+        if (std::memcmp(&entry.first, &m, sizeof(StageMasks)) == 0) return entry.second;
+    }
+    const bool vertex = m.set == Shaders::kSetVertex;
+    const VkShaderStageFlags stage = vertex ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    for (uint32_t r = 0; r < Shaders::kMaxConstantBuffers; ++r) {
+        if (!((m.cb >> r) & 1)) continue;
+        VkDescriptorSetLayoutBinding b{};
+        b.binding = Shaders::BindingOfConstantBuffer(r);
+        b.descriptorType = vertex ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b.descriptorCount = 1;
+        b.stageFlags = stage;
+        bindings.push_back(b);
+    }
+    for (uint32_t r = 0; r < Shaders::kMaxTextures; ++r) {
+        if ((m.tex >> r) & 1) {
+            VkDescriptorSetLayoutBinding b{};
+            b.binding = Shaders::BindingOfTexture(r);
+            b.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            b.descriptorCount = 1;
+            b.stageFlags = stage;
+            bindings.push_back(b);
+        }
+        if ((m.smp >> r) & 1) {
+            VkDescriptorSetLayoutBinding b{};
+            b.binding = Shaders::BindingOfSampler(r);
+            b.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+            b.descriptorCount = 1;
+            b.stageFlags = stage;
+            bindings.push_back(b);
+        }
+    }
+    auto li = Make<VkDescriptorSetLayoutCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+    li.flags = vertex ? 0 : VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    li.bindingCount = static_cast<uint32_t>(bindings.size());
+    li.pBindings = bindings.data();
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    const VkResult r = vkCreateDescriptorSetLayout(LiveDevice(), &li, nullptr, &layout);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[Vulkan] pair set layout: %s\n", ResultName(r));
+        return VK_NULL_HANDLE;
+    }
+    g_pushSetLayouts.emplace_back(m, layout);
+    return layout;
 }
 
 // Builds the pipeline of `key` from its shaders. VK_NULL_HANDLE with *why on failure.
@@ -441,12 +558,10 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     ri.pColorAttachmentFormats = &color;
     ri.depthAttachmentFormat = depth;
     ri.stencilAttachmentFormat = HasStencil(depth) ? depth : VK_FORMAT_UNDEFINED;
-    // P3: the tiler's MSAA on single-sampled attachments (VK_EXT_multisampled_render_to_single_sampled).
-    auto msrtss = Make<VkMultisampledRenderToSingleSampledInfoEXT>(
-        VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
-    msrtss.multisampledRenderToSingleSampledEnable = VK_TRUE;
-    msrtss.rasterizationSamples = static_cast<VkSampleCountFlagBits>(key.samples);
-    if (key.msrtss) ri.pNext = &msrtss;
+    // P3: the tiler's MSAA on single-sampled attachments (VK_EXT_multisampled_render_to_single_sampled)
+    // is the pass's (draw.cpp BeginPass); the pipeline only rasterizes at key.samples. P7: the
+    // VkMultisampledRenderToSingleSampledInfoEXT chained here before is not a pipeline structure (the
+    // validation layer's "unexpected VkStructureType"); key.msrtss keeps those pipelines apart.
 
     auto pi = Make<VkGraphicsPipelineCreateInfo>(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
     pi.pNext = &ri;
@@ -460,7 +575,14 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     pi.pDepthStencilState = &ds;
     pi.pColorBlendState = &cb;
     pi.pDynamicState = &dyn;
+    // P7: the pair's own layout on the push path; the game layout (sets from the frame's pools) when
+    // push descriptors are off, or for a pair whose pixel stage declares more bindings than
+    // maxPushDescriptors (PairLayoutFor answers null; the draw then takes the pool path).
     pi.layout = g_pipelineLayout;
+    if (g_push) {
+        const PairLayout* pair = PairLayoutFor(vs->reflection, ps ? &ps->reflection : nullptr);
+        if (pair) pi.layout = pair->layout;
+    }
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult r = vkCreateGraphicsPipelines(LiveDevice(), g_cache, 1, &pi, nullptr, &pipeline);
     if (r != VK_SUCCESS) {
@@ -690,6 +812,10 @@ bool PipelinesStartup(std::string* why) {
         return false;
     }
 
+    // P7: the push-descriptor path (pipelines.h) wherever the extension is (its spec floor is 32).
+    g_push = LiveCaps().pushDescriptor && vkCmdPushDescriptorSetKHR != nullptr &&
+             LiveCaps().maxPushDescriptors >= 32;
+
     g_persist = Ext::CurrentProfile() != Ext::Profile::Faithful && Ext::DerivedCache::CacheDir(g_cacheDir) &&
                 Platform::EnsureDirChain(ToPath(g_cacheDir).c_str());
     const std::vector<uint8_t> blob = LoadCacheBlob();
@@ -720,9 +846,15 @@ bool PipelinesStartup(std::string* why) {
     }
     g_warmThread = std::thread(WarmMain);
     std::fprintf(stderr, "[Vulkan] pipelines: layout set0/set1 x %u bindings, %u dynamic constant buffer(s) per set, "
-                         "cache %zu bytes loaded%s\n",
-                 kSetBindings, g_dynamicCbs, blob.size(), g_persist ? "" : " (no cache folder: nothing persists)");
+                         "cache %zu bytes loaded%s; descriptors %s\n",
+                 kSetBindings, g_dynamicCbs, blob.size(), g_persist ? "" : " (no cache folder: nothing persists)",
+                 g_push ? "a layout per shader pair (pixel set pushed, vertex set pooled)" : "sets from per-frame pools");
     return true;
+}
+
+void PipelinesPersist() {
+    SaveWarmList();
+    SaveCacheBlob();
 }
 
 void PipelinesShutdown() {
@@ -751,6 +883,17 @@ void PipelinesShutdown() {
     g_cache = VK_NULL_HANDLE;
     if (g_pipelineLayout) vkDestroyPipelineLayout(LiveDevice(), g_pipelineLayout, nullptr);
     g_pipelineLayout = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> guard(g_pushLock);
+        for (auto& kv : g_pushLayouts) {
+            if (kv.second.layout) vkDestroyPipelineLayout(LiveDevice(), kv.second.layout, nullptr);
+        }
+        g_pushLayouts.clear();
+        for (auto& entry : g_pushSetLayouts)
+            vkDestroyDescriptorSetLayout(LiveDevice(), entry.second, nullptr);
+        g_pushSetLayouts.clear();
+    }
+    g_push = false;
     for (VkDescriptorSetLayout& l : g_setLayouts) {
         if (l) vkDestroyDescriptorSetLayout(LiveDevice(), l, nullptr);
         l = VK_NULL_HANDLE;
@@ -778,6 +921,44 @@ VkDescriptorSetLayout StageSetLayout(Shaders::Stage stage) {
 
 uint32_t DynamicConstantBuffers() {
     return g_dynamicCbs;
+}
+
+bool PushDescriptors() {
+    return g_push;
+}
+
+const PairLayout* PairLayoutFor(const Shaders::ShaderReflection& vs, const Shaders::ShaderReflection* ps) {
+    PairMasks key;
+    key.vs = MasksOf(Shaders::kSetVertex, &vs);
+    key.ps = MasksOf(Shaders::kSetPixel, ps);
+    std::lock_guard<std::mutex> guard(g_pushLock);
+    auto it = g_pushLayouts.find(key);
+    if (it != g_pushLayouts.end()) return it->second.layout ? &it->second : nullptr;
+    PairLayout pair;
+    if (BindingCount(key.ps) <= LiveCaps().maxPushDescriptors) {
+        VkDescriptorSetLayout sets[2] = { PairSetLayoutLocked(key.vs), PairSetLayoutLocked(key.ps) };
+        if (sets[0] && sets[1]) {
+            auto pl = Make<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+            pl.setLayoutCount = 2;
+            pl.pSetLayouts = sets;
+            const VkResult r = vkCreatePipelineLayout(LiveDevice(), &pl, nullptr, &pair.layout);
+            if (r != VK_SUCCESS) {
+                std::fprintf(stderr, "[Vulkan] pair pipeline layout: %s\n", ResultName(r));
+                pair.layout = VK_NULL_HANDLE;
+            }
+        }
+        pair.vertexSet = sets[0];
+        pair.vertexCbs = static_cast<uint32_t>(__builtin_popcount(key.vs.cb));
+        pair.vertexBindings = BindingCount(key.vs);
+    }
+    if (!pair.layout) {
+        std::fprintf(stderr,
+                     "[Vulkan] pair layout: pixel stage with %u bindings (maxPushDescriptors %u): this pair "
+                     "takes the pool path (sets from the frame's pools, the game layout)\n",
+                     BindingCount(key.ps), LiveCaps().maxPushDescriptors);
+    }
+    auto inserted = g_pushLayouts.emplace(key, pair);
+    return inserted.first->second.layout ? &inserted.first->second : nullptr;
 }
 
 // ---- the shader registry -----------------------------------------------------------------------------
@@ -854,8 +1035,9 @@ uint64_t InternLayout(const LayoutElement* elements, size_t count) {
 
 // ---- pipelines ---------------------------------------------------------------------------------------
 
-VkPipeline ResolvePipeline(PipelineKey& key, const ShaderEntry* vs, const ShaderEntry* ps) {
+VkPipeline ResolvePipeline(PipelineKey& key, const ShaderEntry* vs, const ShaderEntry* ps, const PairLayout** pair) {
     key.linked = (ps && !Shaders::StagesCompatible(vs->reflection, ps->reflection)) ? 1 : 0;
+    *pair = g_push ? PairLayoutFor(vs->reflection, ps ? &ps->reflection : nullptr) : nullptr;
     {
         std::lock_guard<std::mutex> guard(g_pipelineLock);
         auto it = g_pipelines.find(key);

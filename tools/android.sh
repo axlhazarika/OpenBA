@@ -9,6 +9,7 @@
 #   tools/android.sh pull DIR                          # the standalone_* logs and the boot state -> DIR
 #   tools/android.sh logcat                            # follow the app's logcat lines
 #   tools/android.sh boot-state [--wait N]             # = tools/boot_state.sh --android [--wait N]
+#   tools/android.sh validation on LAYER.so | off       # the Khronos validation layer in the debug app
 #
 # Environment: ANDROID_HOME (default %LOCALAPPDATA%/Android/Sdk), JAVA_HOME (default Android
 # Studio's bundled JBR), ADB (default platform-tools/adb of ANDROID_HOME, then C:/code/platform-tools,
@@ -59,7 +60,7 @@ if [ -z "${ADB:-}" ]; then
 fi
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -160,6 +161,41 @@ logcat)
     ;;
 boot-state)
     exec "$ROOT/tools/boot_state.sh" --android "$@"
+    ;;
+validation)
+    # The Khronos validation layer in the debuggable (debug) app (docs/android/README.md,
+    # "Validation layers"). `on` takes the arm64-v8a libVkLayer_khronos_validation.so of the
+    # Vulkan-ValidationLayers release "android-binaries-<ver>.zip"; nothing of it is kept in the
+    # tree. The Android loader injects the layers named by the gpu_debug_* settings into the one
+    # app named there; its messages are logcat tag VALIDATION and, through the backend's
+    # messenger, `[Vulkan] validation` lines in standalone_error.log.
+    mode="${1:-}"
+    case "$mode" in
+    on)
+        layer="${2:?validation on LAYER.so}"
+        [ -f "$layer" ] || { echo "no layer at $layer" >&2; exit 1; }
+        if command -v cygpath >/dev/null 2>&1; then layer="$(cygpath -m "$layer")"; fi
+        "$ADB" push "$layer" /data/local/tmp/libVkLayer_khronos_validation.so
+        "$ADB" shell run-as "$PKG" cp /data/local/tmp/libVkLayer_khronos_validation.so .
+        "$ADB" shell rm -f /data/local/tmp/libVkLayer_khronos_validation.so
+        "$ADB" shell settings put global enable_gpu_debug_layers 1
+        "$ADB" shell settings put global gpu_debug_app "$PKG"
+        "$ADB" shell settings put global gpu_debug_layers VK_LAYER_KHRONOS_validation
+        "$ADB" shell settings put global gpu_debug_layer_app "$PKG"
+        "$ADB" shell run-as "$PKG" ls -l libVkLayer_khronos_validation.so
+        ;;
+    off)
+        "$ADB" shell settings delete global enable_gpu_debug_layers
+        "$ADB" shell settings delete global gpu_debug_app
+        "$ADB" shell settings delete global gpu_debug_layers
+        "$ADB" shell settings delete global gpu_debug_layer_app
+        "$ADB" shell run-as "$PKG" rm -f libVkLayer_khronos_validation.so || true
+        ;;
+    *)
+        usage
+        ;;
+    esac
+    "$ADB" shell settings get global enable_gpu_debug_layers
     ;;
 *)
     usage

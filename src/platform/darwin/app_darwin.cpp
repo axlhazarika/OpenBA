@@ -39,5 +39,9 @@ void Shutdown() {
     BootState::Stop();
 }
 
+bool TakeSaveRequest() {
+    return false;
+}
+
 }  // namespace App
 }  // namespace Platform

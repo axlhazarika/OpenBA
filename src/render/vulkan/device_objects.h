@@ -26,7 +26,8 @@ struct Caps {
     bool debugUtils = false;             // VK_EXT_debug_utils on the instance
     bool validation = false;             // VK_LAYER_KHRONOS_validation enabled
     bool pushDescriptor = false;         // VK_KHR_push_descriptor
-    bool vertexInputDynamicState = false;// VK_EXT_vertex_input_dynamic_state
+    uint32_t maxPushDescriptors = 0;     // P7: its maxPushDescriptors (per set)
+    bool vertexInputDynamicState = false;// VK_EXT_vertex_input_dynamic_state present (P7: never enabled)
     bool extendedDynamicState2 = false;  // VK_EXT_extended_dynamic_state2 (EDS1 is 1.3 core)
     bool loadStoreOpNone = false;        // VK_KHR_load_store_op_none / VK_EXT_load_store_op_none
     bool d24s8 = false;                  // D24_UNORM_S8_UINT as a depth-stencil attachment

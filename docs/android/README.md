@@ -92,14 +92,21 @@ SDL ends the game's process state once `main` returns and refuses a second start
 `tools/android.sh run` force-stops the app first.
 
 **Phone defaults** (PLAN.md §1). The first start (no `settings.cfg` yet) writes a `settings.cfg` holding
-only `VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
+only `GameEdgeScroll=false` (P7: a touch held at the edge is a parked cursor), `VideoRenderScale=50`,
+`VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
 `ext.max_shadow_res` off, and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
 main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
 rounded corners and the camera cut-out, and Options > User interface scale goes down to 25 % (the UI four
 times larger than 100 %; `docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
-100. Options changes are kept as anywhere else. Half-resolution
-rendering is not there yet (`docs/known_port_issues.md`, Vulkan backend).
+100. Options changes are kept as anywhere else.
+
+**Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
+window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
+1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key once at window creation (no
+Options control; edit the file and restart); desktops answer 1.0. The SDL layer hands the engine the scaled
+size and pixel density, so taps land where they are drawn. The MSAA default stays off and the 60 fps cap
+is unruled: the numbers are in `P7_FIRST_PASS.md`.
 
 ## Logs
 
@@ -135,7 +142,18 @@ installs an SDL event watch (`src/render/vulkan/device.cpp`, THE MOBILE LIFECYCL
 `SDL_EVENT_WILL_ENTER_BACKGROUND` it waits for a frame still being presented, idles the device and
 destroys the swap chain and the surface; SDL then blocks the main thread until the app returns. On
 `SDL_EVENT_DID_ENTER_FOREGROUND` the next frame makes the surface and the swap chain again. Nothing calls
-`exit()`. `SDL_EVENT_LOW_MEMORY` and `SDL_EVENT_TERMINATING` are not mapped to a save yet (P7).
+`exit()`. Since P7 the same watch writes the pipeline cache and the warm list when the app goes to the
+background (Android may kill it there without a quit).
+
+A second watch, the platform's (`src/platform/android/app_android.cpp`, THE LIFECYCLE WATCH), pauses
+the boot-state watchdog's hang budget while the app is in the background (the state file says
+`detail=background`; `src/diag/android/boot_state_background.h`) and turns `SDL_EVENT_LOW_MEMORY` (in the
+foreground) and `SDL_EVENT_TERMINATING` into a save request: the next game update starts the game's own
+autosave (`Platform::App::TakeSaveRequest`, `GameUpdateLoop::Update`). Every `onTrimMemory` reaches SDL as
+LOW_MEMORY, including the one each trip home brings; in the background the main thread is blocked and
+such a request is dropped. To check by hand: `adb shell input keyevent KEYCODE_HOME`, then
+`adb shell am start -n org.openba.game/org.openba.game.OpenBAActivity` brings the running game back;
+`adb shell am send-trim-memory org.openba.game RUNNING_CRITICAL` in a running town writes `Save/Auto.sav`.
 
 ## Pre-rotation
 
@@ -147,5 +165,28 @@ compositor rotates every frame and every present answers `VK_SUBOPTIMAL_KHR`.
 
 ## Validation layers
 
-None is pushed in P6: the device log says `validation=0`. P7 pushes `libVkLayer_khronos_validation.so`
-into the debuggable app (`adb shell run-as`) and enables it with the `enable_gpu_debug_layers` settings.
+The Khronos validation layer runs in the **debug** apk only (it is debuggable; `run-as` and the GPU
+debug-layer settings need that). The layer is not in the tree or the apk: take the arm64-v8a
+`libVkLayer_khronos_validation.so` from the Vulkan-ValidationLayers release asset
+`android-binaries-<ver>.zip` (the Windows Vulkan SDK has no Android binary; P7 used 1.4.363.0), then:
+```bash
+tools/android.sh install debug
+tools/android.sh validation on <dir>/android-binaries-<ver>/arm64-v8a/libVkLayer_khronos_validation.so
+tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
+                     BANISHED_PAUSEMENU_BUTTON=6
+tools/android.sh pull <dir>                # grep '\[Vulkan\] validation' <dir>/standalone_error.log
+tools/android.sh validation off            # the settings deleted, the layer removed from the app
+```
+`validation on` copies the layer into the app's private folder (`run-as <pkg> cp`) and sets
+`enable_gpu_debug_layers`, `gpu_debug_app`, `gpu_debug_layers`, `gpu_debug_layer_app`; the Android loader
+then lists the layer to that one app, and the debug flavour enables it (`[Vulkan] instance: ...,
+validation on`, `validation=1` on the device line). Messages land in `standalone_error.log` as
+`[Vulkan] validation ERROR|warning: ...` through the backend's debug messenger (logcat tag OpenBA; the
+layer's own VALIDATION tag stays empty while a messenger is installed). The layer stops repeating one
+message after 10 (`duplicate_message_limit`), so a count is per distinct message, capped. Layer settings
+are system properties: `adb shell setprop debug.vulkan.khronos_validation.<setting> <value>`.
+
+P7 results (2026-10-25, menu + new game + pause-menu quit, 7,220 frames): before, 4 errors (the present
+source's first-frame layout; the byte-4 vertex attribute against an `int4` input, three pipelines) and the
+depth-only pass's unused `SV_Target` warning; after, 0 errors and the warning
+(`docs/android/P7_FIRST_PASS.md` §A).

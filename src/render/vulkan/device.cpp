@@ -178,6 +178,9 @@ bool LifecycleWatch(void*, SDL_Event* event) {
         imageAcquired = false;
         swapchainDirty = true;
         std::fprintf(stderr, "[Vulkan] background: swap chain and surface destroyed\n");
+        // P7: Android may kill a background process without a quit, so the pipeline cache and the
+        // warm list are written now too (the shutdown writes them again on a clean quit).
+        if (resourcesUp) PipelinesPersist();
     } else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
         if (backgrounded.exchange(false)) {
             std::fprintf(stderr, "[Vulkan] foreground: the surface is remade at the next frame\n");
@@ -435,12 +438,21 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     VkExtent2D frameExtent = extent;
     VkExtent2D imageExtent = extent;
     if (rotate) {
-        // The frame is the window's (landscape) size; the images are the panel's.
+        // The images are the panel's: the window's (landscape) pixel size, turned.
         int w = 0;
         int h = 0;
         SDL_GetWindowSizeInPixels(window, &w, &h);
+        VkExtent2D full = extent;
+        if (w > 0 && h > 0) full = { static_cast<uint32_t>(w), static_cast<uint32_t>(h) };
+        imageExtent = quarterTurn ? VkExtent2D{ full.height, full.width } : full;
+    }
+    if (rotate || Platform::Window::RenderScale() != 1.0f) {
+        // The frame is the engine's back buffer: the window's size in engine pixels (P7: times the
+        // render scale); the present pass scales it to the images when the two differ (present.h).
+        int w = 0;
+        int h = 0;
+        Platform::Window::Sdl::WindowSizeInEnginePixels(window, &w, &h);
         if (w > 0 && h > 0) frameExtent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h) };
-        imageExtent = quarterTurn ? VkExtent2D{ frameExtent.height, frameExtent.width } : frameExtent;
     }
 
     uint32_t imageCount = std::max(kFramesInFlight, surfaceCaps.minImageCount);
@@ -503,16 +515,17 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     // The present pass's source follows the swap chain; at the device's first swap chain the resource
     // layer is not up yet, and CreateDevice configures it after DrawStartup.
     std::string presentWhy;
-    if (resourcesUp && !PresentConfigure(swapTransform, swapFormat, renderExtent, &presentWhy)) {
+    if (resourcesUp && !PresentConfigure(swapTransform, swapFormat, renderExtent, swapExtent, &presentWhy)) {
         std::fprintf(stderr, "[Vulkan] %s\n", presentWhy.c_str());
     }
     std::fprintf(stderr,
-                 "[Vulkan] swap chain %ux%u, %u images, format %d, present mode %d, transform 0x%x (current 0x%x, "
-                 "currentExtent %ux%u)%s\n",
-                 swapExtent.width, swapExtent.height, count, static_cast<int>(swapFormat),
+                 "[Vulkan] swap chain %ux%u, %u images (asked %u, surface min %u), format %d, present mode %d, "
+                 "transform 0x%x (current 0x%x, currentExtent %ux%u)%s\n",
+                 swapExtent.width, swapExtent.height, count, imageCount, surfaceCaps.minImageCount,
+                 static_cast<int>(swapFormat),
                  static_cast<int>(presentMode), static_cast<unsigned>(ci.preTransform), static_cast<unsigned>(current),
                  surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height,
-                 PresentRotates() ? ", pre-rotated: the landscape frame is turned by the present pass" : "");
+                 PresentActive() ? ", the present pass draws the frame into the images (turned or scaled)" : "");
     return true;
 }
 
@@ -528,7 +541,7 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
     const int fs = cfg && cfg->fullscreen ? 1 : 0;
     int cw = 0;
     int ch = 0;
-    SDL_GetWindowSizeInPixels(w, &cw, &ch);
+    Platform::Window::Sdl::WindowSizeInEnginePixels(w, &cw, &ch);
     const bool fsFlip = lastFullscreen >= 0 && lastFullscreen != fs;
     lastFullscreen = fs;
     if (fsFlip || dev->backBufferWidth != cw || dev->backBufferHeight != ch) {
@@ -536,7 +549,7 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
         const int wantH = dev->backBufferHeight;
         dev->AdjustDisplay();
         SDL_SyncWindow(w);
-        SDL_GetWindowSizeInPixels(w, &cw, &ch);
+        Platform::Window::Sdl::WindowSizeInEnginePixels(w, &cw, &ch);
         dev->backBufferWidth = cw;
         dev->backBufferHeight = ch;
         if (cfg && !fs) {
@@ -873,6 +886,14 @@ bool DeviceData::CreateDevice() {
         return Fail("Vulkan: the device has no VK_KHR_swapchain");
     }
     caps.pushDescriptor = HasDeviceExtension(physical, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    if (caps.pushDescriptor) {
+        auto push = Make<VkPhysicalDevicePushDescriptorPropertiesKHR>(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR);
+        auto props2 = Make<VkPhysicalDeviceProperties2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2);
+        props2.pNext = &push;
+        vkGetPhysicalDeviceProperties2(physical, &props2);
+        caps.maxPushDescriptors = push.maxPushDescriptors;
+    }
     caps.vertexInputDynamicState =
         HasDeviceExtension(physical, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     caps.extendedDynamicState2 = HasDeviceExtension(physical, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
@@ -958,7 +979,7 @@ bool DeviceData::CreateDevice() {
     // 8 -- settle the window to the back buffer, then publish the real pixel size.
     dev->AdjustDisplay();
     SDL_SyncWindow(w);
-    SDL_GetWindowSizeInPixels(w, &dev->backBufferWidth, &dev->backBufferHeight);
+    Platform::Window::Sdl::WindowSizeInEnginePixels(w, &dev->backBufferWidth, &dev->backBufferHeight);
     lastFullscreen = cfg && cfg->fullscreen ? 1 : 0;
     StallDebug::Mark("  Vulkan AdjustDisplay (window sized)");
 
@@ -982,7 +1003,8 @@ bool DeviceData::CreateDevice() {
     qi.pQueuePriorities = &priority;
     std::vector<const char*> extensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     if (caps.pushDescriptor) extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-    if (caps.vertexInputDynamicState) extensions.push_back(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+    // P7: VK_EXT_vertex_input_dynamic_state is probed (the log line) but not enabled: no pipeline uses its
+    // state, and Qualcomm's Adreno guidance is to leave it off (docs/android/PERF_P7.md §2 row 11).
     if (caps.extendedDynamicState2) extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
     if (caps.msrtss) extensions.push_back(VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME);
     auto want13 = Make<VkPhysicalDeviceVulkan13Features>(
@@ -1004,9 +1026,6 @@ bool DeviceData::CreateDevice() {
     want12.vulkanMemoryModel = have12.vulkanMemoryModel;
     want12.vulkanMemoryModelDeviceScope = have12.vulkanMemoryModelDeviceScope;
     want13.pNext = &want12;
-    auto wantVids = Make<VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT);
-    wantVids.vertexInputDynamicState = VK_TRUE;
     auto wantEds2 = Make<VkPhysicalDeviceExtendedDynamicState2FeaturesEXT>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT);
     wantEds2.extendedDynamicState2 = VK_TRUE;
@@ -1015,10 +1034,6 @@ bool DeviceData::CreateDevice() {
     wantMsrtss.multisampledRenderToSingleSampled = VK_TRUE;
     want12.pNext = &want11;
     void** tail = &want11.pNext;
-    if (caps.vertexInputDynamicState) {
-        *tail = &wantVids;
-        tail = &wantVids.pNext;
-    }
     if (caps.extendedDynamicState2) {
         *tail = &wantEds2;
         tail = &wantEds2.pNext;
@@ -1069,9 +1084,11 @@ bool DeviceData::CreateDevice() {
     if (!PipelinesStartup(&why)) return Fail("Vulkan: " + why);
     if (!DrawStartup(&why)) return Fail("Vulkan: " + why);
     if (!PresentStartup(&why)) return Fail("Vulkan: " + why);
-    if (!PresentConfigure(swapTransform, swapFormat, renderExtent, &why)) return Fail("Vulkan: " + why);
-    if (PresentRotates()) {
-        std::fprintf(stderr, "[Vulkan] pre-rotated present: frame %ux%u turned into %ux%u (transform 0x%x)\n",
+    if (!PresentConfigure(swapTransform, swapFormat, renderExtent, swapExtent, &why)) {
+        return Fail("Vulkan: " + why);
+    }
+    if (PresentActive()) {
+        std::fprintf(stderr, "[Vulkan] present pass: frame %ux%u drawn into %ux%u (transform 0x%x)\n",
                      renderExtent.width, renderExtent.height, swapExtent.width, swapExtent.height,
                      static_cast<unsigned>(swapTransform));
     }
@@ -1084,13 +1101,13 @@ bool DeviceData::CreateDevice() {
     CreateOnDemand::Resume();
 
     std::fprintf(stderr,
-                 "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d "
-                 "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d "
+                 "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d (max %u) "
+                 "vertex_input_dynamic=%d (not enabled) eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d "
                  "ao=%d/%d/%d; multisample %ux\n",
                  deviceProperties.deviceName, DeviceTypeName(deviceProperties.deviceType),
                  VK_API_VERSION_MAJOR(caps.apiVersion), VK_API_VERSION_MINOR(caps.apiVersion),
                  VK_API_VERSION_PATCH(caps.apiVersion), deviceProperties.driverVersion, caps.pushDescriptor,
-                 caps.vertexInputDynamicState, caps.extendedDynamicState2, caps.loadStoreOpNone, caps.d24s8,
+                 caps.maxPushDescriptors, caps.vertexInputDynamicState, caps.extendedDynamicState2, caps.loadStoreOpNone, caps.d24s8,
                  caps.msrtss, caps.validation, caps.fragmentStores, caps.storageWriteWithoutFormat, caps.aoFormats,
                  mainSamples);
     return true;
@@ -1342,7 +1359,7 @@ bool ContextData::BeginCommands() {
     FrameTarget target;
     target.cb = f.commands;
     target.slot = frameSlot;
-    if (PresentRotates()) {
+    if (PresentActive()) {
         // present.h: the frame renders into the landscape source; Finish turns it into the swap image.
         target.image = PresentSourceImage();
         target.view = PresentSourceView();

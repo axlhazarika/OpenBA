@@ -102,7 +102,7 @@ void GetClientRect(void* /*window*/, Rect* out) {
     if (w == nullptr) return;
     if (SDL_GetWindowFlags(w) & SDL_WINDOW_MINIMIZED) return;
     int cw = 0, ch = 0;
-    SDL_GetWindowSizeInPixels(w, &cw, &ch);
+    Sdl::WindowSizeInEnginePixels(w, &cw, &ch);
     out->right  = cw;
     out->bottom = ch;
 }
@@ -114,7 +114,7 @@ void GetWindowRect(void* /*window*/, Rect* out) {
     if (w == nullptr) return;
     int x = 0, y = 0, cw = 0, ch = 0;
     SDL_GetWindowPosition(w, &x, &y);
-    SDL_GetWindowSizeInPixels(w, &cw, &ch);
+    Sdl::WindowSizeInEnginePixels(w, &cw, &ch);
     const float d = PixelDensity(w);
     out->left   = PointsToPixels(static_cast<float>(x), d);
     out->top    = PointsToPixels(static_cast<float>(y), d);
@@ -287,14 +287,31 @@ int32_t GetCurrentDisplayRefreshHz() {
 
 // window_sdl_internal.h. The one body of the window's pixel density: back-buffer pixels per
 // SDL point. SDL answers 1.0 for a window created without SDL_WINDOW_HIGH_PIXEL_DENSITY
-// (every Windows and Linux window), so this is the identity there.
+// (every Windows and Linux window), so this is the identity there. P7: times the render scale
+// (platform_window_hooks.h RenderScale, 1.0 but on Android), so a smaller back buffer and every
+// coordinate the engine sees agree.
 float PixelDensity(SDL_Window* window) {
+    float d = 1.0f;
     if (window != nullptr) {
-        const float d = SDL_GetWindowPixelDensity(window);
-        if (d > 0.0f) return d;
+        const float sdl = SDL_GetWindowPixelDensity(window);
+        if (sdl > 0.0f) d = sdl;
     }
-    return 1.0f;
+    return d * RenderScale();
 }
+
+namespace Sdl {
+
+// window_sdl_internal.h (P7): SDL's pixel size of the window, times the render scale.
+void WindowSizeInEnginePixels(SDL_Window* window, int* w, int* h) {
+    int pw = 0;
+    int ph = 0;
+    if (window != nullptr) SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    const float scale = RenderScale();
+    *w = scale == 1.0f ? pw : static_cast<int>(static_cast<float>(pw) * scale + 0.5f);
+    *h = scale == 1.0f ? ph : static_cast<int>(static_cast<float>(ph) * scale + 0.5f);
+}
+
+}  // namespace Sdl
 
 }  // namespace Window
 }  // namespace Platform

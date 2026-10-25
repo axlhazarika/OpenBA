@@ -30,6 +30,8 @@ VkSampler g_sampler = VK_NULL_HANDLE;
 VkSurfaceTransformFlagBitsKHR g_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 GpuImage g_source;
 VkExtent2D g_sourceExtent{};
+bool g_sourceRead = false;   // a recorded present pass has left the source in SHADER_READ_ONLY
+bool g_active = false;       // the frame renders into the source (pre-rotated, or scaled: P7)
 
 // The push constant: uv = A * st + b, A row-wise (present.vert).
 struct Transform {
@@ -138,6 +140,7 @@ void ReleaseSource() {
     if (g_source.image) DestroyImageNow(&g_source);
     g_source = GpuImage{};
     g_sourceExtent = VkExtent2D{};
+    g_sourceRead = false;
 }
 
 }  // namespace
@@ -218,12 +221,15 @@ void PresentShutdown() {
     g_frag = VK_NULL_HANDLE;
     g_sampler = VK_NULL_HANDLE;   // the shared sampler cache owns it
     g_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    g_active = false;
 }
 
 bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, VkExtent2D renderExtent,
-                      std::string* why) {
+                      VkExtent2D swapExtent, std::string* why) {
     g_transform = transform;
-    if (transform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+    const bool scaled = renderExtent.width != swapExtent.width || renderExtent.height != swapExtent.height;
+    g_active = transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR || scaled;
+    if (!g_active) {
         ReleaseSource();
         return true;
     }
@@ -236,6 +242,10 @@ bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, 
         d.height = renderExtent.height;
         d.format = format;
         d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;   // + SAMPLED / TRANSFER (resources.h ImageDesc)
+        // P7: with the tiler's MSAA (VK_EXT_multisampled_render_to_single_sampled) the source is also
+        // the main colour of a multisampled frame (draw.cpp MainColorInto): the frame resolves into it
+        // on the tile and this pass samples it, with no full-screen copy at the frame's end.
+        if (LiveCaps().msrtss) d.flags = VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
         if (!CreateImage(d, &g_source, why)) {
             *why = "present pass: source image: " + *why;
             return false;
@@ -255,8 +265,8 @@ bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, 
     return true;
 }
 
-bool PresentRotates() {
-    return g_transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR && g_source.image != VK_NULL_HANDLE;
+bool PresentActive() {
+    return g_active && g_source.image != VK_NULL_HANDLE;
 }
 
 VkImage PresentSourceImage() {
@@ -265,6 +275,10 @@ VkImage PresentSourceImage() {
 
 VkImageView PresentSourceView() {
     return g_source.view;
+}
+
+VkImageLayout PresentSourceLayout() {
+    return g_sourceRead ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 void PresentRecord(VkCommandBuffer cb, VkImage swapImage, VkImageView swapView, VkExtent2D swapExtent) {
@@ -293,6 +307,7 @@ void PresentRecord(VkCommandBuffer cb, VkImage swapImage, VkImageView swapView, 
     vkCmdSetScissor(cb, 0, 1, &scissor);
     vkCmdDraw(cb, 3, 1, 0, 0);
     vkCmdEndRendering(cb);
+    g_sourceRead = true;
 }
 
 }  // namespace VideoVulkan

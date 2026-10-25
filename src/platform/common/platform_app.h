@@ -28,5 +28,10 @@ void PreSdlInitHints();
 void PostSdlInit();
 void Shutdown();
 
+// True once for every save the platform asked for since the last call (main thread, the game's
+// update). Android asks at SDL_EVENT_LOW_MEMORY and SDL_EVENT_TERMINATING (PLAN.md §4.6): the
+// process may be killed without a quit. Never true on Windows, Linux or macOS.
+bool TakeSaveRequest();
+
 }  // namespace App
 }  // namespace Platform

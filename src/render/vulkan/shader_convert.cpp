@@ -258,6 +258,21 @@ void ReflectIo(const ir::Builder& builder, ShaderReflection* refl) {
     const ir::IoMap inputs = ir::IoMap::forInputs(builder);
     for (const ir::IoLocation& loc : inputs)
         refl->inputs.push_back(ElementOf(inputs, loc));
+    // P7: the numeric type the converter gave each plain input (the vertex attribute's format must
+    // agree with it: Vulkan's VUID 08733, which D3D11 does not check).
+    const ir::ShaderStage stage = ir::IoMap::getStageForBuilder(builder);
+    auto [a, b] = builder.getDeclarations();
+    for (auto it = a; it != b; ++it) {
+        if (it->getOpCode() != ir::OpCode::eDclInput) continue;
+        const ir::IoLocation loc = ir::IoMap::getEntryForOp(stage, *it);
+        const ir::BasicType type = it->getType().getBaseType(0u);
+        uint8_t numeric = IoElement::kFloat;
+        if (type.isSignedIntType()) numeric = IoElement::kSint;
+        if (type.isUnsignedIntType()) numeric = IoElement::kUint;
+        for (IoElement& e : refl->inputs) {
+            if (e.builtIn == IoElement::kNoBuiltIn && e.location == loc.getLocationIndex()) e.numeric = numeric;
+        }
+    }
     const ir::IoMap outputs = ir::IoMap::forOutputs(builder, 0u);
     for (const ir::IoLocation& loc : outputs)
         refl->outputs.push_back(ElementOf(outputs, loc));
@@ -276,6 +291,7 @@ void PutElements(std::vector<uint8_t>& out, const std::vector<IoElement>& elemen
         Put32(out, e.location);
         out.push_back(e.componentMask);
         out.push_back(e.builtIn);
+        out.push_back(e.numeric);
         Put32(out, static_cast<uint32_t>(e.semantic.size()));
         out.insert(out.end(), e.semantic.begin(), e.semantic.end());
     }
@@ -323,6 +339,7 @@ bool GetElements(Reader& r, std::vector<IoElement>* elements) {
         e.location = r.U32();
         e.componentMask = r.U8();
         e.builtIn = r.U8();
+        e.numeric = r.U8();
         const uint32_t length = r.U32();
         if (!r.ok || length > 256) return false;
         e.semantic = r.Bytes(length);

@@ -86,6 +86,14 @@ struct SetKey {
     VkSampler sampler[kTextureSlots] = {};
 };
 
+// P7, the pair-layout path (pipelines.h): the contents of a vertex set (its offsets are dynamic).
+struct VertexSetKey {
+    const PairLayout* pair = nullptr;
+    VkBuffer cb[kCbSlots] = {};
+    VkImageView view[kTextureSlots] = {};
+    VkSampler sampler[kTextureSlots] = {};
+};
+
 struct SlotResources {
     std::vector<GpuBuffer> ring;   // constant-buffer chunks
     size_t chunk = 0;
@@ -93,6 +101,7 @@ struct SlotResources {
     std::vector<VkDescriptorPool> pools;
     size_t pool = 0;
     std::unordered_map<uint64_t, std::vector<std::pair<SetKey, VkDescriptorSet>>> sets;
+    std::vector<std::pair<VertexSetKey, VkDescriptorSet>> vertexSets;   // P7: the pair-layout path
 };
 SlotResources g_slots[kFramesInFlight];
 
@@ -110,6 +119,33 @@ struct Target {
     uint32_t samples = 1;
     bool msrtss = false;
     VkExtent2D extent{};
+};
+
+// P7, the pair-layout path: the pixel set's pushed descriptors, as compared bytes (binding, a handle
+// and an offset). `count` 0xFFFFFFFF = nothing pushed into this command buffer yet.
+struct PushedValue {
+    uint32_t binding = 0;
+    uint32_t pad = 0;
+    uint64_t a = 0;
+    uint64_t b = 0;
+};
+struct PushedStage {
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    uint32_t count = 0xFFFFFFFFu;
+    PushedValue values[Shaders::kBindingsPerSet];
+};
+
+// P7, the pair-layout path: the vertex set last found (vtxKey / vtxSet) and the one bound in this
+// command buffer with its dynamic offsets.
+struct VertexSetState {
+    bool found = false;
+    VertexSetKey key;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    bool bound = false;
+    const PairLayout* boundPair = nullptr;
+    VkDescriptorSet boundSet = VK_NULL_HANDLE;
+    uint32_t offsetCount = 0;
+    uint32_t offsets[kCbSlots] = {};
 };
 
 // The frame being recorded, and what its command buffer has bound (reset with each frame).
@@ -134,13 +170,20 @@ struct Frame {
     VkDescriptorSet sets[2] = {};
     uint32_t dynOffsets[2][kCbSlots] = {};
     bool setsBound = false;
-    // The last resolved pipeline key (most draws repeat it).
+    // The last resolved pipeline key (most draws repeat it), and its layout.
     PipelineKey lastKey{};
     VkPipeline lastPipeline = VK_NULL_HANDLE;
+    const PairLayout* lastPair = nullptr;
     bool lastValid = false;
+    // P7, the pair-layout path (pipelines.h): the pixel set last pushed, the vertex set last bound.
+    PushedStage pushed;
+    VertexSetState vertex;
     // Counters for the frame line.
     uint32_t passes = 0;
     uint32_t setsAllocated = 0;
+    uint32_t pushes = 0;
+    uint32_t depthPasses = 0;     // P7: passes with the main depth attached (THE DEPTH DISCARD)
+    uint32_t depthDiscards = 0;
     uint32_t targetPasses = 0;    // passes on render buffers other than the main one
     uint32_t resolves = 0;
     uint32_t reads = 0;
@@ -164,6 +207,9 @@ PendingClear g_clear;
 struct MainTargets {
     uint32_t samples = 0;
     bool msrtss = false;
+    // P7: tiler MSAA on a pre-rotated frame: the present pass's source image is the main colour (it is
+    // made with the MSRTSS flag, present.cpp), so there is no colour image of our own and no end copy.
+    bool onSource = false;
     bool readable = false;        // P4: the depth is SAMPLED too, `depthSampled` its depth-aspect view
     VkExtent2D extent{};
     GpuImage depth;               // attachment-only: `view` covers depth and stencil
@@ -184,6 +230,21 @@ std::vector<ImageState*> g_touched;
 std::vector<VkImageMemoryBarrier2> g_barriers;
 // Texture slots of the draw being issued that sample an attachment of the bound render buffer.
 uint32_t g_hazardSlots = 0;
+// P7, THE DEPTH DISCARD (tilers: docs/android/PERF_P7.md §2 row 2). Nothing reads the main depth after
+// the frame's last pass on it (the AO pass is the one reader, and it asks for a readable depth first),
+// so that pass may end with STORE_OP_DONT_CARE and the tile's depth is never written out. The store op
+// is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED: the
+// pass whose index equals the previous frame's count of main-depth passes, less one, and only once
+// that count has been the same for kDiscardStableFrames frames in a row. A wrong prediction is caught
+// where it matters: a main-depth pass that LOADs while the contents are discarded clears instead (the
+// far plane, stencil 0). That pass's geometry is then drawn against an empty depth for one frame (it
+// shows through the scene), so ONE miss turns the discard off for the rest of the session (logged).
+uint32_t g_lastFrameDepthPasses = 0;
+uint32_t g_depthPassesStable = 0;  // frames in a row with the same count of main-depth passes
+bool g_depthLost = false;          // the main depth's contents were discarded and not cleared since
+bool g_discardOff = false;         // a prediction missed: no discard for the rest of the session
+uint32_t g_depthMispredicts = 0;   // since the start (the frame line)
+constexpr uint32_t kDiscardStableFrames = 600;
 // A one-shot command pool for a read-back outside a frame (under the device lock).
 VkCommandPool g_readPool = VK_NULL_HANDLE;
 
@@ -227,6 +288,8 @@ void ResetCommandState() {
     g_frame.vbuffersSet = false;
     g_frame.ibuffer = VK_NULL_HANDLE;
     g_frame.setsBound = false;
+    g_frame.pushed.count = 0xFFFFFFFFu;
+    g_frame.vertex.bound = false;
 }
 
 // ---- the main targets ----
@@ -288,16 +351,18 @@ bool EnsureMainTargets() {
     const VkExtent2D extent = g_frame.target.extent;
     const uint32_t samples = MainSampleCount();
     const bool msrtss = samples > 1 && LiveCaps().msrtss;
+    const bool onSource = msrtss && g_frame.target.presentImage != VK_NULL_HANDLE;
     const bool readable = g_readableRequested.load();
     if (g_main.depth.image && !g_targetsChanged && g_main.extent.width == extent.width &&
         g_main.extent.height == extent.height && g_main.samples == samples && g_main.msrtss == msrtss &&
-        g_main.readable == readable) {
+        g_main.onSource == onSource && g_main.readable == readable) {
         return true;
     }
     g_targetsChanged = false;
     DestroyMainTargets();
     g_main.samples = samples;
     g_main.msrtss = msrtss;
+    g_main.onSource = onSource;
     g_main.extent = extent;
     const VkImageUsageFlags depthUsage =
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (readable ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
@@ -308,7 +373,7 @@ bool EnsureMainTargets() {
         g_main.readable = true;
         g_depthReadable.store(true);
     }
-    if (samples > 1) {
+    if (samples > 1 && !onSource) {
         const VkImageUsageFlags usage =
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (msrtss ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
         if (!MakeMainImage(SwapchainFormat(), usage, samples, msrtss, extent, &g_main.color, &g_main.colorState)) {
@@ -316,14 +381,17 @@ bool EnsureMainTargets() {
         }
     }
     std::fprintf(stderr, "[Vulkan] main targets %ux%u, multisample %ux (%s), depth %s\n", extent.width, extent.height,
-                 samples, samples == 1 ? "swap-chain image" : (msrtss ? "tiler msrtss" : "resolve attachments"),
+                 samples,
+                 samples == 1 ? "swap-chain image"
+                              : (onSource ? "tiler msrtss on the present source"
+                                          : (msrtss ? "tiler msrtss" : "resolve attachments")),
                  g_main.readable ? "readable (sampled view for the AO pass)" : "attachment only");
     return true;
 }
 
 // The main colour as a Resolve / read source: where the frame so far is single-sampled.
 ImageState* MainColorSource() {
-    if (g_main.samples > 1 && g_main.msrtss) return &g_main.colorState;
+    if (g_main.samples > 1 && g_main.msrtss && !g_main.onSource) return &g_main.colorState;
     return &g_swap;
 }
 
@@ -335,6 +403,10 @@ void MainColorInto(Target* t) {
     if (g_main.samples == 1) {
         t->color = &g_swap;
         t->colorView = g_frame.target.view;
+    } else if (g_main.onSource) {
+        t->color = &g_swap;
+        t->colorView = g_frame.target.view;
+        t->msrtss = true;
     } else if (g_main.msrtss) {
         t->color = &g_main.colorState;
         t->colorView = g_main.color.view;
@@ -467,6 +539,39 @@ bool BeginPass(const Target& t) {
     VkRenderingAttachmentInfo stencil = depth;
     stencil.loadOp = (g_clear.stencil || depthFresh) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     const bool hasStencil = t.depth && (t.depth->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+    if (t.msrtss) {
+        // P7 (a validation error since P3): a single-sampled attachment of a tiler-MSAA pass that is
+        // stored names how its implicit resolve is made, with no resolve image: colour averaged, depth
+        // and stencil from sample 0.
+        if (t.color) color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        depth.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        stencil.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    }
+    if (t.depth == &g_main.depthState) {
+        // P7, THE DEPTH DISCARD (above).
+        const uint32_t index = g_frame.depthPasses++;
+        const bool loads = depth.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD ||
+                           (hasStencil && stencil.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
+        if (g_depthLost && loads) {
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.clearValue.depthStencil.depth = 1.0f;
+            stencil.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            stencil.clearValue.depthStencil.stencil = 0;
+            g_discardOff = true;
+            ++g_depthMispredicts;
+            std::fprintf(stderr, "[Vulkan] the main depth was discarded by a pass predicted last, then loaded "
+                                 "(pass %u, last frame %u): cleared instead; the discard is off for the session "
+                                 "(THE DEPTH DISCARD)\n", index, g_lastFrameDepthPasses);
+        }
+        g_depthLost = false;
+        if (!g_discardOff && g_depthPassesStable >= kDiscardStableFrames && !g_readableRequested.load() &&
+            index + 1 == g_lastFrameDepthPasses) {
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            g_depthLost = true;
+            ++g_frame.depthDiscards;
+        }
+    }
 
     auto msrtss = Make<VkMultisampledRenderToSingleSampledInfoEXT>(
         VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
@@ -610,9 +715,8 @@ VkDescriptorPool NewPool() {
     return pool;
 }
 
-VkDescriptorSet AllocateSet(Shaders::Stage stage) {
+VkDescriptorSet AllocateSet(VkDescriptorSetLayout layout) {
     SlotResources& s = g_slots[g_frame.target.slot];
-    const VkDescriptorSetLayout layout = StageSetLayout(stage);
     for (;;) {
         if (s.pool >= s.pools.size()) {
             VkDescriptorPool pool = NewPool();
@@ -701,7 +805,7 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     for (const auto& entry : bucket) {
         if (std::memcmp(&entry.first, &key, sizeof(SetKey)) == 0) return entry.second;
     }
-    VkDescriptorSet set = AllocateSet(stage);
+    VkDescriptorSet set = AllocateSet(StageSetLayout(stage));
     if (!set) return VK_NULL_HANDLE;
     VkDescriptorBufferInfo buffers[kCbSlots];
     VkDescriptorImageInfo images[kTextureSlots];
@@ -744,6 +848,202 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     vkUpdateDescriptorSets(LiveDevice(), n, writes, 0, nullptr);
     bucket.emplace_back(key, set);
     return set;
+}
+
+// P7, the pair-layout path (pipelines.h): pushes the pixel set (set 1) for the bound resources the
+// pixel shader reads into the pair's layout, unless this command buffer already holds exactly those.
+// The same resources StageSet picks: the ring copy of each constant buffer, the bound view or a
+// placeholder of the declared type (the hazard slots read the placeholder), the sampler.
+void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::ShaderReflection* refl) {
+    const uint32_t s = Shaders::kSetPixel;
+    const uint32_t cbMask = refl ? refl->constantBufferMask : 0;
+    const uint32_t texMask = refl ? refl->textureMask : 0;
+    const uint32_t smpMask = refl ? refl->samplerMask : 0;
+    PushedValue values[Shaders::kBindingsPerSet];
+    VkDescriptorType types[Shaders::kBindingsPerSet];
+    uint32_t n = 0;
+    for (uint32_t b = 0; b < kCbSlots; ++b) {
+        if (!((cbMask >> b) & 1)) continue;
+        CbBinding& c = g_bound.cbs[s][b];
+        ResolveConstants(c);
+        values[n] = PushedValue{};
+        values[n].binding = Shaders::BindingOfConstantBuffer(b);
+        values[n].a = reinterpret_cast<uint64_t>(c.buffer);   // CAST-OK: a handle compared as bytes
+        values[n].b = c.offset;
+        types[n] = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        ++n;
+    }
+    for (uint32_t t = 0; t < kTextureSlots; ++t) {
+        if ((texMask >> t) & 1) {
+            const bool cube = refl && ((refl->textureCubeMask >> t) & 1);
+            const VkImageView view = TextureView(g_bound.textures[t], cube, (g_hazardSlots >> t) & 1);
+            values[n] = PushedValue{};
+            values[n].binding = Shaders::BindingOfTexture(t);
+            values[n].a = reinterpret_cast<uint64_t>(view);   // CAST-OK: a handle compared as bytes
+            types[n] = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            ++n;
+        }
+        if ((smpMask >> t) & 1) {
+            const VkSampler sampler = TextureSampler(g_bound.textures[t]);
+            values[n] = PushedValue{};
+            values[n].binding = Shaders::BindingOfSampler(t);
+            values[n].a = reinterpret_cast<uint64_t>(sampler);   // CAST-OK: a handle compared as bytes
+            types[n] = VK_DESCRIPTOR_TYPE_SAMPLER;
+            ++n;
+        }
+    }
+    PushedStage& last = g_frame.pushed;
+    if (last.layout == pair.layout && last.count == n &&
+        std::memcmp(last.values, values, n * sizeof(PushedValue)) == 0) {
+        return;
+    }
+    last.layout = pair.layout;
+    last.count = n;
+    std::memcpy(last.values, values, n * sizeof(PushedValue));
+    if (n == 0) return;
+    VkDescriptorBufferInfo buffers[Shaders::kBindingsPerSet];
+    VkDescriptorImageInfo images[Shaders::kBindingsPerSet];
+    VkWriteDescriptorSet writes[Shaders::kBindingsPerSet];
+    for (uint32_t i = 0; i < n; ++i) {
+        writes[i] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+        writes[i].dstBinding = values[i].binding;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = types[i];
+        if (types[i] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+            buffers[i].buffer = reinterpret_cast<VkBuffer>(values[i].a);   // CAST-OK: the handle stored above
+            buffers[i].offset = values[i].b;
+            buffers[i].range = kConstantBufferRange;
+            writes[i].pBufferInfo = &buffers[i];
+        } else if (types[i] == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+            images[i].sampler = VK_NULL_HANDLE;
+            images[i].imageView = reinterpret_cast<VkImageView>(values[i].a);   // CAST-OK: as above
+            images[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            writes[i].pImageInfo = &images[i];
+        } else {
+            images[i].sampler = reinterpret_cast<VkSampler>(values[i].a);   // CAST-OK: as above
+            images[i].imageView = VK_NULL_HANDLE;
+            images[i].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            writes[i].pImageInfo = &images[i];
+        }
+    }
+    vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pair.layout, s, n, writes);
+    ++g_frame.pushes;
+}
+
+// P7, the pair-layout path: finds (or makes) the vertex set (set 0) of the bound constant buffers and
+// binds it with their dynamic offsets when anything differs from the bound one. The vertex stage's
+// texture slots read the placeholders (StageSet's rule). False when no set could be allocated.
+bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::ShaderReflection& refl) {
+    const uint32_t s = Shaders::kSetVertex;
+    VertexSetKey key;
+    key.pair = &pair;
+    uint32_t offsets[kCbSlots];
+    uint32_t n = 0;
+    for (uint32_t b = 0; b < kCbSlots; ++b) {
+        if (!((refl.constantBufferMask >> b) & 1)) continue;
+        CbBinding& c = g_bound.cbs[s][b];
+        ResolveConstants(c);
+        key.cb[b] = c.buffer;
+        offsets[n++] = static_cast<uint32_t>(c.offset);
+    }
+    for (uint32_t t = 0; t < kTextureSlots; ++t) {
+        if ((refl.textureMask >> t) & 1) key.view[t] = TextureView(nullptr, (refl.textureCubeMask >> t) & 1, false);
+        if ((refl.samplerMask >> t) & 1) key.sampler[t] = TextureSampler(nullptr);
+    }
+    VertexSetState& v = g_frame.vertex;
+    if (!v.found || std::memcmp(&v.key, &key, sizeof(VertexSetKey)) != 0) {
+        SlotResources& slot = g_slots[g_frame.target.slot];
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        for (const auto& entry : slot.vertexSets) {
+            if (std::memcmp(&entry.first, &key, sizeof(VertexSetKey)) == 0) {
+                set = entry.second;
+                break;
+            }
+        }
+        if (!set) {
+            set = AllocateSet(pair.vertexSet);
+            if (!set) return false;
+            VkDescriptorBufferInfo buffers[kCbSlots];
+            VkDescriptorImageInfo images[2 * kTextureSlots];
+            VkWriteDescriptorSet writes[Shaders::kBindingsPerSet];
+            uint32_t w = 0;
+            uint32_t image = 0;
+            for (uint32_t b = 0; b < kCbSlots; ++b) {
+                if (!key.cb[b]) continue;
+                buffers[b].buffer = key.cb[b];
+                buffers[b].offset = 0;
+                buffers[b].range = kConstantBufferRange;
+                writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                writes[w].dstSet = set;
+                writes[w].dstBinding = Shaders::BindingOfConstantBuffer(b);
+                writes[w].descriptorCount = 1;
+                writes[w].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                writes[w].pBufferInfo = &buffers[b];
+                ++w;
+            }
+            for (uint32_t t = 0; t < kTextureSlots; ++t) {
+                if (key.view[t]) {
+                    images[image].sampler = VK_NULL_HANDLE;
+                    images[image].imageView = key.view[t];
+                    images[image].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                    writes[w].dstSet = set;
+                    writes[w].dstBinding = Shaders::BindingOfTexture(t);
+                    writes[w].descriptorCount = 1;
+                    writes[w].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                    writes[w].pImageInfo = &images[image++];
+                    ++w;
+                }
+                if (key.sampler[t]) {
+                    images[image].sampler = key.sampler[t];
+                    images[image].imageView = VK_NULL_HANDLE;
+                    images[image].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                    writes[w].dstSet = set;
+                    writes[w].dstBinding = Shaders::BindingOfSampler(t);
+                    writes[w].descriptorCount = 1;
+                    writes[w].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    writes[w].pImageInfo = &images[image++];
+                    ++w;
+                }
+            }
+            if (w != 0) vkUpdateDescriptorSets(LiveDevice(), w, writes, 0, nullptr);
+            slot.vertexSets.emplace_back(key, set);
+        }
+        v.found = true;
+        v.key = key;
+        v.set = set;
+    }
+    if (!v.bound || v.boundPair != &pair || v.boundSet != v.set || v.offsetCount != n ||
+        std::memcmp(v.offsets, offsets, n * sizeof(uint32_t)) != 0) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pair.layout, s, 1, &v.set, n, offsets);
+        v.bound = true;
+        v.boundPair = &pair;
+        v.boundSet = v.set;
+        v.offsetCount = n;
+        std::memcpy(v.offsets, offsets, n * sizeof(uint32_t));
+        // A new set 0 of another layout disturbs set 1: the pixel set is pushed again.
+        g_frame.pushed.count = 0xFFFFFFFFu;
+    }
+    return true;
+}
+
+// The pool path's bind: both sets with their dynamic offsets, when anything differs from the bound.
+void BindSets(VkCommandBuffer cb, const VkDescriptorSet sets[2], const uint32_t offsets[2][kCbSlots]) {
+    const uint32_t dyn = DynamicConstantBuffers();
+    if (!g_frame.setsBound || sets[0] != g_frame.sets[0] || sets[1] != g_frame.sets[1] ||
+        std::memcmp(offsets[0], g_frame.dynOffsets[0], dyn * sizeof(uint32_t)) != 0 ||
+        std::memcmp(offsets[1], g_frame.dynOffsets[1], dyn * sizeof(uint32_t)) != 0) {
+        uint32_t packed[2 * kCbSlots];
+        std::memcpy(packed, offsets[0], dyn * sizeof(uint32_t));
+        std::memcpy(packed + dyn, offsets[1], dyn * sizeof(uint32_t));
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, GamePipelineLayout(), 0, 2, sets, 2 * dyn,
+                                packed);
+        g_frame.sets[0] = sets[0];
+        g_frame.sets[1] = sets[1];
+        std::memcpy(g_frame.dynOffsets, offsets, sizeof(g_frame.dynOffsets));
+        g_frame.setsBound = true;
+    }
 }
 
 // ---- vertex input ----
@@ -883,12 +1183,15 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
     key.msrtss = g_frame.pass.msrtss ? 1 : 0;
     key.linked = g_frame.lastValid ? g_frame.lastKey.linked : 0;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    const PairLayout* pair = nullptr;
     if (g_frame.lastValid && std::memcmp(&key, &g_frame.lastKey, sizeof(PipelineKey)) == 0) {
         pipeline = g_frame.lastPipeline;
+        pair = g_frame.lastPair;
     } else {
-        pipeline = ResolvePipeline(key, vs, ps);
+        pipeline = ResolvePipeline(key, vs, ps, &pair);
         g_frame.lastKey = key;
         g_frame.lastPipeline = pipeline;
+        g_frame.lastPair = pair;
         g_frame.lastValid = true;
     }
     if (!pipeline) {
@@ -930,28 +1233,28 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
         g_frame.stencilRef = ref;
     }
 
-    // Descriptors.
-    uint32_t offsets[2][kCbSlots];
-    VkDescriptorSet sets[2];
-    sets[0] = StageSet(Shaders::Stage::Vertex, &vs->reflection, offsets[0]);
-    sets[1] = StageSet(Shaders::Stage::Pixel, ps ? &ps->reflection : nullptr, offsets[1]);
-    if (!sets[0] || !sets[1]) {
-        ++g_frame.failedDraws;
-        return;
-    }
-    const uint32_t dyn = DynamicConstantBuffers();
-    if (!g_frame.setsBound || sets[0] != g_frame.sets[0] || sets[1] != g_frame.sets[1] ||
-        std::memcmp(offsets[0], g_frame.dynOffsets[0], dyn * sizeof(uint32_t)) != 0 ||
-        std::memcmp(offsets[1], g_frame.dynOffsets[1], dyn * sizeof(uint32_t)) != 0) {
-        uint32_t packed[2 * kCbSlots];
-        std::memcpy(packed, offsets[0], dyn * sizeof(uint32_t));
-        std::memcpy(packed + dyn, offsets[1], dyn * sizeof(uint32_t));
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, GamePipelineLayout(), 0, 2, sets, 2 * dyn,
-                                packed);
-        g_frame.sets[0] = sets[0];
-        g_frame.sets[1] = sets[1];
-        std::memcpy(g_frame.dynOffsets, offsets, sizeof(offsets));
-        g_frame.setsBound = true;
+    // Descriptors: pushed (P7, pipelines.h), or sets from the frame's pools. P7: a pair too large to
+    // push takes the pool path on the push device too; a bind on one path disturbs what the other
+    // left bound, so each path forgets the other's.
+    if (pair) {
+        g_frame.setsBound = false;
+        if (!BindVertexSet(cb, *pair, vs->reflection)) {
+            ++g_frame.failedDraws;
+            return;
+        }
+        PushPixelSet(cb, *pair, ps ? &ps->reflection : nullptr);
+    } else {
+        uint32_t offsets[2][kCbSlots];
+        VkDescriptorSet sets[2];
+        sets[0] = StageSet(Shaders::Stage::Vertex, &vs->reflection, offsets[0]);
+        sets[1] = StageSet(Shaders::Stage::Pixel, ps ? &ps->reflection : nullptr, offsets[1]);
+        if (!sets[0] || !sets[1]) {
+            ++g_frame.failedDraws;
+            return;
+        }
+        g_frame.vertex.bound = false;
+        g_frame.pushed.count = 0xFFFFFFFFu;
+        BindSets(cb, sets, offsets);
     }
 
     BindStreams(cb);
@@ -999,6 +1302,7 @@ void DrawShutdown() {
             vkDestroyDescriptorPool(LiveDevice(), p, nullptr);
         s.pools.clear();
         s.sets.clear();
+        s.vertexSets.clear();
         s.chunk = 0;
         s.offset = 0;
         s.pool = 0;
@@ -1025,8 +1329,10 @@ void DrawBeginFrame(const FrameTarget& target) {
         vkResetDescriptorPool(LiveDevice(), p, 0);
     s.pool = 0;
     s.sets.clear();
+    s.vertexSets.clear();
     const PipelineKey lastKey = g_frame.lastKey;
     const VkPipeline lastPipeline = g_frame.lastPipeline;
+    const PairLayout* const lastPair = g_frame.lastPair;
     const bool lastValid = g_frame.lastValid;
     g_frame = Frame{};
     g_frame.target = target;
@@ -1034,13 +1340,15 @@ void DrawBeginFrame(const FrameTarget& target) {
     g_frame.index = FramesSubmitted();
     g_frame.lastKey = lastKey;
     g_frame.lastPipeline = lastPipeline;
+    g_frame.lastPair = lastPair;
     g_frame.lastValid = lastValid;
     g_clear = PendingClear{};
     g_swap.image = target.image;
     g_swap.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     // A pre-rotated frame's source was left in SHADER_READ_ONLY by the previous frame's present pass:
-    // starting from that layout makes this frame's first write wait for that read (present.h).
-    g_swap.layout = target.presentImage ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    // starting from that layout makes this frame's first write wait for that read (present.h). A fresh
+    // source (the first frame, every swap-chain rebuild) is still UNDEFINED.
+    g_swap.layout = target.presentImage ? PresentSourceLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
     g_touched.clear();
 }
 
@@ -1069,6 +1377,12 @@ void DrawEndFrame() {
     if (!g_frame.active) return;
     FlushPendingClear();
     EndPass();
+    if (g_frame.depthPasses == g_lastFrameDepthPasses) {
+        if (g_depthPassesStable < kDiscardStableFrames) ++g_depthPassesStable;
+    } else {
+        g_depthPassesStable = 0;
+    }
+    g_lastFrameDepthPasses = g_frame.depthPasses;
     VkCommandBuffer cb = g_frame.target.cb;
     // A frame that drew nothing on the main colour still presents a defined image: black.
     if (!g_frame.mainDrawn && EnsureMainTargets()) {
@@ -1119,11 +1433,12 @@ void DrawLogFrame(uint64_t frame, const Video::Context* context) {
     TakeUploadStats(&uploadBytes, &batches);
     std::fprintf(stderr,
                  "[Vulkan] frame=%llu draws=%d triangles=%d vertices=%d objects=%d | passes=%u (other targets %u) "
-                 "resolves=%u reads=%u sets=%u ring=%lluB failed=%u | pipelines +%u built +%u warmed "
-                 "%u failed | uploads %llu KB in %u batch(es)\n",
+                 "resolves=%u reads=%u sets=%u pushes=%u depth %u/%u discarded (%u mispredicted) ring=%lluB failed=%u | "
+                 "pipelines +%u built +%u warmed %u failed | uploads %llu KB in %u batch(es)\n",
                  static_cast<unsigned long long>(frame), context->_drawsSubmitted, context->_trianglesSubmitted,
                  context->_verticesSubmitted, context->_objectsSubmitted, g_frame.passes, g_frame.targetPasses,
-                 g_frame.resolves, g_frame.reads, g_frame.setsAllocated,
+                 g_frame.resolves, g_frame.reads, g_frame.setsAllocated, g_frame.pushes,
+                 g_frame.depthDiscards, g_frame.depthPasses, g_depthMispredicts,
                  static_cast<unsigned long long>(g_frame.ringBytes), g_frame.failedDraws, built, warmed, failed, static_cast<unsigned long long>(uploadBytes >> 10),
                  batches);
 }

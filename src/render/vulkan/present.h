@@ -29,13 +29,19 @@ bool PresentStartup(std::string* why);
 void PresentShutdown();
 
 // The swap chain was (re)made, the device idle. `transform` its preTransform; `renderExtent` the
-// landscape frame's size; `format` the swap-chain format. IDENTITY releases the source image.
+// landscape frame's size; `swapExtent` the images'; `format` the swap-chain format. IDENTITY with the
+// two extents equal releases the source image. P7: a frame smaller than the window (the render scale,
+// platform_window_hooks.h RenderScale) also renders into the source, and this pass scales it up
+// (linear filtering), turned or not.
 bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, VkExtent2D renderExtent,
-                      std::string* why);
-// True while the swap chain is pre-rotated (the frame renders into the source image).
-bool PresentRotates();
+                      VkExtent2D swapExtent, std::string* why);
+// True while the frame renders into the source image (pre-rotated, or scaled).
+bool PresentActive();
 VkImage PresentSourceImage();
 VkImageView PresentSourceView();
+// The layout the source image is in when the next frame begins: UNDEFINED until a present pass has
+// read it (a fresh image: the first frame, every swap-chain rebuild), SHADER_READ_ONLY after it.
+VkImageLayout PresentSourceLayout();
 // Records the rotated copy: `source` is in SHADER_READ_ONLY, `swapImage` is moved here from
 // UNDEFINED to COLOR_ATTACHMENT and left there (the caller moves it to PRESENT_SRC).
 void PresentRecord(VkCommandBuffer cb, VkImage swapImage, VkImageView swapView, VkExtent2D swapExtent);

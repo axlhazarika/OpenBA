@@ -51,6 +51,7 @@
 #include "platform_window.h"
 #include "window_messages.h"
 #include "window_sdl_internal.h"
+#include "platform_window_hooks.h"   // RenderScale (P7)
 #include "platform_input_hooks.h"
 
 #include <SDL3/SDL_events.h>
@@ -83,7 +84,7 @@ std::deque<WindowMessage>  g_rawMessages;
 void ClientSizeInPixels(int32_t* w, int32_t* h) {
     int iw = 0;
     int ih = 0;
-    if (SDL_Window* win = Sdl::GameWindow()) SDL_GetWindowSizeInPixels(win, &iw, &ih);
+    Sdl::WindowSizeInEnginePixels(Sdl::GameWindow(), &iw, &ih);   // P7: times the render scale
     *w = iw;
     *h = ih;
 }
@@ -101,6 +102,11 @@ WindowEvent FromSdl(const SDL_Event& ev) {
             e.kind   = WindowEventKind::SizeChanged;
             e.width  = ev.window.data1;
             e.height = ev.window.data2;
+            if (RenderScale() != 1.0f) {
+                // P7: the event's pixel size, in engine pixels (WindowSizeInEnginePixels).
+                e.width  = static_cast<int32_t>(static_cast<float>(ev.window.data1) * RenderScale() + 0.5f);
+                e.height = static_cast<int32_t>(static_cast<float>(ev.window.data2) * RenderScale() + 0.5f);
+            }
             if (SDL_Window* win = Sdl::GameWindow())
                 e.maximized = (SDL_GetWindowFlags(win) & SDL_WINDOW_MAXIMIZED) != 0;
             break;

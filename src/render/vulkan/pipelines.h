@@ -22,7 +22,8 @@
 // scissor, stencil reference and the vertex strides are dynamic state (strides: core 1.3
 // VERTEX_INPUT_BINDING_STRIDE), so none of them is in the key. Vertex-input dynamic state
 // (VK_EXT_vertex_input_dynamic_state) is NOT used in P2: in this game a vertex shader implies its
-// layout, so dropping the layout from the key saves almost no pipelines; it stays a P7 measurement.
+// layout, so dropping the layout from the key saves almost no pipelines; P7 stopped enabling the
+// extension (Qualcomm's Adreno guidance: avoid it).
 // A pair whose interpolants do not link by register (Shaders::StagesCompatible false) gets a pixel
 // module converted again with the vertex stage's outputs (ConvertOptions::previousStage), cached per
 // pair. The VkPipelineCache persists in the user's derived-data folder (vulkan_pipelines.bin in
@@ -47,6 +48,10 @@ bool PipelinesStartup(std::string* why);
 // The device is idle: stops the worker, writes the cache and the warm list, destroys every pipeline,
 // linked module and layout.
 void PipelinesShutdown();
+// P7: writes the warm list and the VkPipelineCache now, as the shutdown does (the device stays up).
+// The mobile lifecycle calls it when the app goes to the background: Android may kill a background
+// process without a quit (device.cpp, THE MOBILE LIFECYCLE).
+void PipelinesPersist();
 
 // ---- the binding model ------------------------------------------------------------------------------
 VkPipelineLayout GamePipelineLayout();
@@ -56,6 +61,28 @@ VkPipelineCache GamePipelineCache();
 VkDescriptorSetLayout StageSetLayout(Shaders::Stage stage);
 // How many of the constant-buffer bindings 0..7 of each set are UNIFORM_BUFFER_DYNAMIC (the first N).
 uint32_t DynamicConstantBuffers();
+// P7, THE PAIR LAYOUTS (the push-descriptor path). When the device has VK_KHR_push_descriptor (the
+// S25, the NVIDIA dev box, lavapipe), every (vertex, pixel) pair gets a pipeline layout of its own
+// whose two set layouts hold only the bindings each stage's shader declares (the binding numbers stay
+// those of shader_convert.h). A pipeline layout may hold ONE push set, so:
+//   set 1 (pixel), the one whose textures change from draw to draw, is PUSHED
+//     (vkCmdPushDescriptorSetKHR; constant buffers plain UNIFORM_BUFFER, the ring offset in the write),
+//     again only when its contents or the layout changed;
+//   set 0 (vertex), constant buffers as UNIFORM_BUFFER_DYNAMIC, is a set from the frame's pools as
+//     before, found again by comparing with the last one (its buffers change only when the ring
+//     moves to another chunk) and bound with its dynamic offsets.
+// Measured on the S25: the descriptor work was 37-42% of the render thread on the 40-binding layouts
+// (docs/android/PERF_P7.md §3.3). Without the extension the one-layout path above stays.
+struct PairLayout {
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout vertexSet = VK_NULL_HANDLE;   // set 0, allocated from the frame's pools
+    uint32_t vertexCbs = 0;                             // its dynamic constant buffers (popcount)
+    uint32_t vertexBindings = 0;                        // its descriptors in all
+};
+bool PushDescriptors();
+// The pair's layouts on the push path (cached; the pointer stays valid until PipelinesShutdown; null
+// when the pixel stage declares more bindings than maxPushDescriptors). `ps` may be null.
+const PairLayout* PairLayoutFor(const Shaders::ShaderReflection& vs, const Shaders::ShaderReflection* ps);
 // The range of every constant-buffer descriptor: the largest constant buffer a retail shader declares
 // fits (D3D10 allows 64 KB; the game's largest is the 52-instance transform bank, 3328 bytes).
 constexpr uint32_t kConstantBufferRange = 16384;
@@ -145,8 +172,9 @@ static_assert(sizeof(PipelineKey) == 72, "PipelineKey is hashed as bytes: no pad
 
 // The pipeline for `key` (render thread, at draw time): from the cache, or built now. `vs` / `ps`
 // are the bound programs' entries (ps may be null). `key.linked` is filled here. VK_NULL_HANDLE when
-// the pipeline cannot be built (logged once per key).
-VkPipeline ResolvePipeline(PipelineKey& key, const ShaderEntry* vs, const ShaderEntry* ps);
+// the pipeline cannot be built (logged once per key). *pair: the push path's pair layouts (null on
+// the one-layout path).
+VkPipeline ResolvePipeline(PipelineKey& key, const ShaderEntry* vs, const ShaderEntry* ps, const PairLayout** pair);
 
 // Counters for the frame log: pipelines built on the render thread, built by the warm-up worker,
 // and failures, since the last call.

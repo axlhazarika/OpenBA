@@ -90,6 +90,19 @@ game render, the pause-menu quit is clean; the first boot converts 127 programs 
 clean quit and loaded at the next boot. The tiler MSAA path (`msrtss=1`) rendered the menu at 2x before
 the phone defaults turned MSAA off. No validation layer on the phone yet. Next: P7 (Android fit).
 
+P7 first pass (Android fit, 2026-10-25; `docs/android/P7_FIRST_PASS.md`): the Khronos validation layer runs
+on the phone (`tools/android.sh validation on|off`; 4 errors -> 0). Descriptors: with
+`VK_KHR_push_descriptor` every shader pair gets its own pipeline layout (`pipelines.h` PairLayout), the
+pixel set pushed and the vertex set pooled with dynamic constant buffers and cached per bound state
+(Adreno allows one push set per layout); render-thread CPU -25 % on the S25. THE DEPTH DISCARD
+(`draw.cpp`): the last depth-using main pass, predicted from the last frame, stores depth DONT_CARE, a
+misprediction clears and pauses it for 60 frames. Tiler MSAA renders straight into the present source (no
+end copy), its `resolveMode` set, its struct gone from pipeline `pNext`. The present pass also scales: a
+frame smaller than the images (the render scale, `Platform::Window::RenderScale`) is drawn into them with
+linear filtering (`PresentActive`). `VK_EXT_vertex_input_dynamic_state` is no longer enabled. The pipeline
+cache is written at WILL_ENTER_BACKGROUND too. S25 at a fixed 443 MHz: stress 98 -> 162 fps (half res),
+seeded town GPU busy 70 % -> 32-40 % at 120 fps.
+
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan
 SDK installed, its layer is registered with the loader and used as is (no `VK_ADD_LAYER_PATH`; the

@@ -185,5 +185,9 @@ void QueryScreenForModes(int* maxW, int* maxH, int* nativeW, int* nativeH) {
     }
 }
 
+float RenderScale() {
+    return 1.0f;
+}
+
 }  // namespace Window
 }  // namespace Platform
