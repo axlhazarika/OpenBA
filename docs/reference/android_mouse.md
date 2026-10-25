@@ -31,6 +31,28 @@ the plain `ACTION_DOWN` / `ACTION_UP` beside them are consumed (a second call wo
 send SDL button 0); everything else goes to SDL's own handler. A fix in SDL itself would do the same in
 `SDLSurface.onCapturedPointerEvent`; until an SDL bump carries one, the override stays.
 
+## Units and batching of a captured mouse
+
+- A captured `ACTION_MOVE`'s x / y are the device's own counts (10 counts injected -> 10.0), unscaled and
+  unaccelerated: the units SDL's relative motion has on Windows (raw input, `SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE`
+  off), so the same physical motion turns the camera the same amount once all of it arrives.
+- Android batches one frame's samples into one `ACTION_MOVE`: 20 events of 10 counts 1 ms apart arrived as
+  `ACTION_MOVE`s with 1, 8, 7 and 0 historical samples. `getX(0)` is the last sample only; the
+  deltas are `getHistoricalX(0, h)` for every h plus `getX(0)`. Reading the last alone lost most of the
+  motion (the slow rotate the owner saw); `OpenBASurface` sums them (P8 round 2).
+
+## Where the pointer is when a capture ends
+
+Android shows the pointer where the capture began; SDL's position (`SDL_GetMouseState`) has moved by the
+drag's relative motion meanwhile, and `SDL_SetRelativeMouseMode(false)` re-sends that moved position (no
+warp exists on Android). The first hover motion after the release then snapped SDL's cursor back
+(measured: drag began at x 802.5, SDL at 1002.5 at the release, next motion 833.1). Since P8 round 2
+`SetRotateDrag` (src/platform/sdl/input_sdl.cpp) warps SDL's position back to where the drag began when
+`Platform::Input::RotateDragReturnsCursor()` (true on Android) and drains the warp's motion: after the
+release the next motion continues from the start point (802.5 -> 833.1, +30.6 for the two moves). A new
+input device's pointer starts at the screen's centre (each uinput test mouse does); a KVM that
+re-announces its mouse would also put the pointer there: not reproduced with the owner's hardware.
+
 ## Testing without a mouse: a uinput device
 
 `adb shell uinput <file>` (Android 14+, runs as shell) makes a virtual evdev device from JSON lines;

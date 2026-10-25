@@ -136,7 +136,15 @@ at 60; a desktop leaves it off, the game uncapped as retail. `BANISHED_FPS_CAP` 
 
 **Mouse** (P8). A mouse works as on a desktop. While the middle button is held (camera rotate) the window
 is in relative mode, which on Android is pointer capture; `OpenBASurface.java` passes the captured
-pointer's buttons and motion to SDL, which the pinned SDL drops (`docs/reference/android_mouse.md`). A
+pointer's buttons and motion (the frame's batched samples summed) to SDL, which the pinned SDL drops, and
+at the release the cursor is put back where the drag began, where Android shows the pointer
+(`docs/reference/android_mouse.md`).
+
+**Retail's Video rows** (P8). With `ext.phone_menu` on, Options > Video's Resolution, Refresh Rate,
+Fullscreen and VSync are disabled on the phone (they change nothing there; VSync is kept on, so the
+Frame rate cap is the only frame-rate control): `docs/android/P8_INPUT_OPTIONS.md` round 2.
+**Phone defaults on an existing file** (P8): each start appends the defaults whose key the file lacks,
+never changing a key it has. A
 uinput mouse for tests: `adb shell uinput <file.json>` (the script in that reference).
 
 ## Logs
