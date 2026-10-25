@@ -37,7 +37,7 @@ verified per-draw against the shipped DLL in RenderDoc — see `src/render/dx11/
 | `dx11_backend_access.{h,cpp}` | Shared plumbing: the `Video::Device -> DeviceData -> ID3D11Device/Context` walk (the one downcast dx11 makes: it built the object), `Dx11SwapChain()`, the constant-buffer registry | — |
 | `exports.cpp` | The two plugin entry points (`../types/VideoDX11Plugin.h`): `Dx11_CreateDeviceData` is `new DeviceData(device)` | — |
 | `render_backend_dx11.cpp` | NOT RETAIL. The backend-neutral `Render::` entry points (`../common/render_backend.h`) as forwarders to the plugin's four (`VideoDX11Plugin.h`); what `src/app/video_interface.cpp` writes into the Device's interface slots | — |
-| `backend.cmake` | NOT RETAIL. This backend's CMake fragment: `RENDER_SRCS`, include directory, per-file properties, the Linux dxvk-native check (`../common/README.md`) | — |
+| `backend.cmake` | NOT RETAIL. This backend's CMake fragment: `RENDER_SRCS`, include directory, per-file properties, not-ready off Windows (`../common/README.md`) | — |
 
 ## The seam that is gone (ENDGAME B5, 2026-10-05)
 

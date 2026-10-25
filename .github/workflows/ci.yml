@@ -32,7 +32,7 @@ jobs:
       run:
         shell: msys2 {0}
     env:
-      CCACHE_MAXSIZE: 800M    # the debug object set
+      CCACHE_MAXSIZE: 1000M   # the debug object set, dx11 + vulkan
     steps:
       - uses: actions/checkout@v5
         with:
@@ -59,12 +59,20 @@ jobs:
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/build.sh build debug
       - name: Unit tests (debug)
         run: tools/build.sh unit debug
+      # The Vulkan backend (docs/vulkan/PLAN.md) in its own build directory; everything but
+      # src/render comes out of ccache. Headers only: no Vulkan runtime is needed to build it.
+      - name: Build OpenBA (debug, vulkan backend)
+        run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" BANISHED_RENDER_BACKEND=vulkan tools/build.sh build debug
+      # The unit tests again on the vulkan configure: they add tests/unit/vulkan_*_test.cpp (the
+      # dxbc-spirv shader converter and its SPIR-V cache), which only that configure builds.
+      - name: Unit tests (debug, vulkan backend)
+        run: BANISHED_RENDER_BACKEND=vulkan tools/build.sh unit debug
       - name: ccache statistics
         if: always()
         run: ccache -s
 
   linux:
-    name: Linux (Ubuntu 24.04, dxvk-native)
+    name: Linux (Ubuntu 24.04, dxvk-native)   # the required-check name: kept, though the renderer is Vulkan since P5
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -86,10 +94,16 @@ jobs:
           path: .ccache
           key: ccache-linux-${{ github.sha }}
           restore-keys: ccache-linux-
-      - name: Fetch dxvk-native
-        run: tools/fetch_dxvk_native.sh
+      # The default configure is the Vulkan backend off Windows (Vulkan P5), so this one build and
+      # unit run include tests/unit/vulkan_*_test.cpp. Headers only: no Vulkan runtime is needed.
       - name: Build OpenBA (debug)
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/build.sh build debug
+      # The witness that the default configure really is the Vulkan backend (and that it is ready:
+      # every submodule it needs came with the non-recursive checkout above).
+      - name: Default backend is vulkan
+        run: |
+          grep -q '^BANISHED_RENDER_BACKEND:STRING=vulkan$' build/cmake-debug/CMakeCache.txt
+          test -x build/cmake-debug/OpenBA
       - name: Unit tests (debug)
         run: tools/build.sh unit debug
       - name: ccache statistics

@@ -1,0 +1,6 @@
+// android/build.gradle -- the Android Gradle Plugin, pinned (docs/android/README.md has the version
+// table: AGP 8.8.1 runs on Gradle 8.10.2 or newer and JDK 17 or newer; the wrapper pins Gradle 8.12.1
+// and Android Studio's bundled JBR 21 runs it).
+plugins {
+    id 'com.android.application' version '8.8.1' apply false
+}

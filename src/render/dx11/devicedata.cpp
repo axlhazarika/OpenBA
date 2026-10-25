@@ -350,18 +350,10 @@ static_assert(sizeof(RefreshRate) == 8, "RefreshRate stride (Device+0x10 scales 
 // DXGI_OUTPUT_DESC::DeviceName instead (the same GDI name), so the
 // MONITORINFOEXW size assert that guarded the cbSize literal is gone with the
 // call.
-#if defined(_WIN32)
 static_assert(offsetof(DXGI_OUTPUT_DESC, Monitor) == 0x58,
               "DXGI_OUTPUT_DESC::Monitor offset (0x180004f59)");
 static_assert(offsetof(DXGI_OUTPUT_DESC, DeviceName) == 0 && sizeof(DXGI_OUTPUT_DESC::DeviceName) == 64,
               "DXGI_OUTPUT_DESC::DeviceName is WCHAR[32] at +0x0 (slot 1's name suffix)");
-#else
-// dxvk-native (Phase D.4 LINUX-1): its headers spell WCHAR as wchar_t, 4 bytes here, so the
-// DXGI descs are not retail's layout (DeviceName is 128 bytes and Monitor moves). Nothing
-// reads them by offset: every read below is by field name, and the two WCHAR texts go
-// through DxgiWideText (RENDER.md C.4).
-static_assert(sizeof(WCHAR) == 4, "dxvk-native's WCHAR is wchar_t, 4 bytes on Linux");
-#endif
 static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 0x48,
               "DXGI_SWAP_CHAIN_DESC is the 9 qwords FillSwapChainDesc zeroes");
 static_assert(sizeof(DXGI_MODE_DESC) == 0x1c,
@@ -647,43 +639,18 @@ void TraceGeom(const char* stage, const ::Video::Device* dev) {
 // (Phase D.4 LINUX-1, plans/RENDER.md C.4: the ABI audit's wchar_t line).
 // ============================================================================
 // DXGI_ADAPTER_DESC1::Description (WCHAR[128]) and DXGI_OUTPUT_DESC::DeviceName (WCHAR[32])
-// feed System::WideString, retail's UTF-16 type (char16_t). On Windows WCHAR is 2 bytes and
-// get() is the reinterpret_cast it always was: the same pointer, nothing copied. Under
-// dxvk-native WCHAR is a 4-byte wchar_t holding UTF-32, which is narrowed here into UTF-16
-// (a code point above U+FFFF becomes a surrogate pair; an invalid one U+FFFD), NUL-
-// terminated, in a buffer that lives as long as this object -- so a WideString built from
-// get() must not outlive it (each use below builds one in the same scope).
+// feed System::WideString, retail's UTF-16 type (char16_t). WCHAR is 2 bytes and get() is the
+// reinterpret_cast it always was: the same pointer, nothing copied. (The 4 -> 2 narrowing the
+// Linux build needed went with that build's dx11 route in Vulkan P5.)
 template <size_t N>
 class DxgiWideText {
 public:
-#if defined(_WIN32)
     explicit DxgiWideText(const WCHAR (&text)[N])
         : p_(reinterpret_cast<const char16_t*>(text)) {}  // CAST-OK: win32
     const char16_t* get() const { return p_; }
 
 private:
     const char16_t* p_;
-#else
-    explicit DxgiWideText(const WCHAR (&text)[N]) {
-        size_t o = 0;
-        for (size_t i = 0; i < N && text[i] != 0; ++i) {
-            uint32_t cp = static_cast<uint32_t>(text[i]);
-            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
-            if (cp >= 0x10000) {
-                cp -= 0x10000;
-                buf_[o++] = static_cast<char16_t>(0xD800 + (cp >> 10));
-                buf_[o++] = static_cast<char16_t>(0xDC00 + (cp & 0x3FF));
-            } else {
-                buf_[o++] = static_cast<char16_t>(cp);
-            }
-        }
-        buf_[o] = 0;
-    }
-    const char16_t* get() const { return buf_; }
-
-private:
-    char16_t buf_[2 * N + 1];   // every unit a surrogate pair, plus the NUL
-#endif
 };
 
 void TraceContainingOutput(IDXGISwapChain* sc) {
@@ -697,7 +664,7 @@ void TraceContainingOutput(IDXGISwapChain* sc) {
             fprintf(stderr, "[ResizeTrace] swapchain containing output '%ls' "
                     "desktop=(%ld,%ld)-(%ld,%ld) attached=%d\n",
                     od.DeviceName,
-                    // (long): LONG is long on Win64 and int32_t under dxvk-native
+                    // (long): LONG's printf spelling
                     (long)od.DesktopCoordinates.left, (long)od.DesktopCoordinates.top,
                     (long)od.DesktopCoordinates.right, (long)od.DesktopCoordinates.bottom,
                     od.AttachedToDesktop ? 1 : 0);
@@ -1676,16 +1643,13 @@ static bool EnumerateDxgiInterfaceInto(::Video::Device* dev, const char* interfa
             // The name is read from the DXGI_OUTPUT_DESC GetDesc just filled
             // instead: on Windows, Microsoft's DXGI fills DeviceName with the
             // same GDI name MONITORINFOEXW::szDevice carries ("\\.\DISPLAYn"
-            // for the same HMONITOR), and DXVK fills it from
-            // wsi::getDisplayName, which the Linux build (dxvk-native) has
-            // and GetMonitorInfoW does not. The one retail path this drops: a
+            // for the same HMONITOR). The one retail path this drops: a
             // failed GetMonitorInfoW left szDevice zeroed, so StrLength was 0
             // and the suffix read szDevice[-1] (the tail of mi.rcWork).
             // GetDesc always fills DeviceName.
             // ABI hook (RENDER §C.4, Phase D.4 LINUX-1): DeviceName is WCHAR[32];
-            // under dxvk-native WCHAR is a 4-byte wchar_t, so this read and
-            // adapterDesc.Description above go through DxgiWideText (a no-op
-            // cast on Windows, a 4 -> 2 narrowing on Linux).
+            // this read and adapterDesc.Description above go through
+            // DxgiWideText (a no-op cast to char16_t).
 
             // rec.name += " (Display " + last-char-of(DeviceName) + ")"
             // Temporary construction and destruction order is the shipped one

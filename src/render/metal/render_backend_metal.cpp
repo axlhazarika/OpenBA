@@ -14,6 +14,7 @@
 #include "metal_entry.h"
 
 #include <SDL3/SDL_video.h>
+#include <cstdio>
 #include "video/CompanionData.h"   // Video::DeviceData
 
 namespace Render {
@@ -47,6 +48,15 @@ const char* DeviceName() {
 
 uint64_t GraphicsWindowFlags() {
     return SDL_WINDOW_METAL;
+}
+
+// The boot diagnostics (main.cpp's [SwapProbe] lines): no DXGI swap chain here.
+void DumpSwapChainState(const char* tag) {
+    printf("[SwapProbe %s] not probed on this backend (Metal: no DXGI swap chain)\n", tag);
+}
+
+bool BootedExclusiveFullscreen() {
+    return false;
 }
 
 const char* PlaceholderDeviceName() {

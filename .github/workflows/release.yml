@@ -121,8 +121,6 @@ jobs:
           path: .ccache
           key: ccache-release-linux-${{ github.sha }}
           restore-keys: ccache-release-linux-
-      - name: Fetch dxvk-native
-        run: tools/fetch_dxvk_native.sh
       - name: Build OpenBA (release)
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/build.sh build release
       - name: Unit tests (release)

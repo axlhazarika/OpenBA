@@ -31,6 +31,13 @@
 // life of the process. The one place the environment is written is the
 // stress-town default block in OptionsInit (see options.cpp), and that runs
 // before any reader.
+//
+// ANDROID. An app process has no environment a launcher fills. The sanctioned source
+// there is the launch intent: the activity (android/app/src/main/java/org/openba/game/
+// OpenBAActivity.java) turns every string extra named BANISHED_* into that environment
+// variable before the native library loads, so OptionsInit reads the same flags the
+// same way (`tools/android.sh run BANISHED_AUTOSTART=1 ...`; docs/android/README.md).
+// No flag is Android-only.
 // ============================================================================
 #pragma once
 #include <cstdint>
@@ -180,7 +187,8 @@ struct Options {
     const char* forceForesterWork    = nullptr;// BANISHED_FORCE_FORESTERWORK — forester_force_harness.cpp
     const char* forceSnow            = nullptr;// BANISHED_FORCE_SNOW — gameupdateloop.cpp
     const char* forceDeviceLost      = nullptr;// BANISHED_FORCE_DEVICE_LOST — src/render/dx11/contextdata.cpp; "bgsave" =
-                                               //   on the first Present after a background save starts (src/diag/device_lost_drive.h)
+                                               //   on the first Present after a background save starts (src/diag/device_lost_drive.h);
+                                               //   the Vulkan reader is src/render/vulkan/device.cpp (VK_ERROR_DEVICE_LOST)
     const char* screenshotAt         = nullptr;// BANISHED_SCREENSHOT_AT — gameupdateloop.cpp
     const char* showroom             = nullptr;// BANISHED_SHOWROOM=<template list> — src/diag/showroom.cpp; set by the
                                                //   issue #13 showroom run script (scratchpad showroom/run.sh)

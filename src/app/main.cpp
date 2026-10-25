@@ -17,9 +17,7 @@
 #include "io/settings_file.h"     // Phase D.4 SETTINGS E.4: the harness guard
 #include "io/settings_store.h"    //   and DumpVideoSettings read settings.cfg
 #include "runtime_init.h"
-#if defined(_WIN32)
-#include "VideoDX11Plugin.h"   // B5 DEV-A: VideoDX11::Dx11SwapChain (the two swap-chain probes)
-#endif
+#include "render_backend.h"   // Render::DumpSwapChainState / BootedExclusiveFullscreen (the two swap-chain probes)
 #include "video_interface.h"
 #include "renderdoc_integration.h"
 #include "stall_debug.h"
@@ -54,7 +52,6 @@
 #if defined(_WIN32)
 #include <io.h>      // _get_osfhandle, _fileno
 #include <windows.h>
-#include <dxgi.h>    // IDXGISwapChain / DXGI_SWAP_CHAIN_DESC (the swap-chain probes)
 #include <dbghelp.h>
 #else
 // Phase D.4 LINUX-1: dladdr for the active vtable's module (DumpVideoState). The swap-chain
@@ -574,70 +571,11 @@ extern "C" void RunStartupSelfTests() {
 // firing AND whether SetFullscreenState(TRUE) succeeds on refocus.
 // ============================================================
 
-// The swap-chain probes call IDXGISwapChain by name (dxgi.h): GetFullscreenState is
-// vtable +0x58, GetDesc +0x60. DXGI_SWAP_CHAIN_DESC is 72 bytes (OutputWindow at 48,
-// Windowed at 56), the layout the probes' former local copy asserted.
-#if defined(_WIN32)
-static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 72,
-              "DXGI_SWAP_CHAIN_DESC layout mismatch (expected 72 bytes)");
-static_assert(offsetof(DXGI_SWAP_CHAIN_DESC, OutputWindow) == 48,
-              "OutputWindow offset mismatch");
-static_assert(offsetof(DXGI_SWAP_CHAIN_DESC, Windowed) == 56,
-              "Windowed offset mismatch");
-#endif
-
+// The probe bodies live with the backend that owns the swap chain
+// (src/render/dx11/swap_probe_dx11.cpp; the Vulkan and Metal backends print one
+// "not probed" line): src/render/common/render_backend.h.
 static void DumpSwapChainState(const char* tag) {
-#if defined(_WIN32)
-    if (!::Video::Device::_singleton) {
-        printf("[SwapProbe %s] device singleton not populated\n", tag);
-        return;
-    }
-    ::Video::Device* device = ::Video::Device::_singleton;
-    ::Video::DeviceData* activeDD = device->deviceData;   // +0x100
-    if (!activeDD) {
-        printf("[SwapProbe %s] activeDeviceData NULL (Device+0x100)\n", tag);
-        return;
-    }
-    // B5 DEV-A (B5_RULES D7): the swap chain is a field of the DX11 DeviceData
-    // subclass (+0x18), not of Video::DeviceData; dx11 hands it out by name.
-    IDXGISwapChain* swapChain = VideoDX11::Dx11SwapChain();
-    if (!swapChain) {
-        printf("[SwapProbe %s] swapChain NULL (activeDD+0x18)\n", tag);
-        return;
-    }
-    [[maybe_unused]] void* vt = *reinterpret_cast<void**>(swapChain);   // the vtable word, logged only  // CAST-OK: crash_walk
-
-    BOOL fullscreen = -1;
-    IDXGIOutput* output = nullptr;
-    long hr1 = swapChain->GetFullscreenState(&fullscreen, &output);   // vtable +0x58
-
-    DXGI_SWAP_CHAIN_DESC desc{};
-    long hr2 = swapChain->GetDesc(&desc);                              // vtable +0x60
-
-    HWND hwnd = desc.OutputWindow;
-    RECT cr{}, wr{};
-    if (hwnd) { GetClientRect(hwnd, &cr); GetWindowRect(hwnd, &wr); }
-    BOOL visible = hwnd ? IsWindowVisible(hwnd) : FALSE;
-    BOOL minimized = hwnd ? IsIconic(hwnd) : FALSE;
-
-    printf("[SwapProbe %s] sc=%p vt=%p\n", tag, swapChain, vt);
-    printf("[SwapProbe %s]   GetFullscreenState hr=0x%08lX fs=%d output=%p\n",
-           tag, hr1, fullscreen, output);
-    printf("[SwapProbe %s]   GetDesc hr=0x%08lX Windowed=%d %ux%u fmt=%u "
-           "BufferCount=%u SwapEffect=%u Flags=0x%X\n",
-           tag, hr2, desc.Windowed, desc.BufferDesc.Width, desc.BufferDesc.Height,
-           desc.BufferDesc.Format, desc.BufferCount, desc.SwapEffect, desc.Flags);
-    printf("[SwapProbe %s]   hwnd=%p visible=%d iconic=%d "
-           "client=%ldx%ld window=%ld,%ld %ldx%ld\n",
-           tag, (void*)hwnd, visible, minimized,
-           cr.right - cr.left, cr.bottom - cr.top,
-           wr.left, wr.top, wr.right - wr.left, wr.bottom - wr.top);
-    fflush(stdout);
-#else
-    // POSIX (Phase D.4 LINUX-1): the probe reads the swap chain through DXGI and the window
-    // through Win32; it stays Windows-only (plans/RENDER.md C.5: a diagnostic).
-    printf("[SwapProbe %s] not probed on this platform (Windows-only diagnostic)\n", tag);
-#endif
+    Render::DumpSwapChainState(tag);
 }
 
 // ============================================================
@@ -679,23 +617,14 @@ static const char* WMNameForFocus(uint32_t m) {
 static bool g_bootedExclusiveFullscreen = false;
 
 static void CaptureBootFullscreenMode() {
-#if defined(_WIN32)
-    if (!::Video::Device::_singleton) return;
-    ::Video::Device* device = ::Video::Device::_singleton;
-    ::Video::DeviceData* activeDD = device->deviceData;   // +0x100
-    if (!activeDD) return;
-    // B5 DEV-A (B5_RULES D7): the DX11 DeviceData's swap chain (+0x18), by name.
-    IDXGISwapChain* swapChain = VideoDX11::Dx11SwapChain();
-    if (!swapChain) return;
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (swapChain->GetDesc(&desc) == 0) {                              // vtable +0x60
-
-        g_bootedExclusiveFullscreen = (desc.Windowed == 0);
+    // DX11 reads its swap chain's Windowed flag; the other backends answer false
+    // (no DXGI exclusive fullscreen under SDL's Vulkan / Metal surfaces).
+    g_bootedExclusiveFullscreen = Render::BootedExclusiveFullscreen();
+    if (::Video::Device::_singleton && ::Video::Device::_singleton->deviceData) {
         printf("[Standalone] Boot mode: %s\n",
                g_bootedExclusiveFullscreen ? "DXGI EXCLUSIVE FULLSCREEN"
                                            : "borderless/windowed");
     }
-#endif  // POSIX: the flag stays false (no DXGI exclusive fullscreen under dxvk-native's WSI)
 }
 
 // Recovery for the DXGI-exclusive-fullscreen focus-loss bug: on refocus
@@ -1000,6 +929,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int) {
     // top-level window shifts the CW_USEDEFAULT cascade that places the engine
     // window at creation time, and it sat on top of the game window during the
     // pre-Present part of boot.
+    // The working directory the logs below are opened in (platform_app.h: Android moves to its
+    // data folder; every other platform runs where it was launched).
+    Platform::App::EnterRunDirectory();
     freopen("standalone_debug.log", "w", stdout);
     freopen("standalone_error.log", "w", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1160,6 +1092,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int) {
 // it for Application::PlatformStartup, whose window is SDL's (Phase D.4 SDL W3).
 // ============================================================
 int main(int argc, char** argv) {
+    // The working directory the logs below are opened in (platform_app.h: Android moves to its
+    // data folder; every other platform runs where it was launched).
+    Platform::App::EnterRunDirectory();
     freopen("standalone_debug.log", "w", stdout);
     freopen("standalone_error.log", "w", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);

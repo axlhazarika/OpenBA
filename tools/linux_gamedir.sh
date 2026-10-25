@@ -3,7 +3,8 @@
 #
 # usage (inside WSL; strip the checkout's CRs as for linux_run.sh):
 #   bash <(tr -d '\r' < tools/linux_gamedir.sh) <build-dir> <gamedir> <retail-dir>
-#     <build-dir>   a CMake build directory holding OpenBA (and SDL's libSDL3.so.0)
+#     <build-dir>   a CMake build directory holding OpenBA (the Vulkan backend, the Linux
+#                   default) and SDL's libSDL3.so.0, e.g. build/cmake-debug
 #     <gamedir>     the directory to fill, e.g. ~/banished_linux (created if absent)
 #     <retail-dir>  the retail install, e.g. "/mnt/c/GOG Games/Banished" -- READ ONLY: only
 #                   its WinData is LINKED into <gamedir>; nothing is written there.
@@ -14,20 +15,15 @@
 # and saves under ~/.local/share/Banished (Platform::DocumentsDir).
 #
 # The exe is COPIED, not linked: /proc/self/exe resolves a symlink to the build directory,
-# which would make that the root. libSDL3.so.0 (the same submodule, built shared) and the
-# two dxvk-native libraries go beside it (RPATH $ORIGIN; linux_run.sh also sets
-# LD_LIBRARY_PATH).
+# which would make that the root. libSDL3.so.0 (the same submodule, built shared) goes beside
+# it (RPATH $ORIGIN; linux_run.sh also sets LD_LIBRARY_PATH). Nothing else: the Vulkan loader
+# (libvulkan.so.1) and its driver are the system's.
 set -eu
 B="${1:?build-dir}"; G="${2:?gamedir}"; R="${3:?retail-dir}"
-# Run from the repo root (the fetched dxvk-native tree is found there; $0 is a /dev/fd path
-# under the process substitution above).
-DXVK="${DXVK_NATIVE_DIR:-$PWD/third_party/dxvk-native/3.1.1/usr/lib}"
 mkdir -p "$G"
 cp -f "$B/OpenBA" "$G/OpenBA"
 SDLSO="$(find "$B" -name 'libSDL3.so.0' | head -1)"
 [ -n "$SDLSO" ] || { echo "no libSDL3.so.0 under $B"; exit 1; }
 cp -fL "$SDLSO" "$G/libSDL3.so.0"
-cp -fL "$DXVK/libdxvk_d3d11.so.0" "$G/libdxvk_d3d11.so.0"
-cp -fL "$DXVK/libdxvk_dxgi.so.0" "$G/libdxvk_dxgi.so.0"
 [ -e "$G/WinData" ] || ln -s "$R/WinData" "$G/WinData"
 echo "game dir $G: exe $(md5sum "$G/OpenBA" | cut -c1-8), SDL $(md5sum "$G/libSDL3.so.0" | cut -c1-8), WinData -> $(readlink "$G/WinData")"

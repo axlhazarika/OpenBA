@@ -6,3 +6,19 @@
 	path = third_party/freetype
 	url = https://github.com/freetype/freetype
 	shallow = true
+[submodule "third_party/Vulkan-Headers"]
+	path = third_party/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers
+	shallow = true
+[submodule "third_party/dxbc-spirv"]
+	path = third_party/dxbc-spirv
+	url = https://github.com/doitsujin/dxbc-spirv
+	shallow = true
+[submodule "third_party/SPIRV-Headers"]
+	path = third_party/SPIRV-Headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers
+	shallow = true
+[submodule "third_party/VulkanMemoryAllocator"]
+	path = third_party/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+	shallow = true

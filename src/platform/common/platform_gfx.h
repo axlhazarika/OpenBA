@@ -11,9 +11,9 @@
 // Implementations:
 //   Windows  src/platform/win/gfx_win.cpp — GetModuleHandleW / LoadLibraryW /
 //            GetProcAddress on d3d11.dll and dxgi.dll (the body that was
-//            devicedata.cpp's ResolveGfxImport, moved unchanged). A DXVK
-//            d3d11.dll + dxgi.dll beside the exe is picked up by the same calls.
-//   Linux    (RENDER step 4) dlopen / dlsym on the dxvk-native libraries.
+//            devicedata.cpp's ResolveGfxImport, moved unchanged).
+//   POSIX    none: the dx11 backend is Windows-only since Vulkan P5, so only
+//            ReleaseLibrary has a body there (src/platform/posix/gfx_posix.cpp).
 //
 // GfxProc is the opaque entry-point type the caller casts to its own
 // D3D11CreateDevice_t / CreateDXGIFactory1_t. On Win64 it is EXACTLY the
@@ -21,9 +21,7 @@
 // `long long`, and x64 has one calling convention, so WINAPI is no part of the
 // type), which gfx_win.cpp static_asserts. So the move adds no cast: the one
 // FARPROC -> typed-pointer cast per entry point stays where it was, at the
-// dx11 caller (`// CAST-OK: win32`). Under dxvk-native WINAPI expands to
-// nothing (RENDER.md §0.1), and dlsym's void* becomes a GfxProc in the POSIX
-// body.
+// dx11 caller (`// CAST-OK: win32`).
 //
 // Both return null when the entry point cannot be resolved (after printing a
 // "[Dx11] FAILED to resolve" line on stderr); the renderer then does not start.
@@ -36,10 +34,10 @@ namespace Platform {
 
 using GfxProc = std::intptr_t (*)();
 
-// dxgi.dll!CreateDXGIFactory1 (Linux: the dxvk-native dxgi library's).
+// dxgi.dll!CreateDXGIFactory1 (Windows only: the dx11 backend's).
 GfxProc ResolveCreateDXGIFactory1();
 
-// d3d11.dll!D3D11CreateDevice (Linux: the dxvk-native d3d11 library's).
+// d3d11.dll!D3D11CreateDevice (Windows only: the dx11 backend's).
 GfxProc ResolveD3D11CreateDevice();
 
 // Release one reference on a loaded module (Phase D.4 SDL-5; was

@@ -16,7 +16,7 @@
 // faithful Finish is untouched and still finishes every sequential frame.
 //
 // Defined in src/render/dx11/render_pipe_finish.cpp (the dx11 TUs are the only
-// ones that see the D3D headers, on Windows and over dxvk-native alike).
+// ones that see the D3D headers).
 // ============================================================================
 #pragma once
 

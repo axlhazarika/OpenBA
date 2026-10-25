@@ -53,7 +53,8 @@ near 0.1). `Graphics::Camera` holds `_cameraToWorld` (+0x64), `_projection` (+0x
 goes straight to `CreateVertexShader` / `CreatePixelShader` (`shaderprograms.cpp:126-217`).
 Retail's are SRSL compiled by the kit's `Tools-x64.exe` (ps_4_0). `fxc.exe` is on this box
 (`C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\fxc.exe`), `D3DCompiler_47.dll` in
-System32. The Linux bed runs the same DX11 code over DXVK, which consumes DXBC.
+System32. The Linux renderer is the Vulkan backend since Vulkan P5, which converts the same DXBC
+(`src/render/vulkan/ao/assao_pass.cpp`).
 
 **Lighting.** Per-pixel constant ambient in every lit shader (`SetLight`,
 `batchc_context_setlight.cpp:135-200`; kit `lighting.srsl` `ComputeLighting`:
@@ -202,7 +203,7 @@ slider, Off; a live toggle mid-game (class A: no reload); the Extensions-dialog 
 | 7.2 | GPU cost per tier | DONE 2026-10-16 (`handins/AOTUNE.md` §7.2) | perf exe, compact town, 4x MSAA, fps uncapped, machine CLEAN: faithful 904 fps; Low 866 (-4.2%), Medium 838 (-7.3%), High 785 (-13.2%); sim / draw CPU unchanged; +70..80 MB private. Lowest is not a menu tier, not measured |
 | 7.3 | The live toggle in game and device-lost with the row on | DONE 2026-10-16 (`handins/AOTUNE.md` §1-2) | PASS: six toggle states captured (AO passes present / absent, the depth format follows, tier and opacity change without a rebuild), memory flat over 10 off/on cycles (the DSV fix holds); the forced loss: one round trip, the AO stage rebuilt, passes back after the trip, crash log 0. Found beside it: a post-trip memory climb that happens with the row OFF too -> known_port_issues row 1329 |
 | 7.4 | Eye camera + AO | DONE 2026-10-16 (`handins/AOTUNE.md` §3) | PASS: a follow at High / 20, the nearest surface reads ~1.1 units (the 0.1 near plane in use), AO not blown out at the near plane |
-| 7.5 | Linux / DXVK: the DXBC blobs and the typeless depth under dxvk-native (lavapipe bed) | AOTUNE or the Linux list | `tools/linux_run.sh newgame` with the row on, crash log 0 |
+| 7.5 | Linux: the AO pass on the Vulkan backend (lavapipe bed; the Phase D.4 D3D11 route this row was written for went in Vulkan P5) | AOTUNE or the Linux list | `tools/linux_run.sh newgame` with the row on, crash log 0 |
 | 7.6 | `tools/trace_oracle/capture_arm.sh` | DONE `e930322f2` | the in-game capture is picked by its rank after the `capture armed for 0 frames` line; the game is killed by the PID the watchdog publishes, never by image name; refuses to start over a running game |
 | 7.7 | The new-game 5694 / 0 ExtLoad count and worldcmp were not run at this close (the ext is OFF in faithful; the resave gate covered the load / save route) | next gate | the next full gate's table |
 | 7.8 | AO on the main-menu backdrop (ruled game-only for now, one arm site to change) | DONE 2026-10-17 (`handins/AO-MENU.md`) | the menu loop's draw arms the seam like step 7; live Apply at the menu, the game <-> menu hand-off and row-off = no resource all checked; -13% menu fps at High (uncapped) |

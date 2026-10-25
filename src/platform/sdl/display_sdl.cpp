@@ -222,7 +222,7 @@ void GetMonitorRect(void* monitor, Rect* out) {
                                             nullptr);
         if (hmon == nullptr || hmon != monitor) continue;
 #else
-        // dxvk-native has no HMONITOR; its DXGI output maps to the window's display.
+        // No HMONITOR off Windows: the output is the window's display.
         (void)monitor;
         SDL_Window* w = Sdl::GameWindow();
         if (w == nullptr || SDL_GetDisplayForWindow(w) != ids[i]) continue;

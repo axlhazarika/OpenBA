@@ -19,6 +19,8 @@
 #   tools/boot_state.sh              # print one status line
 #   tools/boot_state.sh --run-dir DIR # poll a launcher --run-dir DIR test run
 #   tools/boot_state.sh --wait 300   # block until RUNNING, or fail fast if blocked/hung
+#   tools/boot_state.sh --android [--wait N]  # the app on the attached Android device, over adb
+#                                    # (docs/android/README.md; tools/android.sh boot-state)
 #
 # EXIT CODES (so a script can branch without parsing)
 #   0  RUNNING         normal operation
@@ -116,9 +118,41 @@ fi
 STALE_FACTOR="${BANISHED_BOOTSTATE_STALE_FACTOR:-10}"
 STALE_SECS=$(( PUBLISH_SECS * STALE_FACTOR ))
 
+# --android: the state file is the app's, in its data folder on the attached device
+# (src/diag/android/boot_state_watchdog_android.cpp writes it there); every probe goes over adb.
+ANDROID=0
+ANDROID_PKG=""
+ADB_BIN=""
+adb_sh() {
+    MSYS_NO_PATHCONV=1 "$ADB_BIN" shell "$@" 2>/dev/null | tr -d '\r'
+}
+
+state_exists() {
+    if [ "$ANDROID" = 1 ]; then
+        [ "$(adb_sh "[ -f '$STATE_FILE' ] && echo yes")" = yes ]
+    else
+        [ -f "$STATE_FILE" ]
+    fi
+}
+
+state_read() {
+    if [ "$ANDROID" = 1 ]; then
+        adb_sh cat "$STATE_FILE"
+    else
+        cat "$STATE_FILE" 2>/dev/null
+    fi
+}
+
 # Age of the state file in seconds, or "" if it cannot be determined.
 file_age() {
     local mtime now
+    if [ "$ANDROID" = 1 ]; then
+        mtime="$(adb_sh stat -c %Y "$STATE_FILE")"
+        now="$(adb_sh date +%s)"
+        [ -n "$mtime" ] && [ -n "$now" ] || return 1
+        if [ "$mtime" -gt "$now" ]; then echo 0; else echo $(( now - mtime )); fi
+        return 0
+    fi
     if [ "$(uname -s)" = Darwin ]; then
         mtime="$(stat -f %m "$STATE_FILE" 2>/dev/null)" || return 1
     else
@@ -142,6 +176,10 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -eq 0 ] || shift
             ;;
+        --android)
+            ANDROID=1
+            shift
+            ;;
         --run-dir)
             if [ $# -lt 2 ] || [ -z "$2" ]; then
                 echo "--run-dir requires a directory" >&2
@@ -157,9 +195,26 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "$ANDROID" = 1 ]; then
+    ANDROID_PKG="$(sed -n 's/^openba.applicationId=//p' "$SCRIPT_DIR/../android/gradle.properties" | tr -d '\r' | head -1)"
+    ADB_BIN="${ADB:-}"
+    if [ -z "$ADB_BIN" ]; then
+        for cand in "${ANDROID_HOME:-/nonexistent}/platform-tools/adb.exe" "${ANDROID_HOME:-/nonexistent}/platform-tools/adb" \
+                    "C:/code/platform-tools/adb.exe"; do
+            if [ -x "$cand" ]; then ADB_BIN="$cand"; break; fi
+        done
+        ADB_BIN="${ADB_BIN:-adb}"
+    fi
+    STATE_FILE="/sdcard/Android/data/$ANDROID_PKG/files/standalone_boot_state.txt"
+fi
+
 # Is an OpenBA.exe alive at all? tasklist is authoritative here; the state file is not,
-# because a killed process leaves its last line behind.
+# because a killed process leaves its last line behind. On Android: the package's process.
 proc_alive() {
+    if [ "$ANDROID" = 1 ]; then
+        [ -n "$(adb_sh pidof "$ANDROID_PKG")" ]
+        return
+    fi
     if [ "$(uname -s)" = Darwin ]; then
         pgrep -x 'OpenBA(-engine)?' >/dev/null
     else
@@ -168,6 +223,10 @@ proc_alive() {
 }
 
 state_pid_alive() {
+    if [ "$ANDROID" = 1 ]; then
+        adb_sh pidof "$ANDROID_PKG" | tr ' ' '\n' | grep -qx "$1"
+        return
+    fi
     if [ "$(uname -s)" = Darwin ]; then
         kill -0 "$1" 2>/dev/null
     else
@@ -176,7 +235,7 @@ state_pid_alive() {
 }
 
 probe_once() {
-    if [ ! -f "$STATE_FILE" ]; then
+    if ! state_exists; then
         if proc_alive; then
             # Running but nothing published yet: either a pre-watchdog build or the
             # first second of boot. Report BOOTING rather than inventing a failure.
@@ -188,7 +247,7 @@ probe_once() {
     fi
 
     local line state pid detail age fresh frame stale beat hb
-    line="$(cat "$STATE_FILE" 2>/dev/null)"
+    line="$(state_read)"
     state="$(printf '%s' "$line" | sed -n 's/.*STATE=\([A-Z_]*\).*/\1/p')"
     pid="$(printf '%s' "$line" | sed -n 's/.*pid=\([0-9]*\).*/\1/p')"
     detail="$(printf '%s' "$line" | sed -n 's/.*detail=\(.*\)$/\1/p')"

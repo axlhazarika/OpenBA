@@ -23,13 +23,30 @@ Then `tools/build.sh unit` (no game needed beyond item 3's skips) and `tools/bui
   route were deleted the same day (history: `docs/history/`, the STATUS log).
 - MSYS2 packages are outdated (stale signatures): avoid `pacman -S` for new installs
 - Linux (WSL2 Ubuntu 24.04, g++ 13.3, cmake 3.28, ninja): the same CMakeLists builds `OpenBA` and
-  `unit` in every flavour; `tools/linux_gamedir.sh` + `tools/linux_run.sh` run it over dxvk-native
-  (`tools/fetch_dxvk_native.sh`) and lavapipe; the source copy lives in the WSL home (`~/banished-main`,
-  rsync of the working tree) because a build over `/mnt/c` is slow; ccache makes a re-copy's build near-free
+  `unit` in every flavour, with the Vulkan backend as the default renderer there (no flag; Vulkan P5);
+  `tools/linux_gamedir.sh` + `tools/linux_run.sh` run it on lavapipe (Mesa's CPU Vulkan, apt
+  `mesa-vulkan-drivers` + `libvulkan1`; `vulkan-tools` for `vulkaninfo`); the source copy lives in the
+  WSL home (`~/banished-main`, rsync of the working tree with its submodules) because a build over
+  `/mnt/c` is slow; ccache makes a re-copy's build near-free. WSL2 needs the hypervisor: with
+  `hypervisorlaunchtype off` (the uProf IBS setup) `wsl` refuses to start
 - Python 3.9.10 system-wide; 3.10.11 in the project venv `tools/ghidra_mcp/.venv/`
 - `uv` v0.9.24; Node.js + npx (for the vscode MCP server)
 - JAVA_HOME `C:\Program Files\Java\jdk-24` (for Ghidra)
 - CMake 4.4 + ninja from pip (`C:\Users\USPC\AppData\Roaming\Python\Python312\Scripts`, on PATH)
+
+## Android toolchain (Vulkan P6; `docs/android/README.md`)
+- Android SDK at `%LOCALAPPDATA%\Android\Sdk` (no system-wide `ANDROID_HOME`; `tools/android.sh` and
+  `tools/boot_state.sh --android` default to it): cmdline-tools 22.0 (`cmdline-tools/latest`), NDK r30
+  `ndk/30.0.16248370` (clang 21, `ndk-stack.cmd`, `shader-tools/.../glslc`), SDK CMake 3.31.6 with its ninja,
+  platforms 35 and 36, build-tools 36.0.0, platform-tools 37.0.1 (adb also at `C:\code\platform-tools`).
+- `sdkmanager` and Gradle run on Android Studio's JBR 21: `JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"`
+  (the Ghidra JDK 24 above is not used for Android). Gradle 8.12.1 through the wrapper in `android/`, AGP 8.8.1;
+  both are downloaded into `~/.gradle` on the first build (network needed once).
+- Git Bash rewrites `/sdcard/...` arguments into Windows paths before they reach `adb.exe`: the scripts set
+  `MSYS_NO_PATHCONV=1` and pass local paths through `cygpath -m`. Do the same for a hand-typed `adb push`.
+- Reference device: Galaxy S25 over USB (`adb devices`); Vulkan facts in `docs/vulkan/PLAN.md` §2.1.
+- The Vulkan SDK (`C:\VulkanSDK\1.4.363.0`) provides `glslc` / `spirv-val` for
+  `tools/vulkan/gen_present_spirv.sh` (the NDK's `glslc` works too).
 
 ## Third-party (pinned submodules; run `git submodule update --init` after a clone)
 - **SDL3** at `third_party/SDL`: tag **`release-3.4.18`** (the current stable, 2026-10-02),

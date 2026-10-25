@@ -3,39 +3,51 @@
 #
 # The Linux twin of what phase_d/gate.sh's route(), worldcmp.sh and tools/resave_gate do on
 # Windows, run in a Linux game directory of its own (never C:/GOG Games/Banished). The
-# environment each route sets is the Windows route's, plus DXVK's own variables, which DXVK
-# reads and our code never does (D4_RULES C11).
+# environment each route sets is the Windows route's, plus the Vulkan loader's own driver
+# choice (VK_ICD_FILENAMES / VK_DRIVER_FILES), which the loader reads and our code never does
+# (D4_RULES C11). The renderer is the Vulkan backend (the Linux default since Vulkan P5).
 #
 # usage (inside WSL; the checkout's scripts are CRLF on Windows, so strip them):
 #   bash <(tr -d '\r' < tools/linux_run.sh) <route> <gamedir> <outdir> [secs]
 #   routes:  menu     boot to the main menu, click Quit (BANISHED_AUTOMENU_BUTTON=6)
 #            newgame  autostart a new game, pause-menu Quit at frame 600 (gate.sh newgame)
-#            world    newgame with BANISHED_SEED=12345 (worldcmp.sh's run; writes world.txt)
+#            world    newgame with BANISHED_SEED=12345 (worldcmp.sh's run; writes new.world.txt)
 #            resave   load Gate.sav, roundtrip-resave, pause-menu Quit (resave_gate.sh roundtrip)
 #            stress   the BANISHED_STRESS town (tools/stress_run.sh's run: 800 citizens, 3 sets,
 #                     10x, self-quit after BANISHED_STRESS_FRAMES); copies standalone_stress.csv
 #                     and the component profile; report with tools/stress_report.py
 #
-# <gamedir> holds OpenBA, libSDL3.so.0, libdxvk_d3d11.so.0 / libdxvk_dxgi.so.0 and a
-# WinData link to the retail packages (tools/linux_gamedir.sh builds it). The exe reads
+# <gamedir> holds OpenBA, libSDL3.so.0 and a WinData link to the retail packages
+# (tools/linux_gamedir.sh builds it). The exe reads
 # its data relative to its own path (/proc/self/exe) and writes its logs to the working
 # directory, which is <gamedir>.
 #
 # Polls standalone_boot_state.txt the way tools/boot_state.sh does (never a grep loop):
 # prints each state change, stops waiting when the process exits, kills it after [secs].
-# Writes <outdir>/{route.txt, the four standalone logs, the DXVK logs, frames.txt}.
+# Writes <outdir>/{route.txt, the four standalone logs}. route.txt ends with the result line
+# ("[linux_run] <route>: exit N crashlog=... hang=..."), the fps after RUNNING and the backend's
+# "[Vulkan] instance" / "[Vulkan] device" / "[Vulkan] swap chain" lines.
 set -u
 ROUTE="${1:?route}"; G="${2:?gamedir}"; OUT="${3:?outdir}"; SECS="${4:-1800}"
 mkdir -p "$OUT"
 G="$(cd "$G" && pwd)"; OUT="$(cd "$OUT" && pwd)"
 
-# The Vulkan driver: lavapipe (CPU) by default; LINUX_VK_ICD=/usr/share/vulkan/icd.d/dzn_icd.json runs
-# Mesa's dzn (Vulkan over the host GPU's D3D12 through WSL2's /dev/dxg; needs the kisak-mesa PPA's
-# mesa-vulkan-drivers, Ubuntu's own omits it). /usr/lib/wsl/lib holds the D3D12 / DXCore libraries dzn loads.
-ENVV=(DXVK_WSI_DRIVER=SDL3
-      VK_ICD_FILENAMES="${LINUX_VK_ICD:-/usr/share/vulkan/icd.d/lvp_icd.json}"
-      DXVK_LOG_LEVEL=info DXVK_LOG_PATH="$G" DXVK_SHADER_CACHE=0
-      LD_LIBRARY_PATH="$G:/usr/lib/wsl/lib")
+# The Vulkan driver: lavapipe (Mesa's CPU Vulkan, 1.3+) by default, pinned for the loader under both
+# spellings (VK_ICD_FILENAMES, and VK_DRIVER_FILES for loaders from 1.3.234 on). Under WSL2 the
+# loader would otherwise also list Mesa's dzn (Vulkan over the host GPU's D3D12), which exposes only
+# Vulkan 1.2 and is refused by the backend's 1.3 floor (row 1322). LINUX_VK_ICD=<icd json> picks
+# another driver; LINUX_VK_ICD=system leaves the loader's own choice (a real GPU). /usr/lib/wsl/lib
+# holds the D3D12 / DXCore libraries dzn loads.
+# (Debian / Ubuntu name lavapipe's manifest per architecture: lvp_icd.x86_64.json.)
+VK_ICD="${LINUX_VK_ICD:-}"
+if [ -z "$VK_ICD" ]; then
+  for f in /usr/share/vulkan/icd.d/lvp_icd.json /usr/share/vulkan/icd.d/lvp_icd.x86_64.json; do
+    [ -f "$f" ] && VK_ICD="$f" && break
+  done
+  [ -n "$VK_ICD" ] || { echo "[linux_run] no lavapipe ICD under /usr/share/vulkan/icd.d (apt: mesa-vulkan-drivers)"; exit 2; }
+fi
+ENVV=(LD_LIBRARY_PATH="$G:/usr/lib/wsl/lib")
+[ "$VK_ICD" != system ] && ENVV+=(VK_ICD_FILENAMES="$VK_ICD" VK_DRIVER_FILES="$VK_ICD")
 case "$ROUTE" in
   menu)    ENVV+=(BANISHED_AUTOMENU_BUTTON=6) ;;
   newgame) ENVV+=(BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=600 BANISHED_PAUSEMENU_QUIT=120) ;;
@@ -46,6 +58,14 @@ case "$ROUTE" in
   *) echo "unknown route $ROUTE"; exit 2 ;;
 esac
 [ -n "${EXTRA_ENV:-}" ] && ENVV+=($EXTRA_ENV)
+
+# The profile: every Windows route runs FAITHFUL (tools/build.sh run, resave_gate.sh, stress_run.sh
+# pass /profile:faithful on the command line, which turns every fix and extension off whatever
+# settings.cfg says), so the Linux routes do too, or world.txt and the resave image carry the
+# settings.cfg profile's fixes and are not comparable with the Windows reference or the golden.
+# LINUX_PROFILE=/profile:<name> picks another; LINUX_PROFILE= (empty) leaves the settings.cfg
+# profile, as GATE_PROFILE= does for resave_gate.sh.
+PROFILE_ARG="${LINUX_PROFILE-/profile:faithful}"
 
 # The stress town must simulate unattended: GameAutoPause (the retail option, settings.cfg under
 # Platform::DocumentsDir) pauses the sim whenever the window loses focus, and under WSLg the
@@ -60,11 +80,11 @@ if { [ "$ROUTE" = stress ] || [ "${LINUX_NO_AUTOPAUSE:-0}" = 1 ]; } && [ -f "$CF
 fi
 
 cd "$G" || exit 2
-rm -f standalone_{debug,error,crash,hang}.log standalone_boot_state.txt OpenBA_d3d11.log OpenBA_dxgi.log \
+rm -f standalone_{debug,error,crash,hang}.log standalone_boot_state.txt \
       standalone_roundtrip_loaded.bin standalone_roundtrip_resaved.bin
 T0=$(date +%s.%N)
-env "${ENVV[@]}" ./OpenBA & PID=$!
-echo "[linux_run] $ROUTE pid $PID env: ${ENVV[*]}" | tee "$OUT/route.txt"
+env "${ENVV[@]}" ./OpenBA $PROFILE_ARG & PID=$!
+echo "[linux_run] $ROUTE pid $PID env: ${ENVV[*]} args: ${PROFILE_ARG:-(none)}" | tee "$OUT/route.txt"
 [ -n "$CFG_SAVED" ] && echo "[linux_run] GameAutoPause=false for this run (settings.cfg restored at exit)" | tee -a "$OUT/route.txt"
 
 last=""; t_running=""; f_running=""; t_last=""; f_last=""
@@ -88,7 +108,7 @@ done
 wait $PID 2>/dev/null; RC=$?
 T1=$(date +%s.%N)
 for f in standalone_debug.log standalone_error.log standalone_crash.log standalone_hang.log standalone_boot_state.txt \
-         OpenBA_d3d11.log OpenBA_dxgi.log standalone_roundtrip_loaded.bin standalone_roundtrip_resaved.bin \
+         standalone_roundtrip_loaded.bin standalone_roundtrip_resaved.bin \
          standalone_stress.csv standalone_stress_compprof.txt; do
   [ -f "$f" ] && cp -f "$f" "$OUT/$f"
 done
@@ -104,7 +124,8 @@ hang=no; [ -f standalone_hang.log ] && hang=YES
   fi
   grep -h '\[ExtLoad\] calls=' standalone_error.log standalone_debug.log 2>/dev/null | tail -1
   grep -h 'OnCommand\] -> App::Quit' standalone_error.log standalone_debug.log 2>/dev/null | tail -1
-  grep -h -i 'Device: \|GPU\b\|Vulkan version\|D3D11InternalCreateDevice\|Feature level' OpenBA_d3d11.log OpenBA_dxgi.log 2>/dev/null | head -8
+  grep -h '^\[Vulkan\] \(instance\|device\|swap chain\)' standalone_error.log 2>/dev/null | head -4
+  echo "[linux_run] [Vulkan] validation messages: $(grep -c '^\[Vulkan\] validation' standalone_error.log 2>/dev/null)"
 } | tee -a "$OUT/route.txt"
 if [ "$ROUTE" = world ]; then
   cat standalone_error.log standalone_debug.log 2>/dev/null \

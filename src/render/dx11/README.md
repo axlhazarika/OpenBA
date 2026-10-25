@@ -27,9 +27,10 @@ addresses and slot roles are still the reference; `src/README.md` has the curren
 file map. Rule sheet: `docs/history/endgame_b/B5_RULES.md`.
 
 **The backend seam (2026-10-20).** This directory is ONE renderer backend, picked by CMake's
-`BANISHED_RENDER_BACKEND=dx11` (the default): `backend.cmake` here sets `RENDER_SRCS`, the include
-directory, the ASSAO per-file warning properties and, off Windows, the dxvk-native check and its
-`-isystem`. The code outside the backend reaches it only through the backend-neutral headers in
+`BANISHED_RENDER_BACKEND=dx11` (the Windows default): `backend.cmake` here sets `RENDER_SRCS`, the
+include directory and the ASSAO per-file warning properties; off Windows it answers not-ready (the
+backend is Windows-only since Vulkan P5, the Linux renderer is `../vulkan/`). The code outside the
+backend reaches it only through the backend-neutral headers in
 `../common/` (`render_backend.h`, `ao/ao_backend.h`, `better_trees/foliage_aa_backend.h`,
 `better_trees/billboard_shadow_backend.h`); `render_backend_dx11.cpp` forwards
 `Render::DeviceName` / `CreateDeviceData` / the placeholder pair to `VideoDX11Plugin.h`'s four. The

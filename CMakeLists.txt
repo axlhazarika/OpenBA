@@ -16,10 +16,10 @@
 #   release [standalone]        -O3 -DNDEBUG, logs stripped, PerfX knobs default-off
 #
 # Off Windows (Phase D.4 POSIX + LINUX-1; handins/LINUX-1.md has the recipe) the targets are
-# `OpenBA` (the Linux game over src/platform/posix + sdl and dxvk-native; needs
-# tools/fetch_dxvk_native.sh first) and `unit` (the host unit tests over the src/platform/posix
-# twins). src/platform/win and src/diag/win are never built there. (`linux-check`, the
-# compile-only dry run of POSIX, went when the exe linked: the exe builds every TU it did.)
+# `OpenBA` (the Linux game over src/platform/posix + sdl and the Vulkan backend, the default
+# there since Vulkan P5) and `unit` (the host unit tests over the src/platform/posix twins).
+# src/platform/win and src/diag/win are never built there. (`linux-check`, the compile-only
+# dry run of POSIX, went when the exe linked: the exe builds every TU it did.)
 #   cmake -S . -B build/linux -G Ninja -DBANISHED_FLAVOUR=debug
 #   cmake --build build/linux -t unit && build/linux/unit
 #   cmake --build build/linux -t OpenBA
@@ -44,12 +44,24 @@ set(BANISHED_GAME_DIR "C:/GOG Games/Banished" CACHE PATH "where sa-deploy copies
 # docs/reference/tweak_overlay.md): ON for the debug flavour on Windows only. OFF, not one source
 # of it is compiled and every `#if BANISHED_TWEAK_OVERLAY` site is out, so og / perf / release build
 # exactly as without it.
-if(BANISHED_FLAVOUR STREQUAL "debug" AND WIN32)
+# The renderer backend (src/render/common/README.md): dx11 on Windows, metal on APPLE, vulkan on
+# every other host (Linux, since Vulkan P5) and by choice on Windows (docs/vulkan/PLAN.md). Chosen
+# here because the tweak overlay below is DX11-only; the fragment itself is included further down,
+# with the sources. dx11 is Windows-only: its backend.cmake answers not-ready elsewhere.
+if(APPLE)
+  set(BANISHED_RENDER_BACKEND_DEFAULT metal)
+elseif(WIN32)
+  set(BANISHED_RENDER_BACKEND_DEFAULT dx11)
+else()
+  set(BANISHED_RENDER_BACKEND_DEFAULT vulkan)
+endif()
+set(BANISHED_RENDER_BACKEND ${BANISHED_RENDER_BACKEND_DEFAULT} CACHE STRING "Renderer backend: src/render/<name>/backend.cmake")
+if(BANISHED_FLAVOUR STREQUAL "debug" AND WIN32 AND BANISHED_RENDER_BACKEND STREQUAL "dx11")
   set(_banished_tweak_default ON)
 else()
   set(_banished_tweak_default OFF)
 endif()
-option(BANISHED_TWEAK_OVERLAY "Debug tweak overlay (Dear ImGui): debug flavour on Windows only" ${_banished_tweak_default})
+option(BANISHED_TWEAK_OVERLAY "Debug tweak overlay (Dear ImGui): debug flavour on Windows, dx11 backend only" ${_banished_tweak_default})
 
 if(BANISHED_USE_CCACHE)
   find_program(CCACHE_PROGRAM ccache)
@@ -171,19 +183,24 @@ else()
       list(REMOVE_ITEM PLATFORM_SRCS ${CMAKE_SOURCE_DIR}/src/platform/posix/${posix_name})
     endforeach()
     list(APPEND PLATFORM_SRCS ${PLATFORM_DARWIN_SRCS})
+  elseif(ANDROID)
+    # src/platform/android/README.md: the darwin rule with the suffix _android. An
+    # android/<name>_android.cpp replaces posix/<name>_posix.cpp whole-file; an android file with
+    # no posix twin of the same <name> is simply added.
+    file(GLOB PLATFORM_ANDROID_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/platform/android/*.cpp)
+    foreach(android_src ${PLATFORM_ANDROID_SRCS})
+      get_filename_component(android_name ${android_src} NAME)
+      string(REGEX REPLACE "_android\\.cpp$" "" android_stem ${android_name})
+      list(REMOVE_ITEM PLATFORM_SRCS ${CMAKE_SOURCE_DIR}/src/platform/posix/${android_stem}_posix.cpp)
+    endforeach()
+    list(APPEND PLATFORM_SRCS ${PLATFORM_ANDROID_SRCS})
   endif()
 endif()
 # The renderer backend: src/render/${BANISHED_RENDER_BACKEND}/backend.cmake sets RENDER_SRCS (its own
 # sources), RENDER_BACKEND_INCLUDES and RENDER_BACKEND_READY, and its per-source properties
-# (src/render/common/README.md). dx11 by default, metal on APPLE.
+# (src/render/common/README.md). The choice (BANISHED_RENDER_BACKEND) is made near the top.
 # src/render/common is globbed here, not in the fragment: every backend links it, and the unit
 # tests and the extensions include it whichever backend is picked.
-if(APPLE)
-  set(BANISHED_RENDER_BACKEND_DEFAULT metal)
-else()
-  set(BANISHED_RENDER_BACKEND_DEFAULT dx11)
-endif()
-set(BANISHED_RENDER_BACKEND ${BANISHED_RENDER_BACKEND_DEFAULT} CACHE STRING "Renderer backend: src/render/<name>/backend.cmake")
 if(NOT EXISTS ${CMAKE_SOURCE_DIR}/src/render/${BANISHED_RENDER_BACKEND}/backend.cmake)
   message(FATAL_ERROR "BANISHED_RENDER_BACKEND=${BANISHED_RENDER_BACKEND}: no src/render/${BANISHED_RENDER_BACKEND}/backend.cmake")
 endif()
@@ -240,8 +257,14 @@ foreach(_sdl_opt SDL_SHARED SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_GPU SDL_
   set(${_sdl_opt} OFF CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
 endforeach()
 set(SDL_STATIC ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
+if(ANDROID)
+  # SDL's Android Java glue (SDLActivity -> HIDDeviceManager) calls into the joystick / HIDAPI
+  # natives unconditionally at startup; without them the activity dies with UnsatisfiedLinkError.
+  set(SDL_JOYSTICK ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
+  set(SDL_HIDAPI ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
+endif()
 if(NOT WIN32)
-  # The Linux game links SDL3 shared (dxvk-native dlopens libSDL3.so.0; see OpenBA below).
+  # The Linux game links SDL3 shared (libSDL3.so.0 beside the exe; see OpenBA below).
   set(SDL_SHARED ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
 endif()
 if(NOT CMAKE_BUILD_TYPE)
@@ -273,7 +296,9 @@ if(Python3_Interpreter_FOUND)
     COMMENT "check_log_strip: no qualified std::printf")
 endif()
 
-if(WIN32)
+if(WIN32 AND NOT RENDER_BACKEND_READY)
+  message(STATUS "OpenBA target skipped: the ${BANISHED_RENDER_BACKEND} backend is not ready on this host (see above)")
+elseif(WIN32)
 add_executable(OpenBA WIN32
   ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
   ${CMAKE_SOURCE_DIR}/src/app/icon.rc)
@@ -290,6 +315,8 @@ target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -static -static-libgcc -stat
 target_link_libraries(OpenBA PRIVATE user32 dbghelp shell32 gdi32)
 # SDL3 static: the target carries its include directory and its system libraries
 target_link_libraries(OpenBA PRIVATE SDL3::SDL3-static)
+# The backend's own link libraries (dx11: none; vulkan: dxbc_spv, the loader is opened by SDL).
+target_link_libraries(OpenBA PRIVATE ${RENDER_BACKEND_LINK_LIBRARIES})
 # xWMA -> PCM (third_party/wmadec): the target carries its include directory
 target_link_libraries(OpenBA PRIVATE wmadec)
 # FreeType (third_party/freetype_build): src/platform/common/font_raster_freetype.cpp
@@ -321,14 +348,12 @@ add_custom_target(sa-deploy
   COMMENT "Deploy to ${BANISHED_GAME_DIR}/OpenBA.exe")
 else()
 # ---------------------------------------------------------------------------------------
-# The Linux game (Phase D.4 LINUX-1, RENDER step 4): the Windows exe's tree -- game, engine,
-# app, diag (+ src/diag/posix, the twins of src/diag/win), the dx11 renderer -- over
+# The Linux game (Phase D.4 LINUX-1): the Windows exe's tree -- game, engine, app, diag
+# (+ src/diag/posix, the twins of src/diag/win) and the renderer backend -- over
 # src/platform/posix + sdl + common. `cmake --build <dir> -t OpenBA` -> <dir>/OpenBA.
-# The renderer is the same dx11 code over dxvk-native 3.1.1 (tools/fetch_dxvk_native.sh;
-# third_party/dxvk-native/README.md); src/render/dx11/backend.cmake checks for its headers, gives
-# them to src/render/dx11 as -isystem and clears RENDER_BACKEND_READY (with the message) until
-# the fetch has run. DXVK_WSI_DRIVER=SDL3 is set by the run script (tools/linux_run.sh),
-# never read by our code (D4_RULES C11).
+# The renderer is src/render/vulkan (the default off Windows and Apple since Vulkan P5;
+# docs/vulkan/PLAN.md); the Vulkan loader is the user's own, opened by SDL at run time. macOS
+# takes this branch too, with src/render/metal.
 # ---------------------------------------------------------------------------------------
 if(RENDER_BACKEND_READY)
   file(GLOB DIAG_POSIX_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/diag/posix/*.cpp)
@@ -341,36 +366,65 @@ if(RENDER_BACKEND_READY)
       list(REMOVE_ITEM DIAG_POSIX_SRCS ${CMAKE_SOURCE_DIR}/src/diag/posix/${posix_name})
     endforeach()
     list(APPEND DIAG_POSIX_SRCS ${DIAG_DARWIN_SRCS})
+  elseif(ANDROID)
+    # The same rule with src/diag/android (docs/android/README.md).
+    file(GLOB DIAG_ANDROID_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/diag/android/*.cpp)
+    foreach(android_src ${DIAG_ANDROID_SRCS})
+      get_filename_component(android_name ${android_src} NAME)
+      string(REGEX REPLACE "_android\\.cpp$" "_posix.cpp" posix_name ${android_name})
+      list(REMOVE_ITEM DIAG_POSIX_SRCS ${CMAKE_SOURCE_DIR}/src/diag/posix/${posix_name})
+    endforeach()
+    list(APPEND DIAG_POSIX_SRCS ${DIAG_ANDROID_SRCS})
   endif()
-  add_executable(OpenBA
-    ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
-    ${DIAG_POSIX_SRCS})
-  # RPATH $ORIGIN: the game directory carries libSDL3.so.0 beside the exe (below).
-  set_target_properties(OpenBA PROPERTIES OUTPUT_NAME OpenBA RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-                                              BUILD_RPATH "$ORIGIN")
+  if(ANDROID)
+    # Android (docs/android/README.md): the game is libmain.so, loaded by the app's SDLActivity
+    # subclass (android/), which calls its `main` on SDL's thread. Gradle's externalNativeBuild
+    # configures this file for arm64-v8a and packages the library from where CMake puts it.
+    add_library(OpenBA SHARED
+      ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
+      ${DIAG_POSIX_SRCS})
+    set_target_properties(OpenBA PROPERTIES OUTPUT_NAME main)
+  else()
+    add_executable(OpenBA
+      ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
+      ${DIAG_POSIX_SRCS})
+    # RPATH $ORIGIN: the game directory carries libSDL3.so.0 beside the exe (below).
+    set_target_properties(OpenBA PROPERTIES OUTPUT_NAME OpenBA RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+                                                BUILD_RPATH "$ORIGIN")
+  endif()
   target_include_directories(OpenBA PRIVATE ${BANISHED_INCLUDES})
   target_compile_options(OpenBA PRIVATE ${BANISHED_CXX_FLAGS} ${FLAVOUR_FLAGS})
   # -rdynamic: the exe's own functions in the dynamic symbol table, so the crash and hang
   # dumps (backtrace + dladdr, src/diag/posix) name them.
   if(APPLE)
     target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -Wl,-export_dynamic)
+  elseif(ANDROID)
+    # A shared library exports its functions already (the crash dump's dladdr names them), and
+    # no undefined symbol may survive the link: the loader would only say so on the phone.
+    target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -Wl,--no-undefined)
   else()
     target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -rdynamic)
   endif()
   find_package(Threads REQUIRED)
-  # SDL3 SHARED here, not static: dxvk-native's SDL3 WSI dlopens libSDL3.so.0 and resolves
-  # every SDL call through that handle, so it must reach the SAME SDL instance that owns
-  # our SDL_Window (a static copy in the exe would be a second SDL with no window). It is
-  # built from the same pinned submodule; glibc's dlopen returns the copy the exe already
-  # loaded (matched by SONAME).
+  # SDL3 SHARED on Linux, built from the same pinned submodule and shipped beside the exe
+  # (libSDL3.so.0, RPATH $ORIGIN). The reason it became shared, the Phase D.4 renderer route that
+  # dlopened SDL itself, went in Vulkan P5; the game directory and the release package still
+  # carry the shared library (known_port_issues row 1284).
   if(APPLE)
     # Metal needs no dlopened SDL: SDL3 is static, and libairconv.dylib is found beside the exe.
     target_link_libraries(OpenBA PRIVATE SDL3::SDL3-static wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS})
+  elseif(ANDROID)
+    # libSDL3.so is the apk's second library (SDLActivity loads it before libmain.so); log is
+    # __android_log_write (the logcat copy of the log lines, src/platform/android).
+    target_link_libraries(OpenBA PRIVATE SDL3::SDL3-shared wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS}
+                          log)
   else()
     target_link_libraries(OpenBA PRIVATE SDL3::SDL3-shared wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS})
   endif()
-  # The backend's own link libraries (metal: the Metal and QuartzCore frameworks; dx11: none).
+  # The backend's own link libraries (metal: the Metal and QuartzCore frameworks; vulkan: dxbc_spv).
   target_link_libraries(OpenBA PRIVATE ${RENDER_BACKEND_LINK_LIBRARIES})
+else()
+  message(STATUS "OpenBA target skipped: the ${BANISHED_RENDER_BACKEND} backend is not ready on this host (see above)")
 endif()
 endif()
 
@@ -408,9 +462,16 @@ file(GLOB UNIT_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/*.cpp)
 if(NOT APPLE)
   list(FILTER UNIT_SRCS EXCLUDE REGEX "/platform_mac_data_test\\.cpp$")
 endif()
-add_executable(unit EXCLUDE_FROM_ALL ${UNIT_SRCS} ${UNIT_TREE_SRCS})
+# tests/unit/vulkan_*_test.cpp test the Vulkan backend's pure parts and build only when that backend
+# is configured (BANISHED_RENDER_BACKEND=vulkan): they need its RENDER_BACKEND_UNIT_SRCS / _LIBS.
+if(NOT BANISHED_RENDER_BACKEND STREQUAL "vulkan")
+  list(FILTER UNIT_SRCS EXCLUDE REGEX "/vulkan_[a-z_]+_test\\.cpp$")
+endif()
+add_executable(unit EXCLUDE_FROM_ALL ${UNIT_SRCS} ${UNIT_TREE_SRCS} ${RENDER_BACKEND_UNIT_SRCS})
 set_target_properties(unit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-add_dependencies(OpenBA ext-rsc-text openba-build-info)
+if(TARGET OpenBA)   # absent when the backend is not ready on this host (dx11 off Windows)
+  add_dependencies(OpenBA ext-rsc-text openba-build-info)
+endif()
 add_dependencies(unit ext-rsc-text)
 target_include_directories(unit PRIVATE ${BANISHED_INCLUDES} ${CMAKE_SOURCE_DIR}/tests/unit)
 target_compile_options(unit PRIVATE
@@ -428,6 +489,10 @@ endif()
 target_link_libraries(unit PRIVATE wmadec)
 # tests/unit/ext_font_raster_test.cpp: the FreeType rasteriser (and, on Windows, its GDI comparison)
 target_link_libraries(unit PRIVATE freetype_min)
+# The backend's unit-only library (vulkan: dxbc_spv; the other backends set none)
+if(RENDER_BACKEND_UNIT_LIBS)
+  target_link_libraries(unit PRIVATE ${RENDER_BACKEND_UNIT_LIBS})
+endif()
 add_custom_target(run-unit COMMAND unit DEPENDS unit WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ---------------------------------------------------------------------------------------

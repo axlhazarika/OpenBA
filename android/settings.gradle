@@ -1,0 +1,18 @@
+// android/settings.gradle -- the OpenBA Android app (docs/android/README.md).
+// One module, :app, whose native part is the repository's root CMakeLists.txt.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "OpenBA"
+include ':app'
