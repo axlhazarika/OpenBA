@@ -545,8 +545,9 @@ void MainMenuDialog::OnOpened() {
     ExtensionsDialog_AttachMenuButton(this);
 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu learns which
-    // dialogs are the menu's (this one and the version line) for its safe area and backdrop fit.
-    Ext::PhoneMenu::MenuOpened(_dialog, buildIdRsc);
+    // dialogs are the menu's (this one and the version line) for its layouts and backdrop fit;
+    // `game` set means the pause menu.
+    Ext::PhoneMenu::MenuOpened(_dialog, buildIdRsc, game != nullptr);
 }
 
 // ============================================================

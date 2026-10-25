@@ -6,15 +6,15 @@
 // landscape (19.5:9, rounded corners, a camera cut-out), and usable on any screen:
 //   (a) on a screen wider than the main menu's backdrop overlay (16:9: the Banished logo and
 //       the dark torn borders over the 3D menu scene; retail cover-fits it and cuts the logo's
-//       top off at 19.5:9) the menu becomes a logo-left layout: the overlay drawn larger
-//       against the right and top edges so the logo is whole, centred on 36 % of the width,
-//       the button column right of the logo and the version line under it
-//       (phone_math.h LogoLeft / ColumnBeside / VersionUnderLogo);
-//   (b) on any other screen the picture is retail's and the menu dialogs (the main / pause
-//       menu and the version line) are laid out inside a safe area 4.5 % of the screen height
-//       in from every edge, the column centred between the logo and the version line when it
-//       fits there (MenuBand), the version line moved to the bottom-left when the column
-//       cannot sit above it (VersionAside); the logo-left layout uses the same safe area;
+//       top off at 19.5:9) the overlay is drawn with its top on the screen's top, so the logo is
+//       whole and centred at the top, and the main menu's buttons become one horizontal row of
+//       square buttons across the middle of the safe area, the version line centred at the
+//       bottom (phone_math.h LogoTop / SquareSide / RowFits; owner's ruling 2026-10-25);
+//   (b) otherwise (a desktop screen, a row too wide for the screen, and the pause menu) the
+//       menu dialogs (the main / pause menu and the version line) are laid out inside a safe
+//       area 4.5 % of the screen height in from every edge, the column centred between the logo
+//       and the version line when it fits there (MenuBand), the version line moved to the
+//       bottom-left when the column cannot sit above it (VersionAside);
 //   (c) the Options UI scale slider goes down to 25 % (the UI four times larger than 100 %);
 //   (d) every other dialog (the in-game toolbar and event notices bottom-right, the autosave
 //       notice, the panels, tooltips and drop-downs, the front end's other dialogs) is kept
@@ -38,10 +38,10 @@ namespace PhoneMenu {
 // faithful profile).
 void Sync();
 
-// MainMenuDialog::OnOpened (the main menu and the pause menu): the dialogs the safe area and the
-// backdrop move apply to, by their description: the menu's own and the version line's
-// (Dialog/BuildId.rsc). Either may be null.
-void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId);
+// MainMenuDialog::OnOpened (the main menu, and the pause menu with `pause`): the dialogs the
+// menu layouts and the backdrop move apply to, by their description: the menu's own and the
+// version line's (Dialog/BuildId.rsc). Either may be null.
+void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause);
 
 // OptionsDialog::OnOpened, after Platform::Display::UiScaleSliderRange: the slider's minimum
 // (percent), lowered to 25 while the row is on; `platformMinPercent` unchanged otherwise.
