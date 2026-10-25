@@ -7,6 +7,7 @@
 // ============================================================================
 #include "shader_convert.h"
 #include "spirv_combine.h"
+#include "spirv_legalize.h"
 
 #include "ext/derived_cache/derived_cache.h"
 #include "ext/derived_cache/hash64.h"
@@ -489,6 +490,22 @@ bool ConvertDxbc(const uint8_t* dxbc, size_t size, Stage stage, std::vector<uint
         SetWhy(why, "dxbc-spirv produced a malformed module: " + structure);
         spirv->clear();
         return false;
+    }
+    // P8 round 2: OpBitFieldInsert lowered to shifts and masks (spirv_legalize.h: the Adreno 830 driver
+    // refuses a vertex shader holding one). Every module, the AO pass's included.
+    {
+        std::string legalize;
+        uint32_t changed = 0;
+        if (!LowerBitFieldInsert(spirv, &changed, &legalize)) {
+            SetWhy(why, legalize);
+            spirv->clear();
+            return false;
+        }
+        if (changed != 0 && !CheckSpirvStructure(*spirv, &structure)) {
+            SetWhy(why, "the bit-field lowering produced a malformed module: " + structure);
+            spirv->clear();
+            return false;
+        }
     }
     // P8: one COMBINED_IMAGE_SAMPLER per sampled (texture, sampler) pair (spirv_combine.h).
     if (options.combineSamplers) {

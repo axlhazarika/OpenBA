@@ -214,6 +214,7 @@ struct SlotState {
 struct State {
     VkDevice device = VK_NULL_HANDLE;   // the device everything below belongs to
     bool ready = false;
+    bool pipelineFailed = false;   // P8 round 2: a pipeline the driver refused: the pass is not supported here
     Module modules[kProgramCount];
     VkDescriptorSetLayout vertexLayout = VK_NULL_HANDLE;   // empty
     VkDescriptorSetLayout pixelLayout = VK_NULL_HANDLE;
@@ -579,8 +580,10 @@ VkPipeline PipelineFor(const PipelineShape& s) {
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult r = vkCreateGraphicsPipelines(LiveDevice(), GamePipelineCache(), 1, &pi, nullptr, &pipeline);
     if (r != VK_SUCCESS) {
-        std::fprintf(stderr, "[AmbientOcclusion] Vulkan: pipeline %s: %s\n", kBlobs[s.ps].name, ResultName(r));
+        std::fprintf(stderr, "[AmbientOcclusion] Vulkan: pipeline %s: %s: the AO pass is not supported on this "
+                             "device (the row turns inactive)\n", kBlobs[s.ps].name, ResultName(r));
         pipeline = VK_NULL_HANDLE;
+        g.pipelineFailed = true;
     }
     g.pipelines.emplace(key, pipeline);
     return pipeline;
@@ -1172,7 +1175,10 @@ bool InitLocked() {
 
 bool Ready() {
     std::lock_guard<std::mutex> guard(g_mutex);
-    return InitLocked();
+    // P8 round 2: a pipeline the driver refused makes the pass "not supported" (AoBackend::Supported), so
+    // the row goes inactive and the Enhanced tab shows it disabled, instead of a pass that silently draws
+    // nothing every frame.
+    return InitLocked() && !g.pipelineFailed;
 }
 
 void AfterOpaque(Video::Context& context, const Graphics::ExtAoFrame& frame, const Graphics::RendererSceneEntry& entry) {

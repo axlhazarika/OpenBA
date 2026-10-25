@@ -106,7 +106,9 @@ constexpr uint32_t BindingOfUav(uint32_t reg) {
 // 3 (P4): UAV registers map to BindingOfUav and the reflection records them (uavMask).
 // 4 (P7): the reflection records each input's numeric type (IoElement::numeric).
 // 5 (P8): combined image samplers (ConvertOptions::combineSamplers, the reflection's pairs).
-constexpr uint32_t kMappingVersion = 5;
+// 8 (P8 round 2): OpBitFieldInsert lowered to shifts and masks (spirv_legalize.h). 6 and 7 were never
+// released (test builds of the S25 diagnosis): skipped so no test cache entry is ever read back.
+constexpr uint32_t kMappingVersion = 8;
 
 // ---- reflection --------------------------------------------------------------------------------
 // One interpolant, vertex input or render-target output of a program.

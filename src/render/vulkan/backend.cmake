@@ -108,6 +108,7 @@ set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/render/vulkan/shader_convert.cpp APP
 # derived cache and its hash are in the unit build already), and the library.
 set(RENDER_BACKEND_UNIT_SRCS ${CMAKE_SOURCE_DIR}/src/render/vulkan/shader_convert.cpp
                              ${CMAKE_SOURCE_DIR}/src/render/vulkan/spirv_combine.cpp
+                             ${CMAKE_SOURCE_DIR}/src/render/vulkan/spirv_legalize.cpp
                              ${CMAKE_SOURCE_DIR}/src/render/vulkan/shader_cache.cpp)
 set(RENDER_BACKEND_UNIT_LIBS dxbc_spv)
 
@@ -119,6 +120,7 @@ add_executable(vulkan-shader-check EXCLUDE_FROM_ALL
                ${CMAKE_SOURCE_DIR}/tools/vulkan/shader_check.cpp
                ${CMAKE_SOURCE_DIR}/src/render/vulkan/shader_convert.cpp
                ${CMAKE_SOURCE_DIR}/src/render/vulkan/spirv_combine.cpp
+               ${CMAKE_SOURCE_DIR}/src/render/vulkan/spirv_legalize.cpp
                ${CMAKE_SOURCE_DIR}/src/ext/derived_cache/hash64.cpp)
 set_target_properties(vulkan-shader-check PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 target_include_directories(vulkan-shader-check PRIVATE ${CMAKE_SOURCE_DIR}/src/render/vulkan ${CMAKE_SOURCE_DIR}/src

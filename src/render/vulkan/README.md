@@ -10,6 +10,7 @@ NOT RETAIL. The third backend behind `src/render/common/README.md`'s seam, picke
 | `backend.cmake` | The CMake fragment: sources, the Vulkan-Headers include (`-isystem`), ready flag; the `dxbc_spv` static library (dxbc-spirv + SPIRV-Headers submodules); the unit additions; the `vulkan-shader-check` target. |
 | `shader_convert.h`, `shader_convert.cpp` | DXBC to SPIR-V through dxbc-spirv, the binding layout (set 0 vertex, set 1 pixel; constant buffers, then textures, then samplers), the reflection, the VS -> PS semantic link, the cache key and payload. No Vulkan header. |
 | `spirv_combine.h`, `spirv_combine.cpp` | P8: the SPIR-V pass that turns the separate texture / sampler bindings into one combined image sampler per sampled pair, recording the pairs in the reflection. No Vulkan header. |
+| `spirv_legalize.h`, `spirv_legalize.cpp` | P8 round 2: lowers `OpBitFieldInsert` to shifts and masks in every converted module (the Adreno 830 driver refuses a vertex shader holding one: AO's fullscreen VS). No Vulkan header. |
 | `depth_discard.h` | P8: THE DEPTH DISCARD's prediction by frame-structure signature (pure; `tests/unit/vulkan_depth_discard_test.cpp`). |
 | `shader_cache.cpp` | `LoadOrConvert`: the SPIR-V cache over the per-user derived-data cache (`src/ext/derived_cache`). |
 | `device_objects.h` | What the other files read from the device file: the live device, queue, properties, `Caps`, the depth and swap-chain formats; shader modules (tracked, destroyed at Shutdown). |
