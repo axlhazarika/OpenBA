@@ -103,6 +103,11 @@ def undo_glyph(size=SIZE):
     return _finish(big, size)
 
 
+def redo_glyph(size=SIZE):
+    """Undo's arrow turned the other way (a mirror image)."""
+    return undo_glyph(size).transpose(Image.FLIP_LEFT_RIGHT)
+
+
 def plant_glyph(size=SIZE):
     """A tree: a round crown on a short trunk, with a ground line."""
     big, d = _canvas(size)
@@ -119,5 +124,6 @@ GLYPHS = {
     "terrain_mountain": mountain_glyph,
     "terrain_smooth": smooth_glyph,
     "terrain_undo": undo_glyph,
+    "terrain_redo": redo_glyph,
     "terrain_plant": plant_glyph,
 }

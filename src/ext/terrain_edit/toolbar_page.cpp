@@ -45,6 +45,7 @@ namespace {
 constexpr int32_t kModeBase = 10;
 constexpr int32_t kUndoId   = kModeBase + kModeCount;
 constexpr int32_t kPlantComboId = kUndoId + 1;   // the Resource drop down
+constexpr int32_t kRedoId = kPlantComboId + 1;
 
 // The strength slider counts in steps of kStrengthStep, from kMinStrength / kStrengthStep to kMaxStrength /
 // kStrengthStep.
@@ -75,20 +76,25 @@ void ShowTools() {
     }
 }
 
-// "Mountain brush, 3 to undo" into the caption.
+// "Mountain brush, 3 to undo, 1 to redo" into the caption (the redo count only while there is one).
 void ShowStatus(UI::Element* page) {
     ShowTools();
     UI::Element* e = page->FindElement(System::String("textTerrainEditStatus")).Get();
     if (!::Object::IsDerivedFromNullSafe(e, UI::TextElement::TypeId())) return;
-    char text[96];
+    char text[128];
+    char redo[24] = "";
+    const int redoDepth = static_cast<int>(RedoDepth());
+    if (redoDepth > 0) std::snprintf(redo, sizeof redo, ", %d to redo", redoDepth);
     if (UndoRefused()) {
         std::snprintf(text, sizeof text, "Cannot undo: something was built on this stroke");
+    } else if (RedoRefused()) {
+        std::snprintf(text, sizeof text, "Cannot redo: something was built on this stroke");
     } else if (State().mode == Mode::Plant) {
-        std::snprintf(text, sizeof text, "Plant: %s, density %d%%, %d to undo", PlantName(),
-                      static_cast<int>(State().density * 100.0f + 0.5f), static_cast<int>(UndoDepth()));
+        std::snprintf(text, sizeof text, "Plant: %s, density %d%%, %d to undo%s", PlantName(),
+                      static_cast<int>(State().density * 100.0f + 0.5f), static_cast<int>(UndoDepth()), redo);
     } else {
-        std::snprintf(text, sizeof text, "%s brush, %d to undo", kModeNames[static_cast<int>(State().mode)],
-                      static_cast<int>(UndoDepth()));
+        std::snprintf(text, sizeof text, "%s brush, %d to undo%s", kModeNames[static_cast<int>(State().mode)],
+                      static_cast<int>(UndoDepth()), redo);
     }
     if (std::strcmp(text, g_shown) == 0) return;
     std::snprintf(g_shown, sizeof g_shown, "%s", text);
@@ -157,6 +163,7 @@ void PageOpen(UI::Element* page, int32_t idBase) {
         { "buttonTerrainEditFlatten", kModeBase + 2 },  { "buttonTerrainEditMountain", kModeBase + 3 },
         { "buttonTerrainEditSmooth", kModeBase + 4 },   { "buttonTerrainEditPlant", kModeBase + 5 },
         { "buttonTerrainEditUndo", kUndoId },
+        { "buttonTerrainEditRedo", kRedoId },
     };
     for (const auto& b : kButtons) {
         UI::ButtonElement* button = FindElement<UI::ButtonElement>(page, b.name);
@@ -202,6 +209,8 @@ bool PageChanged(UI::Element* page, int32_t id) {
         if (!BrushActive()) StartBrush();
     } else if (id == kUndoId) {
         UndoLast();
+    } else if (id == kRedoId) {
+        RedoLast();
     } else if (id == kPlantComboId) {
         ReadSliders();
         // the drop down was used: Plant is the tool, even for the resource it already showed
@@ -213,6 +222,12 @@ bool PageChanged(UI::Element* page, int32_t id) {
     }
     ShowStatus(page);
     return true;
+}
+
+// Every frame the page is showing: the counts and the "Cannot ..." lines stay true while the player is busy
+// with another tool (placing a house ends what can be undone or redone).
+void PageTick() {
+    if (g_page.Get() != nullptr) ShowStatus(g_page.Get());
 }
 
 void PageClose() {
@@ -235,7 +250,8 @@ namespace Toolbar {
 const Contribution& TerrainEditPage() {
     static const Contribution c = { "terrain_edit", "TerrainEditTab",
                                     "Dialog/TerrainEditPage.rsc:pageTerrainEdit",
-                                    TerrainEdit::PageOpen, TerrainEdit::PageChanged, TerrainEdit::PageClose };
+                                    TerrainEdit::PageOpen, TerrainEdit::PageChanged, TerrainEdit::PageClose,
+                                    TerrainEdit::PageTick };
     return c;
 }
 

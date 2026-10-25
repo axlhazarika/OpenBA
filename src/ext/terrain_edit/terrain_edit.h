@@ -30,6 +30,9 @@ bool BrushRunning();
 // when the world is not the one the strokes were painted on (a new game or a load): the strokes are then
 // dropped.
 bool UndoLast();
+// Paints again the stroke the last Undo reversed, through the brush code that painted it. False when there is
+// none, or when something was built since the Undo (that ends the way forward).
+bool RedoLast();
 // The resource tool's palette: the templates of the natural resources standing on the map (trees first, then
 // plants, then rocks and ore), by the order the Resource drop down lists them in. PlantSet picks the one a
 // Plant stroke places.
@@ -40,11 +43,17 @@ int PlantIndex();
 const char* PlantName();
 const char* PlantNameAt(int index);
 void PlantSet(int index);
+// How many strokes an Undo can reach: the ones above the first with something built on it.
 size_t UndoDepth();
+// The strokes that a Redo would paint again.
+size_t RedoDepth();
 // True after an Undo that was refused because something was built on the stroke since (a building, a road, a
 // field, or a cell that no longer holds the type the stroke gave it): the Terrain page says so until the
 // next stroke or a successful Undo.
 bool UndoRefused();
+// True after the redo list was dropped because something was built since the Undo. Cleared by the next stroke
+// or Undo, or by another world.
+bool RedoRefused();
 
 // Called whenever the number of undo steps may have changed (a stroke ended, an undo ran): the Terrain page
 // refreshes its status line from it. Null clears it.
