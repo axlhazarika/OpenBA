@@ -36,6 +36,9 @@ bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, 
 bool PresentRotates();
 VkImage PresentSourceImage();
 VkImageView PresentSourceView();
+// The layout the source image is in when the next frame begins: UNDEFINED until a present pass has
+// read it (a fresh image: the first frame, every swap-chain rebuild), SHADER_READ_ONLY after it.
+VkImageLayout PresentSourceLayout();
 // Records the rotated copy: `source` is in SHADER_READ_ONLY, `swapImage` is moved here from
 // UNDEFINED to COLOR_ATTACHMENT and left there (the caller moves it to PRESENT_SRC).
 void PresentRecord(VkCommandBuffer cb, VkImage swapImage, VkImageView swapView, VkExtent2D swapExtent);

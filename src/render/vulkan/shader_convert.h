@@ -95,7 +95,8 @@ constexpr uint32_t BindingOfUav(uint32_t reg) {
 // cache key, so every SPIR-V module made under the old rules misses and is converted again.
 // 2 (P2): the reflection records which textures are cubes (textureCubeMask).
 // 3 (P4): UAV registers map to BindingOfUav and the reflection records them (uavMask).
-constexpr uint32_t kMappingVersion = 3;
+// 4 (P7): the reflection records each input's numeric type (IoElement::numeric).
+constexpr uint32_t kMappingVersion = 4;
 
 // ---- reflection --------------------------------------------------------------------------------
 // One interpolant, vertex input or render-target output of a program.
@@ -105,7 +106,11 @@ struct IoElement {
     uint32_t    location      = 0;     // the SPIR-V Location (non-built-in) or the dxbc-spirv BuiltIn
     uint8_t     componentMask = 0;     // xyzw bits as declared
     uint8_t     builtIn       = kNoBuiltIn;   // dxbc-spirv ir::BuiltIn, kNoBuiltIn for a plain one
+    uint8_t     numeric       = kFloat;       // P7, inputs only: the declared component type
     static constexpr uint8_t kNoBuiltIn = 0xFF;
+    static constexpr uint8_t kFloat = 0;
+    static constexpr uint8_t kSint = 1;
+    static constexpr uint8_t kUint = 2;
 };
 
 struct ShaderReflection {

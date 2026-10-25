@@ -1039,8 +1039,9 @@ void DrawBeginFrame(const FrameTarget& target) {
     g_swap.image = target.image;
     g_swap.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     // A pre-rotated frame's source was left in SHADER_READ_ONLY by the previous frame's present pass:
-    // starting from that layout makes this frame's first write wait for that read (present.h).
-    g_swap.layout = target.presentImage ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    // starting from that layout makes this frame's first write wait for that read (present.h). A fresh
+    // source (the first frame, every swap-chain rebuild) is still UNDEFINED.
+    g_swap.layout = target.presentImage ? PresentSourceLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
     g_touched.clear();
 }
 

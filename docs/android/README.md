@@ -143,5 +143,28 @@ compositor rotates every frame and every present answers `VK_SUBOPTIMAL_KHR`.
 
 ## Validation layers
 
-None is pushed in P6: the device log says `validation=0`. P7 pushes `libVkLayer_khronos_validation.so`
-into the debuggable app (`adb shell run-as`) and enables it with the `enable_gpu_debug_layers` settings.
+The Khronos validation layer runs in the **debug** apk only (it is debuggable; `run-as` and the GPU
+debug-layer settings need that). The layer is not in the tree or the apk: take the arm64-v8a
+`libVkLayer_khronos_validation.so` from the Vulkan-ValidationLayers release asset
+`android-binaries-<ver>.zip` (the Windows Vulkan SDK has no Android binary; P7 used 1.4.363.0), then:
+```bash
+tools/android.sh install debug
+tools/android.sh validation on <dir>/android-binaries-<ver>/arm64-v8a/libVkLayer_khronos_validation.so
+tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
+                     BANISHED_PAUSEMENU_BUTTON=6
+tools/android.sh pull <dir>                # grep '\[Vulkan\] validation' <dir>/standalone_error.log
+tools/android.sh validation off            # the settings deleted, the layer removed from the app
+```
+`validation on` copies the layer into the app's private folder (`run-as <pkg> cp`) and sets
+`enable_gpu_debug_layers`, `gpu_debug_app`, `gpu_debug_layers`, `gpu_debug_layer_app`; the Android loader
+then lists the layer to that one app, and the debug flavour enables it (`[Vulkan] instance: ...,
+validation on`, `validation=1` on the device line). Messages land in `standalone_error.log` as
+`[Vulkan] validation ERROR|warning: ...` through the backend's debug messenger (logcat tag OpenBA; the
+layer's own VALIDATION tag stays empty while a messenger is installed). The layer stops repeating one
+message after 10 (`duplicate_message_limit`), so a count is per distinct message, capped. Layer settings
+are system properties: `adb shell setprop debug.vulkan.khronos_validation.<setting> <value>`.
+
+P7 results (2026-10-25, menu + new game + pause-menu quit, 7,220 frames): before, 4 errors (the present
+source's first-frame layout; the byte-4 vertex attribute against an `int4` input, three pipelines) and the
+depth-only pass's unused `SV_Target` warning; after, 0 errors and the warning
+(`docs/android/P7_FIRST_PASS.md` §A).

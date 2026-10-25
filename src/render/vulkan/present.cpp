@@ -30,6 +30,7 @@ VkSampler g_sampler = VK_NULL_HANDLE;
 VkSurfaceTransformFlagBitsKHR g_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 GpuImage g_source;
 VkExtent2D g_sourceExtent{};
+bool g_sourceRead = false;   // a recorded present pass has left the source in SHADER_READ_ONLY
 
 // The push constant: uv = A * st + b, A row-wise (present.vert).
 struct Transform {
@@ -138,6 +139,7 @@ void ReleaseSource() {
     if (g_source.image) DestroyImageNow(&g_source);
     g_source = GpuImage{};
     g_sourceExtent = VkExtent2D{};
+    g_sourceRead = false;
 }
 
 }  // namespace
@@ -267,6 +269,10 @@ VkImageView PresentSourceView() {
     return g_source.view;
 }
 
+VkImageLayout PresentSourceLayout() {
+    return g_sourceRead ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+}
+
 void PresentRecord(VkCommandBuffer cb, VkImage swapImage, VkImageView swapView, VkExtent2D swapExtent) {
     (void)swapImage;
     VkRenderingAttachmentInfo color = Make<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
@@ -293,6 +299,7 @@ void PresentRecord(VkCommandBuffer cb, VkImage swapImage, VkImageView swapView, 
     vkCmdSetScissor(cb, 0, 1, &scissor);
     vkCmdDraw(cb, 3, 1, 0, 0);
     vkCmdEndRendering(cb);
+    g_sourceRead = true;
 }
 
 }  // namespace VideoVulkan

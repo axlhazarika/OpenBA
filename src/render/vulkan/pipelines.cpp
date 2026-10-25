@@ -251,6 +251,17 @@ const VkFormat kVertexFormat[9] = {
     VK_FORMAT_R8G8B8A8_UNORM,        // 8  DXGI_FORMAT_R8G8B8A8_UNORM
 };
 
+// P7: the attribute format of engine element format `format` for a shader input of numeric type
+// `numeric` (Shaders::IoElement). Vulkan requires the two to agree (VUID-VkGraphicsPipelineCreateInfo-
+// Input-08733); D3D11 does not check and reinterprets the bits. The one mismatch the retail shaders
+// have is format 7 (the byte-4 element, R8G8B8A8_UINT) feeding an int4 input: it is read as
+// R8G8B8A8_SINT, the same value for every byte below 128. A byte of 128 or more would read negative
+// here and positive on D3D11 (docs/known_port_issues.md, "Vulkan backend": not seen, not ruled out).
+VkFormat AttributeFormat(uint8_t format, uint8_t numeric) {
+    if (format == 7 && numeric == Shaders::IoElement::kSint) return VK_FORMAT_R8G8B8A8_SINT;
+    return kVertexFormat[format];
+}
+
 bool SameSemantic(const std::string& a, const char* b) {
     if (a.size() != std::strlen(b)) return false;
     for (size_t i = 0; i < a.size(); ++i) {
@@ -282,7 +293,7 @@ bool BuildVertexInput(const std::vector<LayoutElement>& elements, const Shaders:
         VkVertexInputAttributeDescription a{};
         a.location = in.location;
         a.binding = e.stream;
-        a.format = kVertexFormat[e.format];
+        a.format = AttributeFormat(e.format, in.numeric);
         a.offset = e.offset;
         attributes->push_back(a);
         streamMask |= 1u << (e.stream & 31);

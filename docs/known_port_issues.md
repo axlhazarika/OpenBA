@@ -989,13 +989,15 @@ purpose or not yet closed, as of P6 (2026-10-25).
 - **Read-back formats.** `ImageBufferData::Read` answers false for a compressed or depth image (the
   Metal backend's rule). Retail's staging copy is BGRA8 and D3D11 refuses those copies too, then reads
   the uninitialised staging texture; here the caller sees "not readable".
-- **Validation residue (P2).** One pipeline-creation error remains with the Khronos validation layer:
-  a vertex attribute declared `R8G8B8A8_UINT` (the engine's byte-4 element, dx11
-  `vertexlayoutdata.cpp`) feeds a shader input the converter typed `int4`. The values are 0..255, so
-  the bits are the same either way; a fix types the attribute from the shader's declared input. The
-  shadow map's depth-only pass also draws with pixel shaders that write `SV_Target` into no colour
-  attachment (a validation warning, not an error), exactly as D3D11 binds a null render target.
-  Both are still open after P4.
+- **Validation residue (P2; narrowed in P7).** The byte-4 vertex attribute error is gone in P7: the
+  reflection records each vertex input's numeric type (`kMappingVersion` 4) and an `int4` input fed by
+  the engine's byte-4 element (`R8G8B8A8_UINT` on dx11, `vertexlayoutdata.cpp`) reads it as
+  `R8G8B8A8_SINT` (`pipelines.cpp` AttributeFormat). That is the same value as D3D11's for every byte
+  below 128; a byte of 128 or more would read negative here and positive on D3D11. No such byte has been
+  seen and none has been ruled out (the element's data comes from the meshes, not checked). What stays:
+  the shadow map's depth-only pass draws with pixel shaders that write `SV_Target` into no colour
+  attachment (a validation warning, not an error), exactly as D3D11 binds a null render target. The
+  Galaxy S25 run is validation-clean of errors since P7 (`docs/android/P7_FIRST_PASS.md` §A).
 - **AO on the tiler MSAA path (P4).** `ext.ambient_occlusion` does not run when the main targets use
   `VK_EXT_multisampled_render_to_single_sampled` (`caps.msrtss`): the depth is never stored
   multisampled there, so there is nothing to resolve. The pass is skipped and logged once. Desktop
