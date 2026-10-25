@@ -56,7 +56,7 @@ modules because SDL's Java glue calls into them at startup. The renderer is the 
 
 ```bash
 tools/android.sh install debug            # adb install -r
-tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg -> the phone (once)
+tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg + the FrancophilSans files -> the phone (once)
 tools/android.sh run                      # launch to the main menu
 tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
                      BANISHED_PAUSEMENU_BUTTON=6   # new game, then Quit Game from the pause menu
@@ -71,6 +71,7 @@ tools/android.sh stop
 | On the phone | What |
 |---|---|
 | `files/WinData/*.pkg` | The retail packages, pushed by the player. Only the top-level `*.pkg` are pushed; parked mods and other subfolders stay home. |
+| `files/FrancophilSans.ttf`, `FrancophilSans-Bold.ttf`, `FrancophilSans_README.txt` | The typeface `ext.sharp_ui` rasterises its fonts from at a UI scale other than 100 % (below). Pushed by `push-data`. |
 | `files/OpenBA` | Does not exist: it is the "exe path" the engine is told (`file_android.cpp`), so the game directory is `files/`. |
 | `files/standalone_debug.log`, `standalone_error.log`, `standalone_crash.log`, `standalone_hang.log`, `standalone_boot_state.txt` | The same files as beside `OpenBA.exe` on Windows. |
 | `files/Documents/Banished/` | The per-user folder: `settings.cfg`, `Save/`, `Cache/` (the derived-data cache: SPIR-V, `vulkan_pipelines.bin` / `.txt`). |
@@ -79,6 +80,17 @@ tools/android.sh stop
 `WinData/` must be made by the app: a folder adb makes belongs to the shell user, and the app process can
 neither list nor open anything inside it (EACCES). The app makes `WinData/` and `Documents/` at every
 start, and `push-data` starts the app once when the folder is missing (or removes an adb-made one first).
+
+**The font rasteriser** (P8). `ext.sharp_ui` draws the UI's text crisp at any UI scale by rasterising the
+game's typeface, FrancophilSans, at the pixel height the screen needs (FreeType,
+`src/platform/common/font_raster_freetype.cpp`). Windows, Linux and macOS find `FrancophilSans.ttf`
+installed or beside the exe, where the release packages put it. On Android the one place is the data folder
+(`src/platform/android/font_raster_android.cpp`): the app looks for `files/FrancophilSans.ttf` and nowhere
+else. The typeface is Manfred Klein's, kept unchanged with his notice in `tools/release/fonts/` and shipped
+beside the exe in the desktop packages (`THIRD_PARTY_NOTICES.md`); `tools/android.sh push-data` pushes the
+same three files. Without the file the text keeps the game's own glyph sheets (`[ExtRes] font variants off:
+typeface FrancophilSans absent` in `standalone_error.log`); with it, a UI scale other than 100 shows
+`[ExtRes] font <Kit> at <px> px: ... glyphs rasterised`. The apk carries no font.
 
 **Harness flags.** The game reads its `BANISHED_*` flags once at boot from the process environment
 (`src/app/options.cpp`; `src/app/options.h` is the inventory). On Android the launch intent is the
@@ -97,8 +109,10 @@ only `GameEdgeScroll=false` (P7: a touch held at the edge is a parked cursor), `
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
 `ext.max_shadow_res` off, and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
 main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
-rounded corners and the camera cut-out, and Options > User interface scale goes down to 25 % (the UI four
-times larger than 100 %; `docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
+rounded corners and the camera cut-out, the in-game interface (the toolbar and event notices bottom-right,
+the panels at their default top-left, tooltips, drop-downs) is kept inside the same safe area, and Options >
+User interface scale goes down to 25 % (the UI four times larger than 100 %;
+`docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
 100. Options changes are kept as anywhere else.
 
 **Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
