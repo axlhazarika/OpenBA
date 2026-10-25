@@ -26,6 +26,7 @@
 #include "VideoVulkanData.h"
 #include "device_objects.h"
 #include "draw.h"
+#include "present.h"
 #include "pipelines.h"
 #include "resources.h"
 #include "vulkan_entry.h"
@@ -59,6 +60,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -93,7 +96,9 @@ VkQueue queue = VK_NULL_HANDLE;
 VkSurfaceKHR surface = VK_NULL_HANDLE;
 VkSwapchainKHR swapchain = VK_NULL_HANDLE;
 VkFormat swapFormat = VK_FORMAT_UNDEFINED;
-VkExtent2D swapExtent{};
+VkExtent2D swapExtent{};     // the swap-chain images' extent (the panel's orientation when pre-rotated)
+VkExtent2D renderExtent{};   // the frame's extent: the window's, landscape on a phone (present.h)
+VkSurfaceTransformFlagBitsKHR swapTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 std::vector<VkImage> swapImages;
 std::vector<VkImageView> swapViews;
 std::vector<VkSemaphore> renderFinished;   // one per swap-chain image
@@ -118,10 +123,67 @@ std::atomic<bool> lost{false};
 bool swapchainLost = false;   // the last vkCreateSwapchainKHR answered VK_ERROR_DEVICE_LOST
 bool lostFrame = false;       // BeginCommands began a frame it could not record: Finish reports the loss
 
+// THE MOBILE LIFECYCLE (PLAN.md §3.6 / §4.5). When an Android app goes to the background its window is
+// torn down by Java without waiting for a Vulkan app, so the swap chain and the surface must be gone
+// by then. SDL delivers SDL_EVENT_WILL_ENTER_BACKGROUND synchronously to event watches on the thread that
+// pumps events (the main thread), before it blocks that thread until the app comes back: the watch
+// below waits for the frame the render thread may still be presenting (framesOpen: acquired and not yet
+// presented), idles the device and destroys the swap chain and the surface. SDL_EVENT_DID_ENTER_FOREGROUND
+// clears `backgrounded`; the next BeginCommands makes the surface again from the window's new native
+// window, then the swap chain. Desktop platforms never send either event.
+std::mutex frameLock;
+std::condition_variable frameIdle;
+int framesOpen = 0;
+std::atomic<bool> backgrounded{false};
+bool lifecycleWatch = false;
+
+void FrameOpened() {
+    std::lock_guard<std::mutex> guard(frameLock);
+    ++framesOpen;
+}
+
+void FrameClosed() {
+    {
+        std::lock_guard<std::mutex> guard(frameLock);
+        if (framesOpen > 0) --framesOpen;
+    }
+    frameIdle.notify_all();
+}
+
 // The SDL window the surface is made on. Device::windowHandle is the native handle (the HWND on
 // Windows, retail's field); the SDL window that owns it is the one window_sdl.cpp created.
 SDL_Window* GameWindow() {
     return Platform::Window::Sdl::GameWindow();
+}
+
+void DestroySwapchainObjects();
+
+// The SDL event watch (THE MOBILE LIFECYCLE above). Main thread, inside the event pump.
+bool LifecycleWatch(void*, SDL_Event* event) {
+    if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+        backgrounded.store(true);
+        if (!device) return true;
+        {
+            std::unique_lock<std::mutex> guard(frameLock);
+            if (!frameIdle.wait_for(guard, std::chrono::seconds(2), [] { return framesOpen == 0; })) {
+                std::fprintf(stderr, "[Vulkan] background: a frame is still open after 2 s; tearing down anyway\n");
+            }
+        }
+        vkDeviceWaitIdle(device);
+        DestroySwapchainObjects();
+        if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
+        swapchain = VK_NULL_HANDLE;
+        if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+        surface = VK_NULL_HANDLE;
+        imageAcquired = false;
+        swapchainDirty = true;
+        std::fprintf(stderr, "[Vulkan] background: swap chain and surface destroyed\n");
+    } else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+        if (backgrounded.exchange(false)) {
+            std::fprintf(stderr, "[Vulkan] foreground: the surface is remade at the next frame\n");
+        }
+    }
+    return true;
 }
 
 bool Fail(const char* message) {
@@ -359,6 +421,27 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
         *why = "the window has no pixels (minimised)";
         return false;
     }
+    // Pre-rotation (present.h, PLAN.md §4.5). A rotated surface (a phone in landscape: ROTATE_90 or
+    // ROTATE_270) gets preTransform = currentTransform and images in the panel's own orientation; the
+    // frame keeps the window's landscape extent and the present pass turns it. Anything else (IDENTITY
+    // on every desktop, or a mirrored transform no device here reports) presents as before.
+    const VkSurfaceTransformFlagBitsKHR current = surfaceCaps.currentTransform;
+    const bool rotate = (current == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
+                         current == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ||
+                         current == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR) &&
+                        (surfaceCaps.supportedTransforms & current) != 0;
+    const bool quarterTurn = current == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
+                             current == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
+    VkExtent2D frameExtent = extent;
+    VkExtent2D imageExtent = extent;
+    if (rotate) {
+        // The frame is the window's (landscape) size; the images are the panel's.
+        int w = 0;
+        int h = 0;
+        SDL_GetWindowSizeInPixels(window, &w, &h);
+        if (w > 0 && h > 0) frameExtent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h) };
+        imageExtent = quarterTurn ? VkExtent2D{ frameExtent.height, frameExtent.width } : frameExtent;
+    }
 
     uint32_t imageCount = std::max(kFramesInFlight, surfaceCaps.minImageCount);
     if (surfaceCaps.maxImageCount != 0) imageCount = std::min(imageCount, surfaceCaps.maxImageCount);
@@ -368,14 +451,15 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     ci.minImageCount = imageCount;
     ci.imageFormat = chosen.format;
     ci.imageColorSpace = chosen.colorSpace;
-    ci.imageExtent = extent;
+    ci.imageExtent = imageExtent;
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    ci.preTransform = (surfaceCaps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
-                          ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
-                          : surfaceCaps.currentTransform;
+    ci.preTransform = rotate ? current
+                             : (surfaceCaps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+                                   ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                   : surfaceCaps.currentTransform;
     ci.compositeAlpha = (surfaceCaps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
                             ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                             : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
@@ -393,7 +477,9 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
     swapchain = created;
     swapFormat = chosen.format;
-    swapExtent = extent;
+    swapExtent = imageExtent;
+    renderExtent = frameExtent;
+    swapTransform = rotate ? current : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
     uint32_t count = 0;
     vkGetSwapchainImagesKHR(device, swapchain, &count, nullptr);
@@ -414,8 +500,19 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     swapchainDirty = false;
     imageAcquired = false;
     DrawTargetsChanged();
-    std::fprintf(stderr, "[Vulkan] swap chain %ux%u, %u images, format %d, present mode %d\n", extent.width,
-                 extent.height, count, static_cast<int>(swapFormat), static_cast<int>(presentMode));
+    // The present pass's source follows the swap chain; at the device's first swap chain the resource
+    // layer is not up yet, and CreateDevice configures it after DrawStartup.
+    std::string presentWhy;
+    if (resourcesUp && !PresentConfigure(swapTransform, swapFormat, renderExtent, &presentWhy)) {
+        std::fprintf(stderr, "[Vulkan] %s\n", presentWhy.c_str());
+    }
+    std::fprintf(stderr,
+                 "[Vulkan] swap chain %ux%u, %u images, format %d, present mode %d, transform 0x%x (current 0x%x, "
+                 "currentExtent %ux%u)%s\n",
+                 swapExtent.width, swapExtent.height, count, static_cast<int>(swapFormat),
+                 static_cast<int>(presentMode), static_cast<unsigned>(ci.preTransform), static_cast<unsigned>(current),
+                 surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height,
+                 PresentRotates() ? ", pre-rotated: the landscape frame is turned by the present pass" : "");
     return true;
 }
 
@@ -873,6 +970,9 @@ bool DeviceData::CreateDevice() {
     VkBool32 presentable = VK_FALSE;
     vkGetPhysicalDeviceSurfaceSupportKHR(physical, graphicsFamily, surface, &presentable);
     if (!presentable) return Fail("Vulkan: the graphics queue cannot present to the window");
+    if (!lifecycleWatch) {
+        lifecycleWatch = SDL_AddEventWatch(&LifecycleWatch, nullptr);
+    }
 
     // 10 -- the device.
     const float priority = 1.0f;
@@ -968,6 +1068,13 @@ bool DeviceData::CreateDevice() {
     resourcesUp = true;
     if (!PipelinesStartup(&why)) return Fail("Vulkan: " + why);
     if (!DrawStartup(&why)) return Fail("Vulkan: " + why);
+    if (!PresentStartup(&why)) return Fail("Vulkan: " + why);
+    if (!PresentConfigure(swapTransform, swapFormat, renderExtent, &why)) return Fail("Vulkan: " + why);
+    if (PresentRotates()) {
+        std::fprintf(stderr, "[Vulkan] pre-rotated present: frame %ux%u turned into %ux%u (transform 0x%x)\n",
+                     renderExtent.width, renderExtent.height, swapExtent.width, swapExtent.height,
+                     static_cast<unsigned>(swapTransform));
+    }
     StallDebug::Mark("  Vulkan resources");
     // P4: a device made: a device-lost recovery is over, and ext.create_on_demand's deferred creates may
     // run on it (the table was paused while there was none).
@@ -1003,6 +1110,7 @@ void DeviceData::Shutdown() {
             Assao::Shutdown();
             Rewrites::Shutdown();
             ShareGpuData::Clear();
+            PresentShutdown();
             DrawShutdown();
             PipelinesShutdown();
             ResourcesShutdown();
@@ -1169,6 +1277,18 @@ bool ContextData::BeginCommands() {
     }
     if (lost.load()) return BeginLostFrame(dev, ctx);
     auto w = GameWindow();
+    if (backgrounded.load()) return false;   // THE MOBILE LIFECYCLE: no surface while in the background
+    if (!surface) {
+        // Back from the background: a new surface on the window's new native window, then a swap chain.
+        if (!SDL_Vulkan_CreateSurface(w, instance, nullptr, &surface)) {
+            surface = VK_NULL_HANDLE;
+            return false;   // the native window is not there yet: try again next frame
+        }
+        VkBool32 presentable = VK_FALSE;
+        vkGetPhysicalDeviceSurfaceSupportKHR(physical, graphicsFamily, surface, &presentable);
+        std::fprintf(stderr, "[Vulkan] foreground: surface remade (presentable=%u)\n", presentable);
+        swapchainDirty = true;
+    }
     if (swapchainDirty) {
         vkDeviceWaitIdle(device);
         std::string why;
@@ -1205,6 +1325,7 @@ bool ContextData::BeginCommands() {
         return false;
     }
     imageAcquired = true;
+    FrameOpened();
     vkResetFences(device, 1, &f.done);
     vkResetCommandPool(device, f.pool, 0);
     f.commands = f.first;
@@ -1221,9 +1342,19 @@ bool ContextData::BeginCommands() {
     FrameTarget target;
     target.cb = f.commands;
     target.slot = frameSlot;
-    target.image = swapImages[imageIndex];
-    target.view = swapViews[imageIndex];
-    target.extent = swapExtent;
+    if (PresentRotates()) {
+        // present.h: the frame renders into the landscape source; Finish turns it into the swap image.
+        target.image = PresentSourceImage();
+        target.view = PresentSourceView();
+        target.extent = renderExtent;
+        target.presentImage = swapImages[imageIndex];
+        target.presentView = swapViews[imageIndex];
+        target.presentExtent = swapExtent;
+    } else {
+        target.image = swapImages[imageIndex];
+        target.view = swapViews[imageIndex];
+        target.extent = swapExtent;
+    }
     DrawBeginFrame(target);
     ctx->SetRenderBuffer(ctx->_defaultRenderBuffer);
     Video::Viewport vp{};
@@ -1296,6 +1427,7 @@ int32_t PresentFrame(::Video::Context& ctx) {
         std::fprintf(stderr, "[Vulkan] vkQueuePresentKHR: %s\n", ResultName(r));
     }
     imageAcquired = false;
+    FrameClosed();
     frameSlot = (frameSlot + 1) % kFramesInFlight;
     ++frameCount;
     if (ForceDeviceLostThisPresent()) {

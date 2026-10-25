@@ -12,6 +12,9 @@
 namespace Platform {
 namespace App {
 
+void EnterRunDirectory() {
+}
+
 void PreSdlInitHints() {
 }
 

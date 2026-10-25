@@ -31,6 +31,13 @@
 // life of the process. The one place the environment is written is the
 // stress-town default block in OptionsInit (see options.cpp), and that runs
 // before any reader.
+//
+// ANDROID. An app process has no environment a launcher fills. The sanctioned source
+// there is the launch intent: the activity (android/app/src/main/java/org/openba/game/
+// OpenBAActivity.java) turns every string extra named BANISHED_* into that environment
+// variable before the native library loads, so OptionsInit reads the same flags the
+// same way (`tools/android.sh run BANISHED_AUTOSTART=1 ...`; docs/android/README.md).
+// No flag is Android-only.
 // ============================================================================
 #pragma once
 #include <cstdint>

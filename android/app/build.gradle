@@ -1,0 +1,90 @@
+// android/app/build.gradle -- the OpenBA app module (docs/android/README.md).
+//
+// Java: one activity (OpenBAActivity, a subclass of SDL's SDLActivity) plus SDL's own Android
+// glue, compiled from the pinned SDL submodule in place (third_party/SDL/android-project), so the
+// Java side always matches the C side it calls. Native: the repository's root CMakeLists.txt,
+// configured by the NDK for arm64-v8a only; it builds libmain.so (the game, target OpenBA) and
+// libSDL3.so (target SDL3-shared). The app carries no game data: WinData/ is pushed by the user
+// into the app's data folder (docs/android/README.md, AGENTS.md section 1).
+
+plugins {
+    id 'com.android.application'
+}
+
+def sdlJava = file('../../third_party/SDL/android-project/app/src/main/java')
+
+// -Popenba.nativeJobs=N caps the native compile at N jobs (tools/android.sh passes --jobs /
+// BUILD_JOBS, as tools/build.sh does); unset, ninja uses every core.
+def nativeJobArgs = []
+if (project.hasProperty('openba.nativeJobs')) {
+    def jobs = project.property('openba.nativeJobs')
+    nativeJobArgs = ["-DCMAKE_JOB_POOLS=openba_jobs=${jobs}", '-DCMAKE_JOB_POOL_COMPILE=openba_jobs',
+                     '-DCMAKE_JOB_POOL_LINK=openba_jobs']
+}
+
+android {
+    namespace = 'org.openba.game'
+    compileSdk = 35
+    ndkVersion = '30.0.16248370'
+
+    defaultConfig {
+        applicationId = project.property('openba.applicationId')
+        resValue 'string', 'app_name', project.property('openba.appName')
+        minSdk = 29
+        targetSdk = 35
+        versionCode = 1
+        versionName = '1.0.1'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                // c++_shared: libmain.so and libSDL3.so share one C++ runtime (libc++_shared.so).
+                arguments '-DANDROID_STL=c++_shared', '-DBANISHED_RENDER_BACKEND=vulkan',
+                          '-DBANISHED_USE_CCACHE=OFF', *nativeJobArgs
+                targets 'OpenBA', 'SDL3-shared'
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            externalNativeBuild {
+                cmake {
+                    arguments '-DBANISHED_FLAVOUR=debug'
+                }
+            }
+        }
+        release {
+            // Signing and the release package are P7 (docs/vulkan/PLAN.md section 5).
+            minifyEnabled false
+            externalNativeBuild {
+                cmake {
+                    arguments '-DBANISHED_FLAVOUR=perf'
+                }
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('../../CMakeLists.txt')
+            version '3.31.6'
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += sdlJava
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError = false
+    }
+}

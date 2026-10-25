@@ -10,6 +10,7 @@
 #include "VideoVulkanData.h"
 #include "device_objects.h"
 #include "draw.h"
+#include "present.h"
 #include "pipelines.h"
 #include "resources.h"
 #include "create_on_demand/lazy_create.h"   // P4: ext.create_on_demand's use gate around a draw
@@ -1037,7 +1038,9 @@ void DrawBeginFrame(const FrameTarget& target) {
     g_clear = PendingClear{};
     g_swap.image = target.image;
     g_swap.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-    g_swap.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // A pre-rotated frame's source was left in SHADER_READ_ONLY by the previous frame's present pass:
+    // starting from that layout makes this frame's first write wait for that read (present.h).
+    g_swap.layout = target.presentImage ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     g_touched.clear();
 }
 
@@ -1083,7 +1086,21 @@ void DrawEndFrame() {
         CopyColor(cb, g_main.color.image, g_main.color.format, g_main.extent, g_swap.image, SwapchainFormat(),
                   g_frame.target.extent);
     }
-    TransitionImage(g_swap, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, &g_barriers);
+    if (g_frame.target.presentImage) {
+        // Pre-rotated (present.h): the landscape frame is sampled into the acquired swap-chain image.
+        ImageState swapImage;
+        swapImage.image = g_frame.target.presentImage;
+        swapImage.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        swapImage.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        TransitionImage(g_swap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+        TransitionImage(swapImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
+        FlushBarriers(cb, &g_barriers);
+        PresentRecord(cb, g_frame.target.presentImage, g_frame.target.presentView, g_frame.target.presentExtent);
+        ResetCommandState();
+        TransitionImage(swapImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, &g_barriers);
+    } else {
+        TransitionImage(g_swap, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, &g_barriers);
+    }
     // Every companion image this frame used goes back to SHADER_READ_ONLY (resources.h ImageState).
     for (ImageState* s : g_touched)
         TransitionImage(*s, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);

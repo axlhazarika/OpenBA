@@ -141,7 +141,8 @@ namespace VideoVulkan {
     X(vkCmdSetScissor)                                   \
     X(vkCmdSetStencilReference)                          \
     X(vkCmdDraw)                                         \
-    X(vkCmdDrawIndexed)
+    X(vkCmdDrawIndexed)                                  \
+    X(vkCmdPushConstants)
 
 #define VIDEO_VULKAN_DECLARE(name) extern PFN_##name name;
 VIDEO_VULKAN_GLOBAL_FUNCS(VIDEO_VULKAN_DECLARE)

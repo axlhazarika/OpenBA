@@ -23,6 +23,9 @@ namespace App {
 // shrank by it on the next SetWindowPos, and the WM_SIZE re-armed the reset: while
 // SetFullscreenState(TRUE) is refused (another window holds the foreground) the window
 // shrank every frame (known_port_issues row 1334).
+void EnterRunDirectory() {
+}
+
 void PreSdlInitHints() {
     SDL_SetHintWithPriority("SDL_BORDERLESS_WINDOWED_STYLE", "0", SDL_HINT_OVERRIDE);
 }

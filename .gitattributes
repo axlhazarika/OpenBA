@@ -5,3 +5,7 @@
 *.py text eol=lf
 *.cmake text eol=lf
 CMakeLists.txt text eol=lf
+# The Gradle wrapper (android/): the shell script must stay LF, the batch file CRLF, the jar binary.
+android/gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary

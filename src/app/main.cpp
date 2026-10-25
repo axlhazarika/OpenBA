@@ -929,6 +929,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int) {
     // top-level window shifts the CW_USEDEFAULT cascade that places the engine
     // window at creation time, and it sat on top of the game window during the
     // pre-Present part of boot.
+    // The working directory the logs below are opened in (platform_app.h: Android moves to its
+    // data folder; every other platform runs where it was launched).
+    Platform::App::EnterRunDirectory();
     freopen("standalone_debug.log", "w", stdout);
     freopen("standalone_error.log", "w", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1089,6 +1092,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int) {
 // it for Application::PlatformStartup, whose window is SDL's (Phase D.4 SDL W3).
 // ============================================================
 int main(int argc, char** argv) {
+    // The working directory the logs below are opened in (platform_app.h: Android moves to its
+    // data folder; every other platform runs where it was launched).
+    Platform::App::EnterRunDirectory();
     freopen("standalone_debug.log", "w", stdout);
     freopen("standalone_error.log", "w", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);

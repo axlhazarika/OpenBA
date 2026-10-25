@@ -20,6 +20,9 @@
 namespace Platform {
 namespace App {
 
+void EnterRunDirectory() {
+}
+
 void PreSdlInitHints() {
     if (!Opt().background) return;
     SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");

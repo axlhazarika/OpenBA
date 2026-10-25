@@ -183,6 +183,17 @@ else()
       list(REMOVE_ITEM PLATFORM_SRCS ${CMAKE_SOURCE_DIR}/src/platform/posix/${posix_name})
     endforeach()
     list(APPEND PLATFORM_SRCS ${PLATFORM_DARWIN_SRCS})
+  elseif(ANDROID)
+    # src/platform/android/README.md: the darwin rule with the suffix _android. An
+    # android/<name>_android.cpp replaces posix/<name>_posix.cpp whole-file; an android file with
+    # no posix twin of the same <name> is simply added.
+    file(GLOB PLATFORM_ANDROID_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/platform/android/*.cpp)
+    foreach(android_src ${PLATFORM_ANDROID_SRCS})
+      get_filename_component(android_name ${android_src} NAME)
+      string(REGEX REPLACE "_android\\.cpp$" "" android_stem ${android_name})
+      list(REMOVE_ITEM PLATFORM_SRCS ${CMAKE_SOURCE_DIR}/src/platform/posix/${android_stem}_posix.cpp)
+    endforeach()
+    list(APPEND PLATFORM_SRCS ${PLATFORM_ANDROID_SRCS})
   endif()
 endif()
 # The renderer backend: src/render/${BANISHED_RENDER_BACKEND}/backend.cmake sets RENDER_SRCS (its own
@@ -246,6 +257,12 @@ foreach(_sdl_opt SDL_SHARED SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_GPU SDL_
   set(${_sdl_opt} OFF CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
 endforeach()
 set(SDL_STATIC ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
+if(ANDROID)
+  # SDL's Android Java glue (SDLActivity -> HIDDeviceManager) calls into the joystick / HIDAPI
+  # natives unconditionally at startup; without them the activity dies with UnsatisfiedLinkError.
+  set(SDL_JOYSTICK ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
+  set(SDL_HIDAPI ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
+endif()
 if(NOT WIN32)
   # The Linux game links SDL3 shared (libSDL3.so.0 beside the exe; see OpenBA below).
   set(SDL_SHARED ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
@@ -349,19 +366,42 @@ if(RENDER_BACKEND_READY)
       list(REMOVE_ITEM DIAG_POSIX_SRCS ${CMAKE_SOURCE_DIR}/src/diag/posix/${posix_name})
     endforeach()
     list(APPEND DIAG_POSIX_SRCS ${DIAG_DARWIN_SRCS})
+  elseif(ANDROID)
+    # The same rule with src/diag/android (docs/android/README.md).
+    file(GLOB DIAG_ANDROID_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/diag/android/*.cpp)
+    foreach(android_src ${DIAG_ANDROID_SRCS})
+      get_filename_component(android_name ${android_src} NAME)
+      string(REGEX REPLACE "_android\\.cpp$" "_posix.cpp" posix_name ${android_name})
+      list(REMOVE_ITEM DIAG_POSIX_SRCS ${CMAKE_SOURCE_DIR}/src/diag/posix/${posix_name})
+    endforeach()
+    list(APPEND DIAG_POSIX_SRCS ${DIAG_ANDROID_SRCS})
   endif()
-  add_executable(OpenBA
-    ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
-    ${DIAG_POSIX_SRCS})
-  # RPATH $ORIGIN: the game directory carries libSDL3.so.0 beside the exe (below).
-  set_target_properties(OpenBA PROPERTIES OUTPUT_NAME OpenBA RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-                                              BUILD_RPATH "$ORIGIN")
+  if(ANDROID)
+    # Android (docs/android/README.md): the game is libmain.so, loaded by the app's SDLActivity
+    # subclass (android/), which calls its `main` on SDL's thread. Gradle's externalNativeBuild
+    # configures this file for arm64-v8a and packages the library from where CMake puts it.
+    add_library(OpenBA SHARED
+      ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
+      ${DIAG_POSIX_SRCS})
+    set_target_properties(OpenBA PROPERTIES OUTPUT_NAME main)
+  else()
+    add_executable(OpenBA
+      ${GAME_SRCS} ${ENGINE_SRCS} ${PLATFORM_SRCS} ${RENDER_SRCS} ${APP_SRCS} ${DIAG_SRCS}
+      ${DIAG_POSIX_SRCS})
+    # RPATH $ORIGIN: the game directory carries libSDL3.so.0 beside the exe (below).
+    set_target_properties(OpenBA PROPERTIES OUTPUT_NAME OpenBA RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+                                                BUILD_RPATH "$ORIGIN")
+  endif()
   target_include_directories(OpenBA PRIVATE ${BANISHED_INCLUDES})
   target_compile_options(OpenBA PRIVATE ${BANISHED_CXX_FLAGS} ${FLAVOUR_FLAGS})
   # -rdynamic: the exe's own functions in the dynamic symbol table, so the crash and hang
   # dumps (backtrace + dladdr, src/diag/posix) name them.
   if(APPLE)
     target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -Wl,-export_dynamic)
+  elseif(ANDROID)
+    # A shared library exports its functions already (the crash dump's dladdr names them), and
+    # no undefined symbol may survive the link: the loader would only say so on the phone.
+    target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -Wl,--no-undefined)
   else()
     target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -rdynamic)
   endif()
@@ -373,6 +413,11 @@ if(RENDER_BACKEND_READY)
   if(APPLE)
     # Metal needs no dlopened SDL: SDL3 is static, and libairconv.dylib is found beside the exe.
     target_link_libraries(OpenBA PRIVATE SDL3::SDL3-static wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS})
+  elseif(ANDROID)
+    # libSDL3.so is the apk's second library (SDLActivity loads it before libmain.so); log is
+    # __android_log_write (the logcat copy of the log lines, src/platform/android).
+    target_link_libraries(OpenBA PRIVATE SDL3::SDL3-shared wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS}
+                          log)
   else()
     target_link_libraries(OpenBA PRIVATE SDL3::SDL3-shared wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS})
   endif()

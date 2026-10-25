@@ -74,14 +74,20 @@ void DrawShutdown();   // device idle
 struct FrameTarget {
     VkCommandBuffer cb = VK_NULL_HANDLE;
     unsigned slot = 0;                  // the frame-in-flight slot (its fence has been waited for)
-    VkImage image = VK_NULL_HANDLE;     // the acquired swap-chain image
+    VkImage image = VK_NULL_HANDLE;     // the acquired swap-chain image (pre-rotated: the landscape source)
     VkImageView view = VK_NULL_HANDLE;
     VkExtent2D extent{};
+    // A pre-rotated swap chain (present.h): the acquired swap-chain image the frame's end turns `image`
+    // into. Null otherwise: `image` is the swap-chain image itself.
+    VkImage presentImage = VK_NULL_HANDLE;
+    VkImageView presentView = VK_NULL_HANDLE;
+    VkExtent2D presentExtent{};
 };
 // BeginCommands, after the slot's fence wait and the acquire: resets the slot's ring and pools.
 void DrawBeginFrame(const FrameTarget& target);
 // Finish, before vkEndCommandBuffer: ends the pass (running one for a frame that drew nothing, so its
-// clear lands), and moves the swap-chain image to PRESENT_SRC.
+// clear lands), runs the present pass when the swap chain is pre-rotated, and moves the swap-chain
+// image to PRESENT_SRC.
 void DrawEndFrame();
 // The periodic frame line: the engine's counters of this frame plus the backend's own.
 void DrawLogFrame(uint64_t frame, const Video::Context* context);

@@ -1,0 +1,7 @@
+# Gradle and the NDK build (docs/android/README.md)
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+*.apk
