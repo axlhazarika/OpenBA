@@ -1,0 +1,55 @@
+name: Mac build (fork)
+# Fork-only: builds the macOS arm64 app on every push to `axl` (and on manual dispatch), so nothing
+# heavy compiles on the 8 GB Mac mini. Same steps as release.yml's macos job, without the version gate.
+on:
+  push:
+    branches: [axl]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mac-build-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  BUILD_JOBS: 4
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPRESS: "true"
+  CCACHE_MAXSIZE: 400M
+  CCACHE_LAUNCHERS: -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache
+jobs:
+  macos:
+    name: macOS arm64 app
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Packages
+        run: brew install ninja ccache meson
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-mac-build-${{ github.sha }}
+          restore-keys: ccache-mac-build-
+      # The shader converter (DXMT + partial LLVM 15) is the slow part; cached under the script's hash.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            third_party/dxmt_src
+            third_party/llvm15_arm64
+            third_party/airconv_build
+          key: airconv-${{ hashFiles('tools/macos/setup_deps.sh') }}
+      - name: App bundle (release)
+        run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/macos/make_app.sh dist/OpenBA.app
+      - name: Zip
+        run: |
+          tools/macos/make_release_zip.sh dist/OpenBA.app dist
+          mv dist/OpenBA-mac-arm64.zip "dist/OpenBA-axl-${GITHUB_SHA::9}-mac-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenBA-mac-arm64
+          path: dist/*.zip
+          if-no-files-found: error
