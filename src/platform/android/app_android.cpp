@@ -106,8 +106,10 @@ void MirrorThread() {
 // starts from a settings.cfg holding only those keys; everything else takes the game's own defaults,
 // and the player's later choices in Options are kept as on any platform (the file is never written
 // again here). Retail has no "shadows off": ShadowScalar 2 is its Low (the smallest sun map); a true
-// off is an extension question for P7, as is the half-resolution render scale.
+// off is an extension question. P7 (ruled 2026-10-25): edge scrolling off, because a touch held at
+// the screen's edge is a cursor parked there (an unattended game scrolled to the map's corner).
 const char kPhoneSettings[] =
+    "GameEdgeScroll=false\n"
     "VideoMultisample=0\n"
     "VideoShadowScalar=2\n"
     "ext.ambient_occlusion=0\n"
