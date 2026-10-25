@@ -1233,8 +1233,11 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
         g_frame.stencilRef = ref;
     }
 
-    // Descriptors: pushed (P7, pipelines.h), or sets from the frame's pools.
+    // Descriptors: pushed (P7, pipelines.h), or sets from the frame's pools. P7: a pair too large to
+    // push takes the pool path on the push device too; a bind on one path disturbs what the other
+    // left bound, so each path forgets the other's.
     if (pair) {
+        g_frame.setsBound = false;
         if (!BindVertexSet(cb, *pair, vs->reflection)) {
             ++g_frame.failedDraws;
             return;
@@ -1249,6 +1252,8 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
             ++g_frame.failedDraws;
             return;
         }
+        g_frame.vertex.bound = false;
+        g_frame.pushed.count = 0xFFFFFFFFu;
         BindSets(cb, sets, offsets);
     }
 

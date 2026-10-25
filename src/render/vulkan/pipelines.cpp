@@ -560,14 +560,13 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     pi.pDepthStencilState = &ds;
     pi.pColorBlendState = &cb;
     pi.pDynamicState = &dyn;
+    // P7: the pair's own layout on the push path; the game layout (sets from the frame's pools) when
+    // push descriptors are off, or for a pair whose pixel stage declares more bindings than
+    // maxPushDescriptors (PairLayoutFor answers null; the draw then takes the pool path).
     pi.layout = g_pipelineLayout;
     if (g_push) {
         const PairLayout* pair = PairLayoutFor(vs->reflection, ps ? &ps->reflection : nullptr);
-        pi.layout = pair ? pair->layout : VK_NULL_HANDLE;
-    }
-    if (!pi.layout) {
-        *why = "the pair declares more bindings per stage than maxPushDescriptors";
-        return VK_NULL_HANDLE;
+        if (pair) pi.layout = pair->layout;
     }
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult r = vkCreateGraphicsPipelines(LiveDevice(), g_cache, 1, &pi, nullptr, &pipeline);
@@ -936,6 +935,12 @@ const PairLayout* PairLayoutFor(const Shaders::ShaderReflection& vs, const Shade
         pair.vertexSet = sets[0];
         pair.vertexCbs = static_cast<uint32_t>(__builtin_popcount(key.vs.cb));
         pair.vertexBindings = BindingCount(key.vs);
+    }
+    if (!pair.layout) {
+        std::fprintf(stderr,
+                     "[Vulkan] pair layout: pixel stage with %u bindings (maxPushDescriptors %u): this pair "
+                     "takes the pool path (sets from the frame's pools, the game layout)\n",
+                     BindingCount(key.ps), LiveCaps().maxPushDescriptors);
     }
     auto inserted = g_pushLayouts.emplace(key, pair);
     return inserted.first->second.layout ? &inserted.first->second : nullptr;
