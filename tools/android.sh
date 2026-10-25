@@ -2,7 +2,7 @@
 # tools/android.sh -- build, install and drive the Android app (docs/android/README.md).
 #
 #   tools/android.sh build [debug|release] [--jobs N]  # android/app/build/outputs/apk/<type>/app-<type>.apk
-#   tools/android.sh install [debug|release]           # adb install -r of that apk
+#   tools/android.sh install [debug|release]           # adb install -r of that apk (debug: -r -d)
 #   tools/android.sh push-data                         # the install's WinData/*.pkg -> the phone's data folder
 #   tools/android.sh run [KEY=VALUE ...]               # force-stop, then launch with BANISHED_* flags
 #   tools/android.sh stop                              # force-stop the app
@@ -100,7 +100,13 @@ build)
     ;;
 install)
     type="${1:-debug}"
-    "$ADB" install -r "$(apk_path "$type")"
+    # A debug apk installs over whatever is there, even a higher versionCode (-d: allowed while the
+    # installed package is debuggable; a release apk on the phone must be uninstalled first).
+    if [ "$type" = debug ]; then
+        "$ADB" install -r -d "$(apk_path "$type")"
+    else
+        "$ADB" install -r "$(apk_path "$type")"
+    fi
     ;;
 push-data)
     src="${BANISHED_DIR:-C:/GOG Games/Banished}/WinData"
