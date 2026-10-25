@@ -2,7 +2,8 @@
 // tests/unit/ext_phone_menu_test.cpp -- ext.phone_menu
 // ============================================================================
 // src/ext/phone_menu/phone_math.h without the game: the registry row (class A, OFF by default, the
-// profile keys), the safe-area margin and inset, the backdrop's top anchor, and the slider minimum.
+// profile keys), the safe-area margin and inset, the backdrop's top anchor, every other dialog's safe
+// area, and the slider minimum.
 // The seams themselves (UserInterface::Update / Draw, the two dialogs) need the running game.
 // ============================================================================
 #include "unit.h"
@@ -168,6 +169,51 @@ UNIT_TEST(ext_phone_menu_version_aside) {
     // Not laid out yet.
     CHECK(!Ext::PhoneMenu::VersionAside(770, 355, -1, 250, 100, 290));
     CHECK(!Ext::PhoneMenu::VersionAside(770, 355, 287, 250, 0, 0));
+}
+
+UNIT_TEST(ext_phone_menu_safe_area_anchors_move_in) {
+    // The S25 at 100 %: margin 49. A dialog at the default upper-left (0, 0), laid out or not.
+    const Ext::PhoneMenu::Rect r = Ext::PhoneMenu::SafeArea(2340, 1080, 0, 0, 400, 120);
+    CHECK(r.x1 == 49);
+    CHECK(r.y1 == 49);
+    CHECK(r.x2 == 2340 - 49);   // a right / bottom anchor (the toolbar) moves in by the margin
+    CHECK(r.y2 == 1080 - 49);
+    const Ext::PhoneMenu::Rect first = Ext::PhoneMenu::SafeArea(2340, 1080, 0, 0, 0, 0);
+    CHECK(first.x1 == 49);
+    CHECK(first.y2 == 1080 - 49);
+}
+
+UNIT_TEST(ext_phone_menu_safe_area_is_a_floor_for_placed_dialogs) {
+    // ComputeLayout puts a left / top aligned dialog at upperLeft + x1: the margin is a floor.
+    const Ext::PhoneMenu::Rect inside = Ext::PhoneMenu::SafeArea(2340, 1080, 20, 30, 300, 100);
+    CHECK(20 + inside.x1 == 49);   // a point inside the margin is pulled to its edge
+    CHECK(30 + inside.y1 == 49);
+    const Ext::PhoneMenu::Rect placed = Ext::PhoneMenu::SafeArea(2340, 1080, 700, 400, 300, 100);
+    CHECK(placed.x1 == 0);         // a tooltip / drop-down / dragged panel stays where retail puts it
+    CHECK(placed.y1 == 0);
+    CHECK(placed.x2 == 2340 - 49); // and is still kept off the far edges
+    CHECK(placed.y2 == 1080 - 49);
+    const Ext::PhoneMenu::Rect above = Ext::PhoneMenu::SafeArea(2340, 1080, 100, -40, 300, 100);
+    CHECK(above.y1 == 89);         // a tooltip above the screen's top: retail's clamp would leave it
+                                   // off screen; the floor brings it to the margin
+}
+
+UNIT_TEST(ext_phone_menu_safe_area_keeps_retail_for_big_dialogs) {
+    // Taller than the safe band (1080 - 98): the vertical axis is retail's, the other still inset.
+    const Ext::PhoneMenu::Rect tall = Ext::PhoneMenu::SafeArea(2340, 1080, 0, 0, 900, 1000);
+    CHECK(tall.y1 == 0);
+    CHECK(tall.y2 == 1080);
+    CHECK(tall.x1 == 49);
+    CHECK(tall.x2 == 2340 - 49);
+    const Ext::PhoneMenu::Rect exact = Ext::PhoneMenu::SafeArea(2340, 1080, 0, 0, 2340 - 98, 1080 - 98);
+    CHECK(exact.x1 == 49);         // exactly the safe size still fits
+    CHECK(exact.y2 == 1080 - 49);
+    // A screen too small for the margin: retail's whole screen.
+    const Ext::PhoneMenu::Rect thin = Ext::PhoneMenu::SafeArea(1, 1000, 0, 0, 0, 0);
+    CHECK(thin.x1 == 0);
+    CHECK(thin.y1 == 0);
+    CHECK(thin.x2 == 1);
+    CHECK(thin.y2 == 1000);
 }
 
 UNIT_TEST(ext_phone_menu_slider_minimum) {

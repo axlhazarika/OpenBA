@@ -15,7 +15,12 @@
 //       in from every edge, the column centred between the logo and the version line when it
 //       fits there (MenuBand), the version line moved to the bottom-left when the column
 //       cannot sit above it (VersionAside); the logo-left layout uses the same safe area;
-//   (c) the Options UI scale slider goes down to 25 % (the UI four times larger than 100 %).
+//   (c) the Options UI scale slider goes down to 25 % (the UI four times larger than 100 %);
+//   (d) every other dialog (the in-game toolbar and event notices bottom-right, the autosave
+//       notice, the panels, tooltips and drop-downs, the front end's other dialogs) is kept
+//       inside the same safe area: an edge or corner anchor moves in by the margin, a dialog
+//       put at a screen point stays there unless the point is inside the margin, a centred
+//       dialog does not move (phone_math.h SafeArea).
 // Default OFF on a desktop; the Android first run switches it on (src/platform/android/
 // app_android.cpp). Live: every hook reads the row each time. Under the faithful profile the
 // engine seam stays null.

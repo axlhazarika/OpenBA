@@ -81,6 +81,31 @@ Rect VersionAsideLayout(int32_t width, int32_t height, int32_t versionWidth) {
     return Rect{safe.x1, safe.y1, safe.x1 + versionWidth, safe.y2};
 }
 
+namespace {
+
+// One axis of SafeArea: {near, far} for an extent with margin `m`.
+void SafeAxis(int32_t extent, int32_t m, int32_t upperLeft, int32_t last, int32_t& nearEdge,
+              int32_t& farEdge) {
+    nearEdge = 0;
+    farEdge = extent;
+    if (last > extent - 2 * m) return;
+    if (upperLeft < m) nearEdge = m - upperLeft;
+    farEdge = extent - m;
+}
+
+}  // namespace
+
+Rect SafeArea(int32_t width, int32_t height, int32_t upperLeftX, int32_t upperLeftY, int32_t lastWidth,
+              int32_t lastHeight) {
+    const Rect safe = InsetLayout(width, height);
+    const int32_t m = safe.x1;
+    if (m == 0) return safe;
+    Rect r{};
+    SafeAxis(width, m, upperLeftX, lastWidth, r.x1, r.x2);
+    SafeAxis(height, m, upperLeftY, lastHeight, r.y1, r.y2);
+    return r;
+}
+
 float SliderMinimum(float platformMinPercent) {
     if (platformMinPercent < kUiScaleMinPercent) return platformMinPercent;
     return kUiScaleMinPercent;
