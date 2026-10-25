@@ -3,28 +3,22 @@ name: Release
 # each platform (tools/release/package.sh; tools/macos/make_app.sh + make_release_zip.sh) and, on a
 # `v*` tag, publishes the GitHub release with the CHANGELOG.md section of that version as its notes.
 #
-# Dry run: a pull request that touches the release tooling, or a manual dispatch, runs every job
-# but `release`; the packages are the run's artifacts. The tag must equal `v<CMake VERSION>`
-# (README "Versioning"); the `version` job refuses anything else before a single build starts.
+# Dry run: a manual dispatch (Actions > Release > Run workflow) runs every job but `release`; the
+# packages are the run's artifacts. Pull requests do not run it: release builds are for releases.
+# The tag must equal `v<CMake VERSION>` (README "Versioning"); the `version` job refuses anything
+# else before a single build starts.
 #
 # Nothing here needs the game (AGENTS.md section 1): the Windows gate and the serializer check stay
 # the maintainer's steps before the tag is pushed.
 on:
   push:
     tags: ['v*']
-  pull_request:
-    paths:
-      - .github/workflows/release.yml
-      - tools/release/**
-      - tools/macos/**
-      - packaging/**
-      - CHANGELOG.md
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 env:
   BUILD_JOBS: 4
   CCACHE_DIR: ${{ github.workspace }}/.ccache
