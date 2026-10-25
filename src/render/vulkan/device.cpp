@@ -574,7 +574,7 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
 // present is a packet's anyway). The device is not lost: the recovery's teardown and rebuild are real.
 bool ForceDeviceLostThisPresent() {
     static int wanted = -2;   // -2 = not yet read, -1 = disabled, -3 = on request (`bgsave`)
-    static long frame = 0;
+    static int64_t frame = 0;
     static bool fired = false;
     if (wanted == -2) {
         const char* v = Opt().forceDeviceLost;
