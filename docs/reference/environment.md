@@ -34,6 +34,20 @@ Then `tools/build.sh unit` (no game needed beyond item 3's skips) and `tools/bui
 - JAVA_HOME `C:\Program Files\Java\jdk-24` (for Ghidra)
 - CMake 4.4 + ninja from pip (`C:\Users\USPC\AppData\Roaming\Python\Python312\Scripts`, on PATH)
 
+## Android toolchain (Vulkan P6; `docs/android/README.md`)
+- Android SDK at `%LOCALAPPDATA%\Android\Sdk` (no system-wide `ANDROID_HOME`; `tools/android.sh` and
+  `tools/boot_state.sh --android` default to it): cmdline-tools 22.0 (`cmdline-tools/latest`), NDK r30
+  `ndk/30.0.16248370` (clang 21, `ndk-stack.cmd`, `shader-tools/.../glslc`), SDK CMake 3.31.6 with its ninja,
+  platforms 35 and 36, build-tools 36.0.0, platform-tools 37.0.1 (adb also at `C:\code\platform-tools`).
+- `sdkmanager` and Gradle run on Android Studio's JBR 21: `JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"`
+  (the Ghidra JDK 24 above is not used for Android). Gradle 8.12.1 through the wrapper in `android/`, AGP 8.8.1;
+  both are downloaded into `~/.gradle` on the first build (network needed once).
+- Git Bash rewrites `/sdcard/...` arguments into Windows paths before they reach `adb.exe`: the scripts set
+  `MSYS_NO_PATHCONV=1` and pass local paths through `cygpath -m`. Do the same for a hand-typed `adb push`.
+- Reference device: Galaxy S25 over USB (`adb devices`); Vulkan facts in `docs/vulkan/PLAN.md` §2.1.
+- The Vulkan SDK (`C:\VulkanSDK\1.4.363.0`) provides `glslc` / `spirv-val` for
+  `tools/vulkan/gen_present_spirv.sh` (the NDK's `glslc` works too).
+
 ## Third-party (pinned submodules; run `git submodule update --init` after a clone)
 - **SDL3** at `third_party/SDL`: tag **`release-3.4.18`** (the current stable, 2026-10-02),
   commit `829a65d769d935c4852f8159e964312c0957260a` (D4_RULES §3 Q4: SDL3 only, static; the

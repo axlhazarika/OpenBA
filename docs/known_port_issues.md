@@ -964,7 +964,7 @@ the hand-ins; the sentences are not evidence.
 ## Vulkan backend
 
 `src/render/vulkan/` (`docs/vulkan/PLAN.md`). Divergences from the DX11 backend that are left on
-purpose or not yet closed, as of P5 (2026-10-25).
+purpose or not yet closed, as of P6 (2026-10-25).
 
 - **Mid-frame updates land early.** The upload batch (`resources.h`) is submitted before the frame
   that recorded it, so an `UpdateSubresource`-style update made between two draws of a frame lands
@@ -977,8 +977,9 @@ purpose or not yet closed, as of P5 (2026-10-25).
   keeps the multisampled colour and depth stored rather than transient so the next pass can load
   them. The picture is the same; the cost is bandwidth. The tiler path
   (`VK_EXT_multisampled_render_to_single_sampled`, chosen when the device has it, the S25) resolves on
-  the tile instead; it compiles and is selected by `caps.msrtss` but has not run on a device yet (the
-  RTX 5080 lacks the extension). P7 measures both on the S25.
+  the tile instead. It ran on the S25 in P6 (2026-10-25): the main menu rendered at 2x through it
+  (`main targets 2340x1080, multisample 2x (tiler msrtss)`) before the phone defaults turned MSAA off;
+  no in-game run and no measurement yet. P7 measures it and decides the phone's MSAA default.
 - **Mixed sample counts.** A render buffer pairing the multisampled main colour with a single-sampled
   depth image (or the reverse) is rendered without the depth (logged once). D3D11 would refuse the
   draw. No route in the game builds one; it was only reached through the P0 attach bug fixed in P3.
@@ -1013,6 +1014,27 @@ purpose or not yet closed, as of P5 (2026-10-25).
   P5: WSL2 would not start (the hypervisor is off on the dev machine). No Linux-only divergence is known;
   none has been looked for on a running Linux exe yet. The real-GPU run is the owner's (checklist in
   `src/render/vulkan/README.md`).
+- **Android: full-resolution rendering (P6).** The ruled phone default is half the screen resolution.
+  The engine's back buffer is the window's pixel size (2340x1080 on the S25) and the pre-rotated
+  present pass copies it 1:1, so the phone renders at full resolution. Half resolution needs the back
+  buffer and the window's pixel density to agree (the SDL layer scales the mouse by that density); it
+  is the render-scale setting of P7. The other ruled defaults are in (`docs/android/README.md`).
+- **Android: no shadows-off (P6).** Retail's shadow setting has three sizes and no off; the phone's
+  first-run `settings.cfg` picks the smallest (`VideoShadowScalar=2`). A true off would be an extension.
+- **Android: no save on low memory or termination (P6).** `SDL_EVENT_LOW_MEMORY` and
+  `SDL_EVENT_TERMINATING` are not mapped to the pause menu's save; a process Android kills in the
+  background loses the unsaved game (the autosave stands). P7.
+- **Android: the watchdog counts the background as a hang (P6).** While the app is in the background
+  SDL blocks the main thread, so the boot state's `stale` grows; past 20 s it reads HUNG, and on an
+  unattended (autostart) run the watchdog then ends the process with exit 4. An attended run only
+  reports it. Harness runs must stay in the foreground.
+- **Android: run-time font rasteriser absent (P6).** `font_raster_posix.cpp` looks for the TTF beside
+  `/proc/self/exe` (the system's `app_process64` on Android) and in the home and system font folders;
+  none has it, so `ext.sharp_ui` keeps its retail fallback there.
+- **Android: the pipeline cache persists on a clean quit only.** `vulkan_pipelines.bin` is written
+  when the device shuts down (as on every platform); a process killed from the recents list or by
+  `am force-stop` keeps the previous file. Android kills background apps without a quit, so P7 writes
+  it at WILL_ENTER_BACKGROUND too.
 
 ## 15. `ResourceLimitUI` accepted a config's resource index only below 11 — FIXED
 

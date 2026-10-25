@@ -22,6 +22,7 @@ NOT RETAIL. The third backend behind `src/render/common/README.md`'s seam, picke
 | `integration.cpp` | The backend-neutral seams (`AoBackend::`, `FaaBackend::`, … , `Ext::RenderPipe::`, `Graphics::ExtAoAfterOpaque`): every answer is "not supported" until P4. |
 | `render_backend_vulkan.cpp` | `Render::` entry points and the compatibility-slot placeholder. |
 | `vulkan_entry.h` | What the plain entry file needs from `device.cpp` without a Vulkan header. |
+| `present.h`, `present.cpp`, `present/` | The pre-rotated present pass (P6): a swap chain made with a rotated `currentTransform` gets portrait images, and the landscape frame (the backend's own image) is drawn into them turned. `present/present.vert` / `.frag` are OpenBA's own shaders; `present/present_spirv.h` is generated from them by `tools/vulkan/gen_present_spirv.sh`. |
 
 ## Where it stands
 P0 (scaffold): the device comes up, the swap chain presents the engine's clear colour at the
@@ -73,6 +74,21 @@ No validation layer is installed on the bed, so the validation count is 0 by abs
 layer run. `world.txt` for `BANISHED_SEED=12345` is byte-identical to the Windows DX11 debug exe's (46
 lines, md5 `585781c8`); `resave` writes the golden image (md5 `971aaec2cf95`, 23,453,453 bytes). The
 real-GPU run is the owner's, below. Next: P6 (Android).
+
+P6 (Android bring-up, 2026-10-25): the same backend runs on the Galaxy S25 (Adreno 830, driver 1.3.284)
+from `android/` (`docs/android/README.md`). A pre-rotated swap chain (`present.h`): the surface reports
+`currentTransform` ROTATE_90 in landscape, so the swap chain takes that transform and portrait images, the
+frame renders landscape into the backend's own image and the frame's end draws it turned into the
+swap-chain image (OpenBA's own two shaders, `present/`, compiled by `tools/vulkan/gen_present_spirv.sh`);
+with IDENTITY instead, every present answered `VK_SUBOPTIMAL_KHR` and the swap chain was rebuilt every
+frame. An SDL event watch destroys the swap chain and the surface at `SDL_EVENT_WILL_ENTER_BACKGROUND`
+(after the frame the render thread may be presenting) and the next frame remakes both after
+`SDL_EVENT_DID_ENTER_FOREGROUND` (`device.cpp`, THE MOBILE LIFECYCLE). Desktop surfaces are IDENTITY:
+nothing of either runs there. On the S25 (debug build, FIFO at 120 Hz): the menu and an autostarted new
+game render, the pause-menu quit is clean; the first boot converts 127 programs on the phone (menu open at
+2.57 s), the second takes all from the cache (2.32 s); `vulkan_pipelines.bin` (292 KB) is written at the
+clean quit and loaded at the next boot. The tiler MSAA path (`msrtss=1`) rendered the menu at 2x before
+the phone defaults turned MSAA off. No validation layer on the phone yet. Next: P7 (Android fit).
 
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan

@@ -1,0 +1,147 @@
+# OpenBA on Android
+
+NOT RETAIL. The Android build of OpenBA: the same game, engine and Vulkan backend as Linux, packaged as
+an app whose native library is the repository's root `CMakeLists.txt`. Plan and rulings:
+`docs/vulkan/PLAN.md` (§1, §3.6, §4.5, §4.6, phases P6 and P7). Reference device: Galaxy S25 (Adreno 830).
+Only new Adreno parts are in scope; a mouse and a keyboard are how the game is played (touches arrive as
+mouse clicks).
+
+No game data is in the tree, the build directory or the apk. The player copies the `WinData` packages of
+their own Banished install into the app's data folder (below).
+
+## Layout
+
+| Path | What |
+|---|---|
+| `android/` | The Gradle project: `settings.gradle`, `build.gradle` (AGP pin), `gradle.properties` (the package id and app name, each set once), the Gradle wrapper. |
+| `android/app/build.gradle` | The app module: SDK levels, NDK and CMake pins, arm64-v8a only, the native build over `../../CMakeLists.txt` (targets `OpenBA` = `libmain.so` and `SDL3-shared` = `libSDL3.so`), SDL's Java glue compiled in place from `third_party/SDL/android-project`. |
+| `android/app/src/main/AndroidManifest.xml` | One activity, landscape only, Vulkan 1.3 required. |
+| `android/app/src/main/java/org/openba/game/OpenBAActivity.java` | `SDLActivity` subclass: runs the game's own `main`, turns the launch intent's `BANISHED_*` extras into the environment. |
+| `src/platform/android/` | The platform twins (`README.md` there has the rule). |
+| `src/diag/android/` | The crash handler and boot-state watchdog twins. |
+| `tools/android.sh` | Build, install, push the data, run, pull the logs. |
+| `tools/boot_state.sh --android` | The boot state of the app on the attached device. |
+
+## Versions (pinned)
+
+| Item | Version |
+|---|---|
+| Android Gradle Plugin | 8.8.1 (`android/build.gradle`) |
+| Gradle | 8.12.1 (wrapper, distribution SHA-256 pinned) |
+| JDK running Gradle | Android Studio's bundled JBR 21 (AGP 8.8 needs 17 or newer) |
+| NDK | r30, `30.0.16248370` (clang 21) |
+| CMake (SDK) | 3.31.6, with its ninja |
+| compileSdk / targetSdk / minSdk | 35 / 35 / 29 |
+| ABI | arm64-v8a only |
+| C++ runtime | `c++_shared` (`libc++_shared.so` in the apk) |
+
+## Build
+
+From Git Bash at the repository root, no Android Studio needed:
+```bash
+tools/android.sh build debug --jobs 8      # android/app/build/outputs/apk/debug/app-debug.apk
+```
+The script sets `ANDROID_HOME` (default `%LOCALAPPDATA%/Android/Sdk`) and `JAVA_HOME` (default Android
+Studio's `jbr`) when they are unset, and passes the job count to the native build. A clean debug build
+takes about 4.5 minutes with 2 jobs; a one-file change rebuilds in well under a minute. Release builds
+(`build release`, the perf flavour) are unsigned until P7.
+
+The NDK configures the root `CMakeLists.txt` with `ANDROID` set. That branch takes `src/platform/posix`
+plus `src/platform/sdl` and `common`, with every `src/platform/android/<name>_android.cpp` replacing its
+`posix/<name>_posix.cpp` twin (the darwin rule), the same for `src/diag/android`, builds `OpenBA` as the
+shared library `libmain.so`, keeps SDL shared (`libSDL3.so`), and turns on SDL's joystick and HIDAPI
+modules because SDL's Java glue calls into them at startup. The renderer is the Vulkan backend.
+
+## Install, data, run
+
+```bash
+tools/android.sh install debug            # adb install -r
+tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg -> the phone (once)
+tools/android.sh run                      # launch to the main menu
+tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
+                     BANISHED_PAUSEMENU_BUTTON=6   # new game, then Quit Game from the pause menu
+tools/android.sh boot-state --wait 300    # = tools/boot_state.sh --android --wait 300
+tools/android.sh pull <dir>               # the standalone_* logs and the boot state
+tools/android.sh stop
+```
+
+**The data folder** is the app-specific external folder, `/sdcard/Android/data/<package>/files`
+(`SDL_GetAndroidExternalStoragePath()`): no permission, readable over adb and MTP, removed with the app.
+
+| On the phone | What |
+|---|---|
+| `files/WinData/*.pkg` | The retail packages, pushed by the player. Only the top-level `*.pkg` are pushed; parked mods and other subfolders stay home. |
+| `files/OpenBA` | Does not exist: it is the "exe path" the engine is told (`file_android.cpp`), so the game directory is `files/`. |
+| `files/standalone_debug.log`, `standalone_error.log`, `standalone_crash.log`, `standalone_hang.log`, `standalone_boot_state.txt` | The same files as beside `OpenBA.exe` on Windows. |
+| `files/Documents/Banished/` | The per-user folder: `settings.cfg`, `Save/`, `Cache/` (the derived-data cache: SPIR-V, `vulkan_pipelines.bin` / `.txt`). |
+| `files/tmp/` | Temporary files (a save is written there, then moved). |
+
+`WinData/` must be made by the app: a folder adb makes belongs to the shell user, and the app process can
+neither list nor open anything inside it (EACCES). The app makes `WinData/` and `Documents/` at every
+start, and `push-data` starts the app once when the folder is missing (or removes an adb-made one first).
+
+**Harness flags.** The game reads its `BANISHED_*` flags once at boot from the process environment
+(`src/app/options.cpp`; `src/app/options.h` is the inventory). On Android the launch intent is the
+source: every string extra whose key starts with `BANISHED_` becomes that environment variable before the
+native library loads (`OpenBAActivity.java`); leftovers from an earlier launch in the same process are
+cleared first, so a launch from the icon runs with none. By hand:
+```bash
+adb shell am start -n org.openba.game/org.openba.game.OpenBAActivity -e BANISHED_AUTOSTART 1
+```
+SDL ends the game's process state once `main` returns and refuses a second start in the same process, so
+`tools/android.sh run` force-stops the app first.
+
+**Phone defaults** (PLAN.md §1). The first start (no `settings.cfg` yet) writes a `settings.cfg` holding
+only `VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
+`ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
+`ext.max_shadow_res` off (`app_android.cpp`). Options changes are kept as anywhere else. Half-resolution
+rendering is not there yet (`docs/known_port_issues.md`, Vulkan backend).
+
+## Logs
+
+- `adb logcat -s OpenBA` follows `standalone_error.log` live (a thread in `app_android.cpp` copies every
+  line it gains to logcat), plus the crash dump lines. `tools/android.sh logcat` adds SDL's, the Vulkan
+  loader's and the system crash reporter's tags.
+- `standalone_debug.log` (stdout) is only in the file.
+- `tools/boot_state.sh --android` reads the state file over adb with the Windows script's verdicts and
+  exit codes: the pid is checked with `pidof <package>`, the freshness with the file's mtime against the
+  phone's clock.
+
+## Crashes: tombstone and ndk-stack
+
+The crash handler (`src/diag/android/crash_handler_android.cpp`) writes `standalone_crash.log` in the
+usual shape (arm64 registers, `Fault:` from the ESR, the stack walked from the signal frame's pc / lr /
+frame-pointer chain) and copies it to logcat, then hands the signal to Android's crash reporter, which
+writes a tombstone. To symbolise either:
+```bash
+# the unstripped library Gradle built (the apk carries a stripped copy)
+SO=$(ls android/app/build/intermediates/cxx/Debug/*/obj/arm64-v8a/libmain.so)
+NDK="$ANDROID_HOME/ndk/30.0.16248370"
+# one frame of standalone_crash.log ("libmain.so + 0xA74D14"):
+"$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-addr2line.exe" -f -C -i -e "$SO" 0xA74D14
+# the whole tombstone from logcat:
+adb logcat -d | "$NDK/ndk-stack.cmd" -sym "$(dirname "$SO")"
+```
+`adb bugreport` collects the tombstones (`/data/tombstones` is not readable without root).
+
+## Lifecycle
+
+Going to the background tears the window down without waiting for a Vulkan app. The Vulkan backend
+installs an SDL event watch (`src/render/vulkan/device.cpp`, THE MOBILE LIFECYCLE): on
+`SDL_EVENT_WILL_ENTER_BACKGROUND` it waits for a frame still being presented, idles the device and
+destroys the swap chain and the surface; SDL then blocks the main thread until the app returns. On
+`SDL_EVENT_DID_ENTER_FOREGROUND` the next frame makes the surface and the swap chain again. Nothing calls
+`exit()`. `SDL_EVENT_LOW_MEMORY` and `SDL_EVENT_TERMINATING` are not mapped to a save yet (P7).
+
+## Pre-rotation
+
+The S25's panel is portrait, so a landscape app sees `currentTransform = ROTATE_90`. The swap chain is
+made with that transform and portrait images; the game renders its landscape frame into an image of the
+backend's own and the frame's end draws it, turned, into the swap-chain image (`src/render/vulkan/present.h`;
+shaders `present/present.vert`, `.frag`, compiled by `tools/vulkan/gen_present_spirv.sh`). Without that the
+compositor rotates every frame and every present answers `VK_SUBOPTIMAL_KHR`.
+
+## Validation layers
+
+None is pushed in P6: the device log says `validation=0`. P7 pushes `libVkLayer_khronos_validation.so`
+into the debuggable app (`adb shell run-as`) and enables it with the `enable_gpu_debug_layers` settings.

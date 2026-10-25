@@ -190,7 +190,10 @@ companion interface; each would sit under it as a fourth layer. See §4.1.
 - **Data files**: the app-specific folder `/sdcard/Android/data/<pkg>/files`
   (`SDL_GetAndroidExternalStoragePath()`), the DevilutionX recipe: no permission, deleted on
   uninstall, filled by MTP or `adb push`. **Verified on this S25 (One UI, Android 17): the adb
-  shell can create and write under `/sdcard/Android/data/<pkg>/files`.** SAF import is a later
+  shell can create and write under `/sdcard/Android/data/<pkg>/files`.** Correction found in P6
+  (2026-10-25): a FOLDER the adb shell makes there belongs to the shell user and the app process can
+  neither list nor open anything inside it (EACCES); files adb pushes into a folder the app made are
+  readable. The app makes `WinData/` itself (`docs/android/README.md`). SAF import is a later
   nicety; MANAGE_EXTERNAL_STORAGE is not needed.
 - **Build / deploy loop**: `sdkmanager` for cmdline-tools, platform, build-tools, NDK and CMake;
   `./gradlew installDebug`; `adb logcat -s SDL SDL/APP DEBUG AndroidRuntime libc`; `ndk-stack`
