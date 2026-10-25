@@ -964,7 +964,7 @@ the hand-ins; the sentences are not evidence.
 ## Vulkan backend
 
 `src/render/vulkan/` (`docs/vulkan/PLAN.md`). Divergences from the DX11 backend that are left on
-purpose or not yet closed, as of P3 (2026-10-24).
+purpose or not yet closed, as of P4 (2026-10-24).
 
 - **Mid-frame updates land early.** The upload batch (`resources.h`) is submitted before the frame
   that recorded it, so an `UpdateSubresource`-style update made between two draws of a frame lands
@@ -994,6 +994,18 @@ purpose or not yet closed, as of P3 (2026-10-24).
   the bits are the same either way; a fix types the attribute from the shader's declared input. The
   shadow map's depth-only pass also draws with pixel shaders that write `SV_Target` into no colour
   attachment (a validation warning, not an error), exactly as D3D11 binds a null render target.
+  Both are still open after P4.
+- **AO on the tiler MSAA path (P4).** `ext.ambient_occlusion` does not run when the main targets use
+  `VK_EXT_multisampled_render_to_single_sampled` (`caps.msrtss`): the depth is never stored
+  multisampled there, so there is nothing to resolve. The pass is skipped and logged once. Desktop
+  GPUs take the resolve-attachment path, where AO runs; the S25 (P7) decides the tiler answer.
+- **Update on a shared or BC4 image (P4).** `ImageBufferData::Update` answers false for an image that
+  ext.share_gpu_data shares or ext.compress_ao made BC4 (the Metal backend's rule). D3D11 refuses the
+  write to its IMMUTABLE texture without reporting it. No engine route updates a seeded texture.
+- **Lazy objects re-made by the draw (P4).** With ext.create_on_demand, a draw makes again any bound
+  buffer or texture that an idle eviction gave back since its Bind, under the table's use gate. D3D11
+  keeps a reference on what is bound, so an eviction there frees nothing a draw still uses. Same
+  picture; the re-make costs one materialization on that draw.
 
 ## 15. `ResourceLimitUI` accepted a config's resource index only below 11 — FIXED
 
