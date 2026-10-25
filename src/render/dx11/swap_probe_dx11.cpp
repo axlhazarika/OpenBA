@@ -11,9 +11,8 @@
 // The probe reads IDXGISwapChain at Device::_singleton->deviceData (+0x100), the active
 // DeviceData's swap chain pointer (populated by Dx11 CreateDevice, retail
 // VideoDX11!FUN_180004e10, during Engine::Startup), then calls GetFullscreenState
-// (vtable +0x58) and GetDesc (vtable +0x60). Windows only: under dxvk-native there is no
-// DXGI exclusive fullscreen and the window is SDL's, so the POSIX arm prints the one
-// "not probed" line (plans/RENDER.md C.5: a diagnostic).
+// (vtable +0x58) and GetDesc (vtable +0x60). The dx11 backend is Windows-only (Vulkan P5), so
+// the POSIX arm these bodies had is gone.
 // ============================================================================
 
 #include "render_backend.h"     // src/render/common: the declarations
@@ -22,7 +21,6 @@
 
 #include <cstdio>
 
-#if defined(_WIN32)
 #include <windows.h>
 #include <dxgi.h>   // IDXGISwapChain / DXGI_SWAP_CHAIN_DESC
 
@@ -34,12 +32,10 @@ static_assert(offsetof(DXGI_SWAP_CHAIN_DESC, OutputWindow) == 48,
               "OutputWindow offset mismatch");
 static_assert(offsetof(DXGI_SWAP_CHAIN_DESC, Windowed) == 56,
               "Windowed offset mismatch");
-#endif
 
 namespace Render {
 
 void DumpSwapChainState(const char* tag) {
-#if defined(_WIN32)
     if (!::Video::Device::_singleton) {
         printf("[SwapProbe %s] device singleton not populated\n", tag);
         return;
@@ -89,13 +85,9 @@ void DumpSwapChainState(const char* tag) {
            cr.right - cr.left, cr.bottom - cr.top,
            wr.left, wr.top, wr.right - wr.left, wr.bottom - wr.top);
     fflush(stdout);
-#else
-    printf("[SwapProbe %s] not probed on this platform (Windows-only diagnostic)\n", tag);
-#endif
 }
 
 bool BootedExclusiveFullscreen() {
-#if defined(_WIN32)
     if (!::Video::Device::_singleton) return false;
     ::Video::Device* device = ::Video::Device::_singleton;
     ::Video::DeviceData* activeDD = device->deviceData;   // +0x100
@@ -106,9 +98,6 @@ bool BootedExclusiveFullscreen() {
     DXGI_SWAP_CHAIN_DESC desc{};
     if (swapChain->GetDesc(&desc) != 0) return false;                  // vtable +0x60
     return desc.Windowed == 0;
-#else
-    return false;   // no DXGI exclusive fullscreen under dxvk-native's WSI
-#endif
 }
 
 }  // namespace Render

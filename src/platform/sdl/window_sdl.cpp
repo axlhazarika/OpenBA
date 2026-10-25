@@ -24,7 +24,8 @@
 //    Neither survives: Video::Device::PlatformStartup -> AdjustDisplay gives the window
 //    its real style, size and place before it is shown.
 //  * The window is created HIDDEN (retail: dwStyle 0, no WS_VISIBLE: also hidden) and
-//    with SDL_WINDOW_VULKAN (D4_RULES C5: the dxvk-native route needs it). On Windows that
+//    with the graphics-API flag Platform::Window::PrepareCreate returns (SDL_WINDOW_VULKAN
+//    on Windows and Linux, D4_RULES C5; SDL_WINDOW_METAL on Apple). On Windows that
 //    flag makes SDL load the Vulkan loader (vulkan-1.dll) when the window is created, and
 //    creation FAILS without one: a machine with D3D11 but no Vulkan runtime now fails at
 //    "failed to create window". Recorded in the SDL-B hand-in.
@@ -95,7 +96,8 @@ void* NativeHandle() {
     return SDL_GetPointerProperty(SDL_GetWindowProperties(g_window),
                                   SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
 #else
-    // dxvk-native: "HWNDs can become SDL_Window*s" (plan §C, D4_RULES C5).
+    // Off Windows the handle is the SDL_Window* itself (plan §C, D4_RULES C5); the Vulkan
+    // backend makes its surface on it through SDL.
     return g_window;
 #endif
 }

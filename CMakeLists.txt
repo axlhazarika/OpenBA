@@ -16,10 +16,10 @@
 #   release [standalone]        -O3 -DNDEBUG, logs stripped, PerfX knobs default-off
 #
 # Off Windows (Phase D.4 POSIX + LINUX-1; handins/LINUX-1.md has the recipe) the targets are
-# `OpenBA` (the Linux game over src/platform/posix + sdl and dxvk-native; needs
-# tools/fetch_dxvk_native.sh first) and `unit` (the host unit tests over the src/platform/posix
-# twins). src/platform/win and src/diag/win are never built there. (`linux-check`, the
-# compile-only dry run of POSIX, went when the exe linked: the exe builds every TU it did.)
+# `OpenBA` (the Linux game over src/platform/posix + sdl and the Vulkan backend, the default
+# there since Vulkan P5) and `unit` (the host unit tests over the src/platform/posix twins).
+# src/platform/win and src/diag/win are never built there. (`linux-check`, the compile-only
+# dry run of POSIX, went when the exe linked: the exe builds every TU it did.)
 #   cmake -S . -B build/linux -G Ninja -DBANISHED_FLAVOUR=debug
 #   cmake --build build/linux -t unit && build/linux/unit
 #   cmake --build build/linux -t OpenBA
@@ -44,13 +44,16 @@ set(BANISHED_GAME_DIR "C:/GOG Games/Banished" CACHE PATH "where sa-deploy copies
 # docs/reference/tweak_overlay.md): ON for the debug flavour on Windows only. OFF, not one source
 # of it is compiled and every `#if BANISHED_TWEAK_OVERLAY` site is out, so og / perf / release build
 # exactly as without it.
-# The renderer backend (src/render/common/README.md): dx11 by default, metal on APPLE, vulkan by
-# choice (docs/vulkan/PLAN.md). Chosen here because the tweak overlay below is DX11-only; the
-# fragment itself is included further down, with the sources.
+# The renderer backend (src/render/common/README.md): dx11 on Windows, metal on APPLE, vulkan on
+# every other host (Linux, since Vulkan P5) and by choice on Windows (docs/vulkan/PLAN.md). Chosen
+# here because the tweak overlay below is DX11-only; the fragment itself is included further down,
+# with the sources. dx11 is Windows-only: its backend.cmake answers not-ready elsewhere.
 if(APPLE)
   set(BANISHED_RENDER_BACKEND_DEFAULT metal)
-else()
+elseif(WIN32)
   set(BANISHED_RENDER_BACKEND_DEFAULT dx11)
+else()
+  set(BANISHED_RENDER_BACKEND_DEFAULT vulkan)
 endif()
 set(BANISHED_RENDER_BACKEND ${BANISHED_RENDER_BACKEND_DEFAULT} CACHE STRING "Renderer backend: src/render/<name>/backend.cmake")
 if(BANISHED_FLAVOUR STREQUAL "debug" AND WIN32 AND BANISHED_RENDER_BACKEND STREQUAL "dx11")
@@ -244,7 +247,7 @@ foreach(_sdl_opt SDL_SHARED SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_GPU SDL_
 endforeach()
 set(SDL_STATIC ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
 if(NOT WIN32)
-  # The Linux game links SDL3 shared (dxvk-native dlopens libSDL3.so.0; see OpenBA below).
+  # The Linux game links SDL3 shared (libSDL3.so.0 beside the exe; see OpenBA below).
   set(SDL_SHARED ON CACHE BOOL "Banished: SDL3 vendored build option" FORCE)
 endif()
 if(NOT CMAKE_BUILD_TYPE)
@@ -328,14 +331,12 @@ add_custom_target(sa-deploy
   COMMENT "Deploy to ${BANISHED_GAME_DIR}/OpenBA.exe")
 else()
 # ---------------------------------------------------------------------------------------
-# The Linux game (Phase D.4 LINUX-1, RENDER step 4): the Windows exe's tree -- game, engine,
-# app, diag (+ src/diag/posix, the twins of src/diag/win), the dx11 renderer -- over
+# The Linux game (Phase D.4 LINUX-1): the Windows exe's tree -- game, engine, app, diag
+# (+ src/diag/posix, the twins of src/diag/win) and the renderer backend -- over
 # src/platform/posix + sdl + common. `cmake --build <dir> -t OpenBA` -> <dir>/OpenBA.
-# The renderer is the same dx11 code over dxvk-native 3.1.1 (tools/fetch_dxvk_native.sh;
-# third_party/dxvk-native/README.md); src/render/dx11/backend.cmake checks for its headers, gives
-# them to src/render/dx11 as -isystem and clears RENDER_BACKEND_READY (with the message) until
-# the fetch has run. DXVK_WSI_DRIVER=SDL3 is set by the run script (tools/linux_run.sh),
-# never read by our code (D4_RULES C11).
+# The renderer is src/render/vulkan (the default off Windows and Apple since Vulkan P5;
+# docs/vulkan/PLAN.md); the Vulkan loader is the user's own, opened by SDL at run time. macOS
+# takes this branch too, with src/render/metal.
 # ---------------------------------------------------------------------------------------
 if(RENDER_BACKEND_READY)
   file(GLOB DIAG_POSIX_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/diag/posix/*.cpp)
@@ -365,19 +366,20 @@ if(RENDER_BACKEND_READY)
     target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -rdynamic)
   endif()
   find_package(Threads REQUIRED)
-  # SDL3 SHARED here, not static: dxvk-native's SDL3 WSI dlopens libSDL3.so.0 and resolves
-  # every SDL call through that handle, so it must reach the SAME SDL instance that owns
-  # our SDL_Window (a static copy in the exe would be a second SDL with no window). It is
-  # built from the same pinned submodule; glibc's dlopen returns the copy the exe already
-  # loaded (matched by SONAME).
+  # SDL3 SHARED on Linux, built from the same pinned submodule and shipped beside the exe
+  # (libSDL3.so.0, RPATH $ORIGIN). The reason it became shared, the Phase D.4 renderer route that
+  # dlopened SDL itself, went in Vulkan P5; the game directory and the release package still
+  # carry the shared library (known_port_issues row 1284).
   if(APPLE)
     # Metal needs no dlopened SDL: SDL3 is static, and libairconv.dylib is found beside the exe.
     target_link_libraries(OpenBA PRIVATE SDL3::SDL3-static wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS})
   else()
     target_link_libraries(OpenBA PRIVATE SDL3::SDL3-shared wmadec freetype_min Threads::Threads ${CMAKE_DL_LIBS})
   endif()
-  # The backend's own link libraries (metal: the Metal and QuartzCore frameworks; dx11: none).
+  # The backend's own link libraries (metal: the Metal and QuartzCore frameworks; vulkan: dxbc_spv).
   target_link_libraries(OpenBA PRIVATE ${RENDER_BACKEND_LINK_LIBRARIES})
+else()
+  message(STATUS "OpenBA target skipped: the ${BANISHED_RENDER_BACKEND} backend is not ready on this host (see above)")
 endif()
 endif()
 
@@ -422,7 +424,9 @@ if(NOT BANISHED_RENDER_BACKEND STREQUAL "vulkan")
 endif()
 add_executable(unit EXCLUDE_FROM_ALL ${UNIT_SRCS} ${UNIT_TREE_SRCS} ${RENDER_BACKEND_UNIT_SRCS})
 set_target_properties(unit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-add_dependencies(OpenBA ext-rsc-text openba-build-info)
+if(TARGET OpenBA)   # absent when the backend is not ready on this host (dx11 off Windows)
+  add_dependencies(OpenBA ext-rsc-text openba-build-info)
+endif()
 add_dependencies(unit ext-rsc-text)
 target_include_directories(unit PRIVATE ${BANISHED_INCLUDES} ${CMAKE_SOURCE_DIR}/tests/unit)
 target_compile_options(unit PRIVATE

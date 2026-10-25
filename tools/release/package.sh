@@ -4,10 +4,10 @@
 # usage: tools/release/package.sh windows|linux <version> [out-dir]
 #   windows  build/cmake-release/OpenBA.exe + the FrancophilSans files + README / LICENCE texts
 #            -> <out>/OpenBA-v<version>.zip            (the v1.0.0 layout: files at the zip root)
-#   linux    build/cmake-release/OpenBA + libSDL3.so.0 + the two dxvk-native libraries + OpenBA.sh
+#   linux    build/cmake-release/OpenBA (the Vulkan backend) + libSDL3.so.0 + OpenBA.sh
 #            + the same texts -> <out>/OpenBA-v<version>-linux-x64.tar.gz (one top-level folder)
 # Both write <archive>.sha256 beside the archive. Run from the repo root, after
-# `tools/build.sh build release` (and, on Linux, tools/fetch_dxvk_native.sh). The macOS package
+# `tools/build.sh build release`. The macOS package
 # is tools/macos/make_app.sh + make_release_zip.sh.
 #
 # AGENTS.md section 1: no game content. The staging dir is checked for *.pkg / *.pkm / WinData
@@ -53,14 +53,12 @@ case "$PLAT" in
   linux)
     EXE="$B/OpenBA"
     [ -f "$EXE" ] || { echo "missing $EXE: run tools/build.sh build release"; exit 1; }
-    DXVK="${DXVK_NATIVE_DIR:-third_party/dxvk-native/3.1.1/usr/lib}"
     SDLSO="$(find "$B" -name 'libSDL3.so.0' | head -1)"
     [ -n "$SDLSO" ] || { echo "no libSDL3.so.0 under $B"; exit 1; }
     NAME="OpenBA-v$VER-linux-x64"
     STAGE="$TMP/$NAME"; mkdir -p "$STAGE"
     cp -f "$EXE" "$STAGE/OpenBA"
     cp -fL "$SDLSO" "$STAGE/libSDL3.so.0"
-    cp -fL "$DXVK/libdxvk_d3d11.so.0" "$DXVK/libdxvk_dxgi.so.0" "$STAGE/"
     cp -f tools/release/linux/OpenBA.sh "$STAGE/OpenBA.sh"
     cp -f tools/release/linux/README-linux.txt "$STAGE/README-linux.txt"
     chmod +x "$STAGE/OpenBA" "$STAGE/OpenBA.sh"

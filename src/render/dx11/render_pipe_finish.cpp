@@ -13,8 +13,7 @@
 // copy keeps its own (it fires on the Nth PACKET Present -- the render thread's
 // -- and only once; with the row on from boot, the faithful counter, which then
 // counts only the sequential frames, stays far below a run's N). This file
-// lives in src/render/dx11 because only the dx11 TUs see the D3D headers (MinGW's
-// on Windows, dxvk-native's on Linux).
+// lives in src/render/dx11 because only the dx11 TUs see the D3D headers (MinGW-w64's).
 // ============================================================================
 #include "ext/render_pipe/finish_split.h"
 

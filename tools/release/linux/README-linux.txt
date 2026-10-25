@@ -16,11 +16,10 @@ Install
 
 What is in the folder
 ---------------------
-OpenBA               the game (one static binary, needs a Vulkan 1.2 driver)
-OpenBA.sh            the launcher: sets DXVK_WSI_DRIVER=SDL3 and the library path
+OpenBA               the game (renders with Vulkan: needs a Vulkan 1.3 driver and the
+                     system's Vulkan loader, libvulkan.so.1)
+OpenBA.sh            the launcher: sets the library path
 libSDL3.so.0         SDL3, built from the pinned submodule (zlib licence)
-libdxvk_d3d11.so.0   dxvk-native 3.1.1 (zlib licence): Direct3D 11 over Vulkan
-libdxvk_dxgi.so.0
 FrancophilSans*.ttf  the UI typeface, loaded by the exe when it is not installed
                      (FrancophilSans_README.txt has its terms)
 README.md, LICENSE, THIRD_PARTY_NOTICES.md

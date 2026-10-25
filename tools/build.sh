@@ -13,7 +13,8 @@
 #   exe     [flavour]   print the exe path (for scripts)
 #   build dirs: build/cmake-<flavour> (Windows, Linux); on macOS build/mac-<flavour>, with debug = build/mac-arm64.
 #   env BANISHED_RENDER_BACKEND=vulkan picks the Vulkan backend into build/cmake-<flavour>-vulkan.
-#               Darwin builds with the Metal render backend.
+#               The default backend: dx11 on Windows, vulkan on Linux (plain build/cmake-<flavour>),
+#               Metal on Darwin.
 #   flavours: debug (default) | og | perf | release   -- CMakeLists.txt's BANISHED_FLAVOUR
 #
 # Jobs: --jobs N or BUILD_JOBS (default 8 since 2026-10-17, the user: no wide multi-agent builds any more; agents still use 2 -- memory
@@ -44,7 +45,8 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 # The renderer backend (src/render/common/README.md): env BANISHED_RENDER_BACKEND picks a non-default
 # one (vulkan; docs/vulkan/PLAN.md) and keys its own build directory, build/cmake-<flavour>-<backend>,
-# so the default build is never reconfigured under it. Unset = the platform default (dx11 / metal).
+# so the default build is never reconfigured under it. Unset = the platform default (dx11 on Windows,
+# vulkan on Linux, metal on macOS).
 BACKEND="${BANISHED_RENDER_BACKEND:-}"
 BACKEND_CMAKE=""
 if [ -n "$BACKEND" ]; then

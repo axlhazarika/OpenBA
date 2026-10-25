@@ -23,8 +23,8 @@ namespace Window {
 
 // Called by Create before SDL_CreateWindow. May change the client size it will ask for
 // (width / height are in/out, SDL points) and sets the application-specific SDL window
-// flags OR-ed onto SDL_WINDOW_HIDDEN: the graphics-API flag (SDL_WINDOW_VULKAN where the
-// renderer is DXVK, SDL_WINDOW_METAL on Apple) and, on Apple, the high-pixel-density
+// flags OR-ed onto SDL_WINDOW_HIDDEN: the graphics-API flag (SDL_WINDOW_VULKAN on Windows and
+// Linux, SDL_WINDOW_METAL on Apple) and, on Apple, the high-pixel-density
 // request. Also the place for hints that must be set before the window exists.
 uint64_t PrepareCreate(int32_t* width, int32_t* height);
 
