@@ -1,17 +1,17 @@
 // src/ext/derived_cache/enhanced_entry.cpp -- the derived-data cache's row of the Enhanced tab (block COMPRESSAO)
 //
-// NOT RETAIL (docs/extensions/handins/COMPRESSAO.md). The text "Data cache on disk: <size>" and the
-// button "Clear cache". The size is the shared store's (or the files', when this run did not open
+// NOT RETAIL (docs/extensions/handins/COMPRESSAO.md). The label "Data cache on disk", the size beside
+// it in the control column and, under the size, the button "Clear cache". The size is the shared store's (or the files', when this run did not open
 // the cache: the row off, the faithful profile chosen in settings.cfg, another instance holding it).
 // The button acts at once and cannot be undone by Cancel: the shared store stops reading and writing
 // for the rest of the run, and the files are deleted at the next start (the running store holds them
 // open). Element ids: kClearButtonId, far above the Options dialog's own (10..12, input binds from 13).
 //
-// THE WIDTH. The Options dialog sizes itself to its content, and the text is in the page's first
-// column: a size that changed the text's length ("4096 MB" -> "0 MB (cleared at the next start)")
-// changed the column's width and so the dialog's. Open measures the text with every value it can
-// show (the widest size the cap allows, and the cleared one) and makes the widest its minimum width,
-// so the dialog keeps one size while it is open.
+// THE WIDTH. The page is the Game tab's fixed-size scrolling container (EnhancedOptions.rsc), and its
+// control column is 180 wide like the retail tabs'. The size text lives in that column, so every value
+// it can show must fit there: "88888 MB" and the short cleared form "Cleared (next start)". Open
+// measures the text with each of them and makes the widest its minimum width, so the column keeps one
+// width while the dialog is open; a value wider than the column would cut it at the viewport edge.
 
 #include "ext/enhanced_tab/enhanced_tab.h"
 #include "ext/derived_cache/derived_cache.h"
@@ -34,7 +34,7 @@ UI::ButtonElement* g_button = nullptr;
 
 void FormatSize(char (&text)[64], bool cleared, unsigned long long mb) {
     if (cleared)
-        std::snprintf(text, sizeof(text), "0 MB (cleared at the next start)");
+        std::snprintf(text, sizeof(text), "Cleared (next start)");
     else
         std::snprintf(text, sizeof(text), "%llu MB", mb);
 }
@@ -64,7 +64,7 @@ void FixWidth() {
 }
 
 void Open(UI::Element* page) {
-    g_text   = FindElement<UI::TextElement>(page, "textDerivedCache");
+    g_text   = FindElement<UI::TextElement>(page, "textDerivedCacheSize");
     g_button = FindElement<UI::ButtonElement>(page, "buttonDerivedCacheClear");
     if (g_button != nullptr) g_button->SetElementId(kClearButtonId);
     FixWidth();
