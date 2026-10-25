@@ -12,6 +12,8 @@
 //   max_shadow_res/enhanced_entry.cpp      combo "Max shadow resolution"
 //   seamless_loops/enhanced_entry.cpp      combo "Seamless ambient loops"
 //   texture_quality/enhanced_entry.cpp     combo "Texture quality" (TEXQUALITY)
+//   enhanced_tab/render_scale_entry.cpp    combo "Render scale" (P8; the platform key VideoRenderScale)
+//   fps_cap/enhanced_entry.cpp             combo "Frame rate cap" (P8; ext.fps_cap)
 //   derived_cache/enhanced_entry.cpp       the cache's size + button "Clear cache" (COMPRESSAO)
 // A contribution keeps its own element pointers (found by name in the new page); this file holds
 // only the dialog key, never OptionsDialog fields (its sizeof 0x1C0 is retail's, asserted). One
@@ -55,6 +57,8 @@ const Contribution& BetterTreesEntry();
 const Contribution& MaxShadowResEntry();
 const Contribution& SeamlessLoopsEntry();
 const Contribution& TextureQualityEntry();   // src/ext/texture_quality/enhanced_entry.cpp (TEXQUALITY)
+const Contribution& RenderScaleEntry();   // src/ext/enhanced_tab/render_scale_entry.cpp: VideoRenderScale (P8)
+const Contribution& FpsCapEntry();        // src/ext/fps_cap/enhanced_entry.cpp: ext.fps_cap (P8)
 const Contribution& DerivedCacheEntry();   // src/ext/derived_cache/enhanced_entry.cpp: size + "Clear cache"
 
 // Whether this build offers the tab: always, except under the gate (`/profile:faithful` from the

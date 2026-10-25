@@ -23,6 +23,7 @@
 #include "ext/package_cache/package_cache.h"       // ext.package_cache: the FileSystem index seams
 #include "ext/menu_entry/menu_entry.h"             // ext.menu_entry: the mod scan and remount seams
 #include "ext/phone_menu/phone_menu.h"             // ext.phone_menu: the menu safe area and backdrop seam
+#include "ext/fps_cap/fps_cap.h"                     // ext.fps_cap: the frame limiter's settings cap
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
@@ -165,6 +166,8 @@ void InitFromSettings() {
     Ext::RenderPipe::Sync();
     // ext.phone_menu (class A, live): the UI::UserInterface::_extDialogPlace seam.
     Ext::PhoneMenu::Sync();
+    // ext.fps_cap (class A, live): the frame limiter's settings cap (src/app/frame_limiter.h).
+    Ext::FpsCap::Sync();
     // ext.ambient_occlusion (class A, live): the main depth's format + the per-frame arm.
     Ext::AmbientOcclusion::Sync();
     // ext.better_trees (class A, live): the VideoDX11::g_extFoliageAA seam + the mode, and the
@@ -276,6 +279,7 @@ bool SetAndRecord(const Entry& e, bool on) {
     BetterTrees::Sync();        // on: the seams are set now; off: cleared at the next pixel / vertex bind
     Ext::BackgroundSave::Sync();     // on: the save seam is set now; off: cleared now, or after a running save
     Ext::AsyncGpuCreate::Sync();     // on / off: from the next load the loader opens
+    Ext::FpsCap::Sync();             // on / off: the frame limiter's ceiling from the next frame
     // ext.max_shadow_res: the sun map is rebuilt through Device::settingsChanged, raised HERE (main thread,
     // between frames) so render_pipe runs the resize sequentially; see SunLight.h (FAA-MENU).
     if (changedNow && std::strcmp(e.id, "max_shadow_res") == 0) ::Graphics::SunLight::ExtRequestMaxShadowResSync();
@@ -296,6 +300,7 @@ int32_t SetValueAndRecord(const ValueKey& k, int64_t v) {
         ::Graphics::SunLight::ExtRequestMaxShadowResSync();
     if (::IO::Persistence* p = ::IO::Persistence::_singleton)
         p->Set(KeyPrefix(Tier::Extension), k.id, static_cast<int>(stored));   // "ext.<id>" = "%i"
+    if (std::strcmp(k.id, "fps_cap_rate") == 0) Ext::FpsCap::Sync();   // live: the next frame's ceiling
     std::fprintf(stderr, "[Ext] %s=%d\n", SettingsKey(k).c_str(), stored);
     return stored;
 }
@@ -337,6 +342,25 @@ int32_t SetTextureQualityAndRecord(int32_t drop) {
         SetAndRecord(row, false);
     }
     return TextureQualityChoice();
+}
+
+int32_t FpsCapChoice() {
+    const Entry* row = FindEntry("fps_cap");
+    const ValueKey* rate = FindValueKey("fps_cap_rate");
+    return Requested(*row) ? Value(*rate) : 0;
+}
+
+int32_t SetFpsCapAndRecord(int32_t fps) {
+    const Entry& row = *FindEntry("fps_cap");
+    const ValueKey& key = *FindValueKey("fps_cap_rate");
+    if (fps > 0) {
+        const int32_t stored = ClampValue(key, fps);   // one of 30 / 60 / 90 / 120, else 60
+        if (Value(key) != stored) SetValueAndRecord(key, stored);
+        if (!Requested(row)) SetAndRecord(row, true);
+    } else if (Requested(row)) {
+        SetAndRecord(row, false);
+    }
+    return FpsCapChoice();
 }
 
 void PersistSettings() {
