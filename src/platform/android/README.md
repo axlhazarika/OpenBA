@@ -23,6 +23,7 @@ replacement rule is the darwin one (`src/platform/darwin/README.md`) with the su
 | `file_android.cpp` | `posix/file_posix.cpp` | `ExecutablePath` is `<data>/OpenBA` (the game directory is the data folder); `FileCreateTemp` uses `<data>/tmp`. |
 | `settings_android.cpp` | `posix/settings_posix.cpp` | `DocumentsDir` is `<data>/Documents`. |
 | `window_android.cpp` | `posix/window_posix.cpp` | `PrepareCreate` adds `SDL_WINDOW_FULLSCREEN` (immersive mode). |
+| `font_raster_android.cpp` | `posix/font_raster_posix.cpp` | `FindFaceFile` looks for `<face>.ttf` in the data folder only (the game directory; no exe directory, user or system font folder holds it on Android). |
 | `android_paths.h` | — | `Platform::Android::DataDir()` for the twins above. |
 | `src/diag/android/crash_handler_android.cpp` | `src/diag/posix/crash_handler_posix.cpp` | arm64 registers, a frame-pointer walk from the signal frame (no `backtrace()` below API 33), logcat copy, then debuggerd's tombstone. |
 | `src/diag/android/boot_state_watchdog_android.cpp` | `src/diag/posix/boot_state_watchdog_posix.cpp` | the hang dump walks each thread from the context its dump signal interrupted. |
