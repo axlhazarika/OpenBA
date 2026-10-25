@@ -61,7 +61,9 @@ rebuild that fails on a lost device into the same recovery. `BANISHED_FORCE_DEVI
 on this backend too. Next: P5 (Linux).
 
 ## Validation on the Windows bed
-The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With no Vulkan SDK
+The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan
+SDK installed, its layer is registered with the loader and used as is (no `VK_ADD_LAYER_PATH`; the
+SDK's `Bin\spirv-val.exe` serves `vulkan-shader-check --spirv-val`). With no Vulkan SDK
 installed, a layer built from Khronos's source with the MinGW toolchain works: build
 `KhronosGroup/Vulkan-ValidationLayers` (tag matching the loader) with `scripts/update_deps.py` and
 CMake + Ninja in a SHORT path (the dependency builds exceed MAX_PATH under the session scratchpad),
