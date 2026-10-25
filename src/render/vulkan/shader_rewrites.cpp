@@ -63,8 +63,8 @@ struct FaaState {
     int blobsTransformed = 0;
     int programsTransformed = 0;
     int createFailed = 0;
-    long xfBinds = 0;
-    long pixelBinds = 0;
+    int64_t xfBinds = 0;
+    int64_t pixelBinds = 0;
 };
 
 struct VertexStage {
@@ -77,7 +77,7 @@ struct VertexStage {
     int blobsSeen = 0;
     int blobsTransformed = 0;
     int createFailed = 0;
-    long xfBinds = 0;
+    int64_t xfBinds = 0;
 };
 
 std::mutex g_mu;
@@ -147,9 +147,10 @@ void FaaReset(const char* why) {
     if (g_faa.gen != 0 || g_faa.programsTransformed) {
         std::fprintf(stderr,
                      "[FoliageAA] stage reset (%s): previous gen %u mode %d -- %d blobs seen, %d transformed "
-                     "(%d programs), %d create failures, %ld of %ld pixel binds transformed\n",
+                     "(%d programs), %d create failures, %lld of %lld pixel binds transformed\n",
                      why, g_faa.gen, g_faa.mode, g_faa.blobsSeen, g_faa.blobsTransformed, g_faa.programsTransformed,
-                     g_faa.createFailed, g_faa.xfBinds, g_faa.pixelBinds);
+                     g_faa.createFailed, static_cast<long long>(g_faa.xfBinds),
+                     static_cast<long long>(g_faa.pixelBinds));
     }
     ReleaseAll(g_faa.programs);
     g_faa.blobsSeen = 0;
@@ -267,9 +268,9 @@ const char* Tag(VertexKind k) {
 
 void VertexRelease(VertexStage& s, VertexKind k, const char* why) {
     if (s.blobsTransformed || s.xfBinds) {
-        std::fprintf(stderr, "%s stage reset (%s): %d blobs seen, %d rewritten, %d create failures, %ld rewritten "
+        std::fprintf(stderr, "%s stage reset (%s): %d blobs seen, %d rewritten, %d create failures, %lld rewritten "
                              "binds\n",
-                     Tag(k), why, s.blobsSeen, s.blobsTransformed, s.createFailed, s.xfBinds);
+                     Tag(k), why, s.blobsSeen, s.blobsTransformed, s.createFailed, static_cast<long long>(s.xfBinds));
     }
     ReleaseAll(s.programs);
     s.blobsSeen = 0;

@@ -8,6 +8,7 @@
 // ============================================================================
 
 #include "better_trees/receiver_rewrite.h"   // BbsRewrite::Params (pure, no D3D)
+#include <cstdint>
 
 namespace FaaBackend {
 
@@ -34,7 +35,7 @@ struct TweakStats {
     bool  msaa = false, coverage = false;
     float fillK = 0.0f, fillFloor = 0.0f;
     int   blobsSeen = 0, blobsTransformed = 0, programsTransformed = 0, createFailed = 0;
-    long  xfBinds = 0, pixelBinds = 0;
+    int64_t xfBinds = 0, pixelBinds = 0;
 };
 TweakStats Stats();
 #endif

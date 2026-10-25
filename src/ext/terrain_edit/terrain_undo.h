@@ -27,6 +27,13 @@ struct KilledQuad {
     uint16_t indices[6];
 };
 
+// A resource a stroke planted: the cell and the entity that stands on it (compared, never dereferenced, so it
+// stays standard C++).
+struct PlantedResource {
+    int       cell;
+    uintptr_t entity;
+};
+
 struct Stroke {
     // vertex index (stride * vy + vx) -> the word before the stroke
     std::unordered_map<int, int16_t> heights;
@@ -39,6 +46,7 @@ struct Stroke {
     // texture's bytes of the cells the stroke repainted (cell index dim * row + col -> R, G, B, A packed as
     // the four bytes are in memory), as they were before the stroke.
     std::unordered_map<int, uint32_t> texels;
+    std::vector<PlantedResource> planted;   // the resource tool: removed by an undo while they still stand
     std::vector<KilledQuad> killedQuads;   // restored by an undo, before the mesh is cut back
     // The box of height-grid vertices the stroke wrote (where the town's water access is looked at again
     // after an undo).
@@ -52,7 +60,9 @@ struct Stroke {
     int  waterIndices = 0;
     int  waterRanges = 0;
     int  waterRangesA = 0;   // the river-style ranges' count before the stroke
-    bool Empty() const { return heights.empty() && types.empty() && !hasWater && texels.empty(); }
+    bool Empty() const {
+        return heights.empty() && types.empty() && !hasWater && texels.empty() && planted.empty();
+    }
 };
 
 class UndoStack {
@@ -69,6 +79,10 @@ public:
 
     void RecordType(int cell, uint8_t before) {
         if (_open) _current.types.emplace(cell, before);
+    }
+
+    void RecordPlanted(int cell, uintptr_t entity) {
+        if (_open) _current.planted.push_back(PlantedResource{ cell, entity });
     }
 
     void RecordWrittenType(int cell, uint8_t after) {

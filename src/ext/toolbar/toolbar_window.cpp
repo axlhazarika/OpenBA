@@ -16,6 +16,7 @@
 #include "ui/TextElement.h"
 #include "ui/ImageElement.h"
 #include "ui/ButtonElement.h"
+#include "ui/ComboElement.h"
 #include "ui/ElementDescription.h"
 #include "ui/Element.h"
 #include "ui/DialogInstance.h"
@@ -256,7 +257,16 @@ public:
         } else if (msg > 7 && msg < 0x0B) {
             Object::InternalPtr<UI::DialogInstance> self(this);
             _ui->BringDialogToFront(&self);
-        } else if (msg == 0x12) {
+        } else if (msg == 0x12 || msg == 0x14) {
+            // A combo box is a button: its click (0x12) only opens the list, and the pick comes from the
+            // list as 0x14 (ComboDialog::OnElementEvent). A page hears a combo when something is picked,
+            // not when the list is opened or closed again; every other control, as before, on its click.
+            const bool isCombo = ::Object::IsDerivedFromNullSafe(element->Get(), UI::ComboElement::TypeId());
+            if (isCombo != (msg == 0x14)) {
+                Object::InternalPtr<UI::Element> copy = *element;
+                UI::DialogInstance::OnElementEvent(&copy, msg, id, c, d, e, userData);
+                return;
+            }
             if (id == 1) {
                 Object::InternalPtr<UI::DialogInstance> self(this);
                 _ui->CloseDialog(&self);
