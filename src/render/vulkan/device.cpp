@@ -815,7 +815,13 @@ bool Enumerate(Video::Device* dev, const char* name) {
         a.name.Set(props.deviceName);
         a.dxgiAdapterIndex = i;
         a.dxgiOutputIndex = 0;
-        a.maxFilterLevel = std::min(16, static_cast<int>(props.limits.maxSamplerAnisotropy));   // dx11: 16
+        // dx11: 16. P8 round 2: 0 (the Options' combo then lists no anisotropic level) when the device
+        // lacks the samplerAnisotropy feature: maxSamplerAnisotropy alone does not say it can be used.
+        auto features = Make<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
+        vkGetPhysicalDeviceFeatures2(physicalDevices[i], &features);
+        a.maxFilterLevel = features.features.samplerAnisotropy
+                               ? std::min(16, static_cast<int>(props.limits.maxSamplerAnisotropy))
+                               : 0;
         // Array<bool>: multisampleData[k] is "k+1 samples works" for k = 0..7.
         a.multisampleData = static_cast<uint8_t*>(A::MemAlloc(8, 4));
         std::memset(a.multisampleData, 0, 8);

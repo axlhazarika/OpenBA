@@ -924,6 +924,17 @@ VkSampler GetSampler(const SamplerDesc& desc) {
         return g_defaultSampler;
     }
     g_samplers.emplace(desc, sampler);
+    // P8 round 2: the Options' texture filter made visible in the log (one line per anisotropy level).
+    if (desc.anisotropy > 0) {
+        static uint32_t s_loggedLevels = 0;
+        if (desc.anisotropy < 32 && !((s_loggedLevels >> desc.anisotropy) & 1u)) {
+            s_loggedLevels |= 1u << desc.anisotropy;
+            std::fprintf(stderr, "[Vulkan] sampler: anisotropic %ux requested, %s (device max %.0f)\n",
+                         static_cast<unsigned>(desc.anisotropy),
+                         si.anisotropyEnable ? "enabled" : "NOT enabled: samplerAnisotropy is not supported",
+                         static_cast<double>(LiveProperties().limits.maxSamplerAnisotropy));
+        }
+    }
     return sampler;
 }
 
