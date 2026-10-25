@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # tools/android.sh -- build, install and drive the Android app (docs/android/README.md).
 #
-#   tools/android.sh build [debug|release] [--jobs N]  # android/app/build/outputs/apk/<type>/app-<type>.apk
-#   tools/android.sh install [debug|release]           # adb install -r of that apk
+#   tools/android.sh build [debug|release] [--jobs N] [--ccache]
+#                                                      # apk/debug/app-debug.apk, apk/release/app-release-unsigned.apk
+#   tools/android.sh sign [IN.apk OUT.apk]             # zipalign -P 16 + apksigner (default: the release apk ->
+#                                                      # apk/release/app-release.apk); the key from OPENBA_KEYSTORE*
+#   tools/android.sh install [debug|release|FILE.apk]  # adb install -r -d (downgrade allowed) of that apk
 #   tools/android.sh push-data                         # the install's WinData/*.pkg + the FrancophilSans files -> the data folder
 #   tools/android.sh run [KEY=VALUE ...]               # force-stop, then launch with BANISHED_* flags
 #   tools/android.sh stop                              # force-stop the app
@@ -15,7 +18,16 @@
 # Studio's bundled JBR), ADB (default platform-tools/adb of ANDROID_HOME, then C:/code/platform-tools,
 # then PATH), ANDROID_SERIAL (adb's own: picks the device when several are attached), BANISHED_DIR
 # (the Windows install whose WinData is pushed; never copied anywhere else), BUILD_JOBS / --jobs
-# (native compile jobs, default 8 as tools/build.sh).
+# (native compile jobs, default 8 as tools/build.sh). `--ccache` compiles the native part through
+# ccache (on PATH; the release workflow's cache), which the Gradle build otherwise leaves off.
+#
+# Signing (`sign`; .github/workflows/release.yml runs the same command): OPENBA_KEYSTORE (the
+# keystore file, PKCS12 or JKS), OPENBA_KEY_ALIAS, and the two passwords in OPENBA_KEYSTORE_PASSWORD
+# and OPENBA_KEY_PASSWORD. apksigner reads the passwords from the environment (`env:`), so they are
+# never on a command line. ANDROID_BUILD_TOOLS overrides the build-tools version (default 36.0.0).
+# A local check with the debug key:
+#   OPENBA_KEYSTORE=~/.android/debug.keystore OPENBA_KEY_ALIAS=androiddebugkey \
+#   OPENBA_KEYSTORE_PASSWORD=android OPENBA_KEY_PASSWORD=android tools/android.sh sign
 #
 # The harness flags (src/app/options.h) reach the game as launch-intent string extras, which the
 # activity turns into the process environment before the native library loads:
@@ -60,7 +72,7 @@ if [ -z "${ADB:-}" ]; then
 fi
 
 usage() {
-    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -72,10 +84,26 @@ gradlew() {
     fi
 }
 
+# The apk Gradle writes for a build type: debug is signed with the debug key; release is unsigned
+# (`app-release-unsigned.apk`) until `sign` writes `app-release.apk` beside it.
 apk_path() {
     local p="$ANDROID_DIR/app/build/outputs/apk/$1/app-$1.apk"
+    if [ "${2:-}" = unsigned ]; then p="$ANDROID_DIR/app/build/outputs/apk/$1/app-$1-unsigned.apk"; fi
     if command -v cygpath >/dev/null 2>&1; then p="$(cygpath -m "$p")"; fi
     echo "$p"
+}
+
+# A build-tools program: zipalign / apksigner (apksigner.bat on Windows).
+build_tool() {
+    local bt="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS:-36.0.0}"
+    for cand in "$bt/$1" "$bt/$1.exe" "$bt/$1.bat"; do
+        if [ -f "$cand" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    echo "no $1 in $bt (install build-tools;${ANDROID_BUILD_TOOLS:-36.0.0})" >&2
+    return 1
 }
 
 cmd="${1:-}"
@@ -86,21 +114,57 @@ case "$cmd" in
 build)
     type="debug"
     jobs="${BUILD_JOBS:-8}"
+    props=()
     while [ $# -gt 0 ]; do
         case "$1" in
             debug|release) type="$1" ;;
             --jobs) shift; jobs="$1" ;;
+            --ccache) props+=("-Popenba.ccache=true") ;;
             *) usage ;;
         esac
         shift
     done
     task="assemble$(echo "${type:0:1}" | tr a-z A-Z)${type:1}"
-    gradlew --console=plain ":app:$task" "-Popenba.nativeJobs=$jobs"
-    ls -la "$(apk_path "$type")"
+    gradlew --console=plain ":app:$task" "-Popenba.nativeJobs=$jobs" "${props[@]}"
+    if [ "$type" = release ]; then
+        ls -la "$(apk_path release unsigned)"
+    else
+        ls -la "$(apk_path "$type")"
+    fi
+    ;;
+sign)
+    in="${1:-$(apk_path release unsigned)}"
+    out="${2:-$(apk_path release)}"
+    [ -f "$in" ] || { echo "no apk at $in (tools/android.sh build release first)" >&2; exit 1; }
+    : "${OPENBA_KEYSTORE:?OPENBA_KEYSTORE: the keystore file}"
+    : "${OPENBA_KEY_ALIAS:?OPENBA_KEY_ALIAS: the key alias}"
+    : "${OPENBA_KEYSTORE_PASSWORD:?OPENBA_KEYSTORE_PASSWORD: the keystore password}"
+    : "${OPENBA_KEY_PASSWORD:?OPENBA_KEY_PASSWORD: the key password}"
+    [ -f "$OPENBA_KEYSTORE" ] || { echo "no keystore at OPENBA_KEYSTORE" >&2; exit 1; }
+    zipalign="$(build_tool zipalign)"
+    apksigner="$(build_tool apksigner)"
+    aligned="$out.aligned"
+    # 16 KB pages for the uncompressed native libraries (-P 16), 4-byte alignment for the rest; then the
+    # v2 / v3 signature over the aligned file (minSdk 29: no v1). apksigner reads both passwords from
+    # the environment; nothing secret is on a command line or in the output.
+    "$zipalign" -f -P 16 4 "$in" "$aligned"
+    "$apksigner" sign --ks "$OPENBA_KEYSTORE" --ks-key-alias "$OPENBA_KEY_ALIAS" \
+        --ks-pass env:OPENBA_KEYSTORE_PASSWORD --key-pass env:OPENBA_KEY_PASSWORD \
+        --out "$out" "$aligned"
+    rm -f "$aligned" "$out.idsig"
+    "$zipalign" -c -P 16 4 "$out"
+    "$apksigner" verify --verbose --print-certs "$out"
+    ls -la "$out"
     ;;
 install)
+    # -d: a dev phone moves between trees whose versionCode differs (build.gradle derives it from the
+    # CMake VERSION since P8; older trees had 1). Android takes a lower code only over a debuggable
+    # install; over a signed release apk, `adb uninstall` first (that deletes the data folder).
     type="${1:-debug}"
-    "$ADB" install -r "$(apk_path "$type")"
+    case "$type" in
+        *.apk) "$ADB" install -r -d "$type" ;;
+        *) "$ADB" install -r -d "$(apk_path "$type")" ;;
+    esac
     ;;
 push-data)
     src="${BANISHED_DIR:-C:/GOG Games/Banished}/WinData"
