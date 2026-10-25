@@ -297,9 +297,10 @@ void DrawPanels(const Snapshot& s) {
     const FaaBackend::TweakStats faa = FaaBackend::Stats();
     const int32_t sunMap = Graphics::SunLight::ExtTweakSunMapSize();
     ImGui::Text("%.1f fps  %.2f ms   sun map %dx%d   FAA gen %u mode %d: %d/%d blobs transformed (%d programs), "
-                "%ld/%ld binds",
+                "%lld/%lld binds",
                 io.Framerate, io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f, sunMap, sunMap, faa.gen, faa.mode,
-                faa.blobsTransformed, faa.blobsSeen, faa.programsTransformed, faa.xfBinds, faa.pixelBinds);
+                faa.blobsTransformed, faa.blobsSeen, faa.programsTransformed, static_cast<long long>(faa.xfBinds),
+                static_cast<long long>(faa.pixelBinds));
     ImGui::Separator();
 
     if (s.faithful) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "faithful profile: nothing to tweak");

@@ -5,7 +5,6 @@
 # count <pattern> <directory> <lines>: section (ii), outside src/platform/win, src/render/dx11, src/diag/win
 #   and Windows-only #if branches (#ifdef _WIN32, __MINGW32__, ...; see the docstring).
 count	long	src/engine	2
-count	long	src/render	1
 count	pragma_pack	src/engine	2
 count	pragma_pack	src/game	2
 count	va_list	src/diag	1
