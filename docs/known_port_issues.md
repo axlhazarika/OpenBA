@@ -978,8 +978,9 @@ purpose or not yet closed, as of P6 (2026-10-25).
   them. The picture is the same; the cost is bandwidth. The tiler path
   (`VK_EXT_multisampled_render_to_single_sampled`, chosen when the device has it, the S25) resolves on
   the tile instead. It ran on the S25 in P6 (2026-10-25): the main menu rendered at 2x through it
-  (`main targets 2340x1080, multisample 2x (tiler msrtss)`) before the phone defaults turned MSAA off;
-  no in-game run and no measurement yet. P7 measures it and decides the phone's MSAA default.
+  (`main targets 2340x1080, multisample 2x (tiler msrtss)`) before the phone defaults turned MSAA off.
+  P7 measured it in game at half resolution: town GPU busy 32 -> 36 %, stress fps -9.6 %; the phone
+  default stays off pending a ruling (`docs/android/P7_FIRST_PASS.md` C7).
 - **Mixed sample counts.** A render buffer pairing the multisampled main colour with a single-sampled
   depth image (or the reverse) is rendered without the depth (logged once). D3D11 would refuse the
   draw. No route in the game builds one; it was only reached through the P0 attach bug fixed in P3.
@@ -1001,7 +1002,8 @@ purpose or not yet closed, as of P6 (2026-10-25).
 - **AO on the tiler MSAA path (P4).** `ext.ambient_occlusion` does not run when the main targets use
   `VK_EXT_multisampled_render_to_single_sampled` (`caps.msrtss`): the depth is never stored
   multisampled there, so there is nothing to resolve. The pass is skipped and logged once. Desktop
-  GPUs take the resolve-attachment path, where AO runs; the S25 (P7) decides the tiler answer.
+  GPUs take the resolve-attachment path, where AO runs. On the S25 (P7) both MSAA and AO are off by the
+  phone defaults, so the case does not arise there; AO with tiler MSAA stays unanswered.
 - **Update on a shared or BC4 image (P4).** `ImageBufferData::Update` answers false for an image that
   ext.share_gpu_data shares or ext.compress_ao made BC4 (the Metal backend's rule). D3D11 refuses the
   write to its IMMUTABLE texture without reporting it. No engine route updates a seeded texture.
@@ -1016,11 +1018,14 @@ purpose or not yet closed, as of P6 (2026-10-25).
   P5: WSL2 would not start (the hypervisor is off on the dev machine). No Linux-only divergence is known;
   none has been looked for on a running Linux exe yet. The real-GPU run is the owner's (checklist in
   `src/render/vulkan/README.md`).
-- **Android: full-resolution rendering (P6).** The ruled phone default is half the screen resolution.
-  The engine's back buffer is the window's pixel size (2340x1080 on the S25) and the pre-rotated
-  present pass copies it 1:1, so the phone renders at full resolution. Half resolution needs the back
-  buffer and the window's pixel density to agree (the SDL layer scales the mouse by that density); it
-  is the render-scale setting of P7. The other ruled defaults are in (`docs/android/README.md`).
+- **Android: full-resolution rendering (P6) — FIXED in P7.** `VideoRenderScale` (phone first run 50)
+  sizes the back buffer at half the window (1170x540 on the S25); the SDL layer scales the window size
+  and pixel density by it so the mouse agrees, and the present pass scales the frame up (linear). Not an
+  Options control yet: the key is read once at window creation (`Platform::Window::RenderScale`).
+- **Android: no in-game frame cap (P7).** `BANISHED_FPS_CAP=60` did not pace the phone's game: its one
+  `FrameLimiter::Tick` call is in `MenuDialogLoopT::Draw`, and the limiter stands aside while vsync holds
+  the rate at or below refresh; the game ran at the panel's 120 Hz. The
+  60 fps phone default is unruled (data in `docs/android/P7_FIRST_PASS.md`).
 - **Android: no shadows-off (P6).** Retail's shadow setting has three sizes and no off; the phone's
   first-run `settings.cfg` picks the smallest (`VideoShadowScalar=2`). A true off would be an extension.
 - **Android: save on low memory or termination (P6; narrowed in P7).** Since P7 `SDL_EVENT_LOW_MEMORY`

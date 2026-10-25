@@ -92,14 +92,21 @@ SDL ends the game's process state once `main` returns and refuses a second start
 `tools/android.sh run` force-stops the app first.
 
 **Phone defaults** (PLAN.md §1). The first start (no `settings.cfg` yet) writes a `settings.cfg` holding
-only `VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
+only `GameEdgeScroll=false` (P7: a touch held at the edge is a parked cursor), `VideoRenderScale=50`,
+`VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
 `ext.max_shadow_res` off, and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
 main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
 rounded corners and the camera cut-out, and Options > User interface scale goes down to 25 % (the UI four
 times larger than 100 %; `docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
-100. Options changes are kept as anywhere else. Half-resolution
-rendering is not there yet (`docs/known_port_issues.md`, Vulkan backend).
+100. Options changes are kept as anywhere else.
+
+**Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
+window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
+1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key once at window creation (no
+Options control; edit the file and restart); desktops answer 1.0. The SDL layer hands the engine the scaled
+size and pixel density, so taps land where they are drawn. The MSAA default stays off and the 60 fps cap
+is unruled: the numbers are in `P7_FIRST_PASS.md`.
 
 ## Logs
 
