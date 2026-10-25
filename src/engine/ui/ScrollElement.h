@@ -129,6 +129,12 @@ public:
     float    _dragAnchor;        // +0x16c  ctor 0 (high half of the +0x168 qword)
     float    _dragValue;         // +0x170  ctor 0
     uint32_t _pad174;            // +0x174  written by nothing
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/SLIDERCLAMP.md): fix.slider_drag_clamp -- null by
+    // default, the game side points it at the fix's bool (Ext::Fix(); DESIGN.md hook rule 5). While it
+    // reads true, a drag that leaves the 32-pixel band keeps following the pointer and clamps instead
+    // of snapping back to _dragAnchor. A static member: the layout is unchanged.
+    static const bool* _extFixDragClamp;
 };
 
 static_assert(sizeof(ScrollElement) == 0x178,

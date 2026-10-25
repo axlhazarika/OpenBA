@@ -15,9 +15,11 @@ dialog's "User interface scale" slider.
 | Site | Retail | With the row on |
 |---|---|---|
 | `SliderElement::Update` (0x1800d67e0, `src/engine/ui/sliderelement.cpp`), the band test | dragging and outside the 0x20 band: `_value = _dragAnchor`, `UpdateNumber`, return | the pointer counts as inside the band; the function runs on as retail's in-band path |
+| `ScrollElement::Update` (`src/engine/ui/scrollelement.cpp`), the same band test | dragging and outside the band: the else arm `_currentValue = _dragAnchor` | the pointer counts as inside the band; the drag arm's own `[0, _maxValue]` clamp holds the ends |
 
-The engine seam is `UI::SliderElement::_extFixDragClamp` (`SliderElement.h`), a null-by-default
-`const bool*` that `Ext::InitFromSettings` (`src/ext/registry_boot.cpp`) points at
+The engine seams are `UI::SliderElement::_extFixDragClamp` (`SliderElement.h`) and
+`UI::ScrollElement::_extFixDragClamp` (`ScrollElement.h`), null-by-default `const bool*`s that
+`Ext::InitFromSettings` (`src/ext/registry_boot.cpp`) both points at
 `Ext::Fix().slider_drag_clamp` (DESIGN.md §3 hook rule 5: `src/engine` never includes `src/ext`).
 Fixes toggle live, so the pointer follows the Extensions dialog's toggle at once. The row has no
 `src/ext/slider_drag_clamp/` directory: the corrected arm is one assignment at the seam (the Names
@@ -35,11 +37,15 @@ Everything after the seam is retail's code, unchanged:
 Retail also leaves `kFlagDragging` set after a release outside the band (the early return skips
 the release test); with the row on, the release always clears it.
 
-## 2. Other sliders
+## 2. The scroll bar, and other sliders
 
 `grep dragAnchor / kFlagDragging` over `src/`: the only other drag of this shape is
-`ScrollElement::Update` (`src/engine/ui/scrollelement.cpp`, a scroll bar, same band and snap-back).
-It is not a slider and is left retail. `src/ext/terrain_edit/toolbar_page.cpp` reads its two
+`ScrollElement::Update` (`src/engine/ui/scrollelement.cpp`, a scroll bar, same band and snap-back:
+dragging off the band takes the else arm `_currentValue = _dragAnchor`; a release off the band clears
+the flag and returns). Ruled in by the user 2026-10-25: the same row covers it through the second
+seam. With it on, the drag arm runs as retail's in-band path along the bar's axis (`dragDy` for a
+vertical bar, `dragDx` otherwise), its own clamp holds `[0, _maxValue]`, and a release anywhere
+clears the flag and plays sound 5. `src/ext/terrain_edit/toolbar_page.cpp` reads its two
 `SliderElement`s' `_value` only (no drag of its own) and gets the fix through `SliderElement::Update`;
 `src/ext/sharp_ui/` has no slider code.
 
@@ -47,8 +53,8 @@ It is not a slider and is left retail. `src/ext/terrain_edit/toolbar_page.cpp` r
 
 - Save / sim: none. A slider's value reaches settings or game state only through the dialog's own
   event handlers, exactly as a retail drag that stayed inside the band.
-- Perf: off (or faithful) costs one null test, and only on a frame where a slider is being dragged
-  outside its band.
+- Perf: off (or faithful) costs one null test, and only on a frame where a slider or scroll bar is
+  being dragged outside its band.
 
 ## 4. Tests and gates
 

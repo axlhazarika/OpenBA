@@ -85,12 +85,13 @@ const Entry kEntries[] = {
       0, [](State& s) -> bool& { return s.fix.boot_device_lost; } },
 
     // SLIDERCLAMP (docs/extensions/handins/SLIDERCLAMP.md, docs/retail_bugs.md section 12): a slider
-    // dragged with the pointer off its 32-pixel band keeps following the pointer and stops at its ends,
-    // and a release there keeps the value. Retail snaps back to where the drag began. UI only.
+    // or scroll bar dragged with the pointer off its 32-pixel band keeps following the pointer and
+    // stops at its ends, and a release there keeps the value. Retail snaps back to where the drag
+    // began. UI only. One row, two seams (SliderElement, ScrollElement).
     { "slider_drag_clamp", Tier::Fix, Class::None, true,
       "Sliders follow the mouse",
-      "A slider being dragged keeps following the mouse and stops at its ends, instead of jumping back "
-      "when the pointer strays off it.",
+      "A slider or scroll bar being dragged keeps following the mouse and stops at its ends, instead "
+      "of jumping back when the pointer strays off it.",
       0, [](State& s) -> bool& { return s.fix.slider_drag_clamp; } },
 
     // Extensions. Each one adds a field to Ext::Extensions and a row here:

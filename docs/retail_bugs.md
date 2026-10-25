@@ -455,6 +455,11 @@ and keeps the value (the release frame's `dragDx` is 0, but the drag arm re-read
 the release cleared it, so the value is not recomputed). The page-step arm (a press left or right
 of the thumb) is unchanged.
 
-Fix: `fix.slider_drag_clamp` (tier 1), default on, engine seam `UI::SliderElement::_extFixDragClamp`
-(a null-by-default pointer the game side points at the fix's bool at boot: DESIGN.md hook rule 5).
+`ScrollElement::Update` (`src/engine/ui/scrollelement.cpp`) has the same 32-pixel band: dragging a
+scroll bar's thumb off it takes the else arm `_currentValue = _dragAnchor`, and a release off it clears
+the drag flag and returns without the in-band release sound.
+
+Fix: `fix.slider_drag_clamp` (tier 1), default on, engine seams `UI::SliderElement::_extFixDragClamp`
+and `UI::ScrollElement::_extFixDragClamp` (null-by-default pointers the game side points at the fix's
+bool at boot: DESIGN.md hook rule 5).
 Hand-in `docs/extensions/handins/SLIDERCLAMP.md`.
