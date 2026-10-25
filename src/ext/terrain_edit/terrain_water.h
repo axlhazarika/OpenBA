@@ -3,18 +3,13 @@
 // src/ext/terrain_edit/terrain_water.h -- ext.terrain_edit, the water an edit makes (NOT RETAIL)
 // ============================================================================
 // docs/extensions/handins/TERRAINEDIT.md. Standard C++ only, so tests/unit/ext_terrain_edit_test.cpp can
-// check it without the
-// game. The game draws water from a mesh it builds once, at world generation: for each water feature, a quad
-// for every cell
-// of the feature's box that has a corner at or below -0.75 (WorldGeometry::BuildWaterShores,
-// water_contour_mesh.cpp). This
-// builds the same quads for the cells of a region of the heightmap that an edit has just taken under water,
-// as one patch of
-// vertices and indices that the brush appends to the mesh as a new draw range. The vertices are the game's
-// own layout
-// (16 bytes: position x y z and a pad, planar uv, and four bytes of which the third is the shore weight), the
-// indices count
-// from the patch's own first vertex (a draw range adds its base vertex).
+// check it without the game. The game draws water from a mesh it builds once, at world generation: for each
+// water feature, a quad for every cell of the feature's box that has a corner at or below -0.75
+// (WorldGeometry::BuildWaterShores, water_contour_mesh.cpp). This builds the same quads for the cells of a
+// region of the heightmap that an edit has just taken under water, as one patch of vertices and indices that
+// the brush appends to the mesh as a new draw range. The vertices are the game's own layout (16 bytes:
+// position x y z and a pad, planar uv, and four bytes of which the third is the shore weight), the indices
+// count from the patch's own first vertex (a draw range adds its base vertex).
 // ============================================================================
 
 #include <cmath>
@@ -33,18 +28,15 @@ constexpr float kWaterTest   = -0.75f;
 // a corner at this height or above has no shore weight; at or below kWaterTest it has all
 constexpr float kShoreTop    = 0.25f;
 // The z field of a water vertex is the height of its water: the mesh builder writes the feature's number
-// minus 191, and the
-// scale is 1/48 of a unit, so each lake lies a hair above the one before it (a lake's z is -191 + its index;
-// the rivers use -192
-// and down). Two lakes whose z differ show a seam where they meet (a thin gap where the bed shows through),
-// and the first
-// version of this wrote -180, 0.23 above the first lake. A patch now takes the z of the water it touches
-// (BuildWaterPatch is
-// given it), or, when it touches none, kDefaultWaterZ, the first lake's.
+// minus 191, and the scale is 1/48 of a unit, so each lake lies a hair above the one before it (a lake's z
+// is -191 + its index; the rivers use -192 and down). Two lakes whose z differ show a seam where they meet
+// (a thin gap where the bed shows through), and the first version of this wrote -180, 0.23 above the first
+// lake. A patch now takes the z of the water it touches (BuildWaterPatch is given it), or, when it touches
+// none, kDefaultWaterZ, the first lake's.
 constexpr int   kDefaultWaterZ = -191;
-// Since z is not an identity, the edit's quads carry one in a byte the game leaves at 0 (the fourth component
-// of the normal),
-// so they can be told from the game's own when the mesh is read again after a load.
+// Since z is not an identity, the edit's quads carry one in a byte the game leaves at 0 (the fourth
+// component of the normal), so they can be told from the game's own when the mesh is read again after a
+// load.
 constexpr uint8_t kEditMarker = 1;
 // position and uv are the coordinate times this, as int16 (the mesh builder's pack scale)
 constexpr float kPosScale    = 48.0f;
@@ -57,15 +49,11 @@ struct WaterVertex {
 static_assert(sizeof(WaterVertex) == 16, "a water vertex is the game's 16 bytes");
 
 // What a patch is made like. A lake's quads have planar uv (the position) and make slow ripples, in the lake
-// draw ranges. A
-// river's strips have the uv of the water along the flow: the game's mesh builder lays them from a centre
-// line with u across the
-// channel (0 to 1) and v = arc length / 32 - 16, and a river is drawn with its own material and a faster
-// texture flow. A patch
-// that joins a river is made river-style: the river's own texture mapping, taken from one of its triangles
-// and continued over
-// the patch as a plane (u and v each a linear function of the world position), so that the texture runs along
-// the flow and across
+// draw ranges. A river's strips have the uv of the water along the flow: the game's mesh builder lays them
+// from a centre line with u across the channel (0 to 1) and v = arc length / 32 - 16, and a river is drawn
+// with its own material and a faster texture flow. A patch that joins a river is made river-style: the
+// river's own texture mapping, taken from one of its triangles and continued over the patch as a plane (u
+// and v each a linear function of the world position), so that the texture runs along the flow and across
 // the channel at the river's own scale and phase. (A constant u gave the streaks of one texture column
 // stretched.)
 struct UvMap {
@@ -78,10 +66,9 @@ struct UvMap {
 };
 
 // The texture mapping of one river triangle, with where the triangle is. A river bends, so no one plane fits
-// it for long: a
-// river-style patch gives each of its vertices the mapping of the nearest anchor, which makes the patch
-// continuous with the
-// river where they meet and lets the mapping drift along with the river further out.
+// it for long: a river-style patch gives each of its vertices the mapping of the nearest anchor, which makes
+// the patch continuous with the river where they meet and lets the mapping drift along with the river
+// further out.
 struct UvAnchor {
     float x = 0.0f;   // the triangle's centre, in world coordinates
     float y = 0.0f;
@@ -112,8 +99,8 @@ inline const UvMap& MapAt(const WaterStyle& style, float x, float y) {
 }
 
 // The texture mapping of a river triangle, from its three vertices' world positions and uv (as floats, uv /
-// 1024): u and v as
-// linear functions of x and y. False when the triangle is thin (its positions nearly in a line).
+// 1024): u and v as linear functions of x and y. False when the triangle is thin (its positions nearly in a
+// line).
 inline bool UvMapOfTriangle(const float x[3], const float y[3], const float u[3], const float v[3],
     UvMap& out) {
     const float e1x = x[1] - x[0];
@@ -170,12 +157,10 @@ inline uint8_t ShoreWeight(float height) {
 }
 
 // Quads for the cells [vx0, vx1) x [vy0, vy1) of the heightmap (a cell's corners are the vertices (vx, vy),
-// (vx + 1, vy),
-// (vx + 1, vy + 1) and (vx, vy + 1)), for each cell with a corner at or below kWaterTest that `skip(col,
-// row)` does not
-// refuse (a cell the mesh already draws). `height(vx, vy)` is the world height of a vertex, `halfGrid` the
-// offset from a
-// heightmap index to a world coordinate, `zFeature` the feature number written into every vertex.
+// (vx + 1, vy), (vx + 1, vy + 1) and (vx, vy + 1)), for each cell with a corner at or below kWaterTest that
+// `skip(col, row)` does not refuse (a cell the mesh already draws). `height(vx, vy)` is the world height of
+// a vertex, `halfGrid` the offset from a heightmap index to a world coordinate, `zFeature` the feature
+// number written into every vertex.
 template <class HeightFn, class SkipFn>
 WaterPatch BuildWaterPatchStyled(HeightFn height, int vx0, int vy0, int vx1, int vy1, int halfGrid,
     const WaterStyle& style,

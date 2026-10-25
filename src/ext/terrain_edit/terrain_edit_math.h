@@ -62,12 +62,11 @@ inline int RaisedWord(int word, float delta) {
 
 // ---- brush modes ---------------------------------------------------------------------------------
 // The game classifies a cell from its height (Map::ClassifyTerrain, keystone_a_map.cpp): below -1.4 deep
-// water, below -0.25 shallow water, -0.25 to 0.75 flat ground that can be built on (when the slope
-// allows), up to 2.0 steep ground, from 2.0 a mountain. The modes keep to that: flatten stays in the
-// buildable band and the mountain brush aims above the mountain line. Lower goes down to the lake floor,
-// and a cell that falls under the water line becomes water; the page draws that water again when the
-// stroke ends (brush_tool.cpp, terrain_water.h), because the game builds its water mesh only once, at
-// world generation.
+// water, below -0.25 shallow water, -0.25 to 0.75 flat ground that can be built on (when the slope allows),
+// up to 2.0 steep ground, from 2.0 a mountain. The modes keep to that: flatten stays in the buildable band
+// and the mountain brush aims above the mountain line. Lower goes down to the lake floor, and a cell that
+// falls under the water line becomes water; the page draws that water again when the stroke ends
+// (brush_tool.cpp, terrain_water.h), because the game builds its water mesh only once, at world generation.
 enum class Mode : int { Raise = 0, Lower = 1, Flatten = 2, Mountain = 3, Smooth = 4 };
 constexpr int kModeCount = 5;
 
@@ -83,10 +82,8 @@ constexpr float kLowerFloor      = -3.0f;
 constexpr float kFlattenMin      = -0.2f;   // flatten aims inside the buildable band (-0.25 to 0.75)
 constexpr float kFlattenMax      = 0.7f;
 // The game's terrain chunks are drawn between heights of -16 and +16 (geometry_draw.cpp), and the ground it
-// generates
-// reaches mountains of that order, so the brush's peaks run from about 7 to 15; the ceiling keeps the noise
-// from pushing a
-// peak out of the chunks' range (kHeightCeiling, below).
+// generates reaches mountains of that order, so the brush's peaks run from about 7 to 15; the ceiling keeps
+// the noise from pushing a peak out of the chunks' range (kHeightCeiling, below).
 constexpr float kMountainBase      = 5.5f;   // a mountain's peak at strength 0
 // the peak rises this much for each unit of strength (6.7 to 15.1)
 constexpr float kMountainPerStrength = 2.4f;
@@ -120,8 +117,7 @@ inline float SteppedStrength(float strength, int direction) {
 }
 
 // The height flatten aims for when a stroke starts at a vertex of height `startWord` (a height word): that
-// height, held
-// inside the buildable band.
+// height, held inside the buildable band.
 inline float FlattenTarget(int startWord) {
     return ClampFloat(static_cast<float>(startWord) / 256.0f, kFlattenMin, kFlattenMax);
 }
@@ -156,11 +152,10 @@ inline float ValueNoise(float x, float y, uint32_t seed) {
     return top + (bottom - top) * ty;
 }
 
-// The height (world units) the mountain brush aims for at a vertex `dist` cells from the brush centre: a cone
-// with a
-// pointed top whose peak grows with `strength`, roughened by noise that is fixed for a stroke (`seed`) so the
-// peaks look
-// natural and stay where they are while the button is held. 0 at and beyond the brush's radius.
+// The height (world units) the mountain brush aims for at a vertex `dist` cells from the brush centre: a
+// cone with a pointed top whose peak grows with `strength`, roughened by noise that is fixed for a stroke
+// (`seed`) so the peaks look natural and stay where they are while the button is held. 0 at and beyond the
+// brush's radius.
 inline float MountainHeight(float dist, float radius, float strength, int vx, int vy, uint32_t seed) {
     if (radius <= 0.0f || dist >= radius) return 0.0f;
     const float t = 1.0f - dist / radius;
@@ -172,12 +167,10 @@ inline float MountainHeight(float dist, float radius, float strength, int vx, in
     return height > kHeightCeiling ? kHeightCeiling : height;
 }
 
-// The height word a vertex of `word` takes in one painted frame. `weight` is the disc's falloff at the vertex
-// (0 to 1),
-// `strength` the page's multiplier and `target` the height flatten (one for the stroke), mountain
-// (MountainHeight at the
-// vertex) or smooth (the average of the vertex's neighbours) aims for, in world units; raise and lower ignore
-// it.
+// The height word a vertex of `word` takes in one painted frame. `weight` is the disc's falloff at the
+// vertex (0 to 1), `strength` the page's multiplier and `target` the height flatten (one for the stroke),
+// mountain (MountainHeight at the vertex) or smooth (the average of the vertex's neighbours) aims for, in
+// world units; raise and lower ignore it.
 inline int NextWord(int word, Mode mode, float weight, float strength, float target) {
     const float amount = weight * strength;
     switch (mode) {

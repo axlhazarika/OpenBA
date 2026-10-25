@@ -30,7 +30,7 @@ struct KilledQuad {
 struct Stroke {
     // vertex index (stride * vy + vx) -> the word before the stroke
     std::unordered_map<int, int16_t> heights;
-    // cell index (row * size + col)   -> the type before the stroke
+    // cell index (row * size + col) -> the type before the stroke
     std::unordered_map<int, uint8_t> types;
     // cell index -> the type the stroke last wrote there (an undo leaves a cell alone that holds another)
     std::unordered_map<int, uint8_t> written;
@@ -122,6 +122,11 @@ public:
 
     bool Open() const { return _open; }
     size_t Depth() const { return _strokes.size(); }
+
+    // The most recent stroke, left on the stack; null when there is none.
+    const Stroke* Top() const {
+        return _strokes.empty() ? nullptr : &_strokes.back();
+    }
 
     // The most recent stroke, removed from the stack. False when there is none.
     bool Pop(Stroke& out) {

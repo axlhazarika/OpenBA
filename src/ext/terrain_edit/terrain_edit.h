@@ -27,6 +27,10 @@ bool BrushActive();
 // dropped.
 bool UndoLast();
 size_t UndoDepth();
+// True after an Undo that was refused because something was built on the stroke since (a building, a road, a
+// field, or a cell that no longer holds the type the stroke gave it): the Terrain page says so until the
+// next stroke or a successful Undo.
+bool UndoRefused();
 
 // Called whenever the number of undo steps may have changed (a stroke ended, an undo ran): the Terrain page
 // refreshes its status line from it. Null clears it.

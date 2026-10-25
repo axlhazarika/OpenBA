@@ -111,6 +111,7 @@ const void* g_undoMap = nullptr;
 const void* g_undoHeights = nullptr;
 int g_undoStride = 0;
 uint32_t g_undoEpoch = 0;
+bool g_undoRefused = false;   // the last Undo was refused (UndoRefused)
 
 // The world the undo steps and the water-quad cache belong to is the map, its height words and their
 // stride, and the lock epoch (a new game, a load or a reload takes a new one, so a world allocated at the
@@ -157,6 +158,30 @@ bool VertexTouchesBlocker(Map* map, int vx, int vy, int offset) {
             if (col < 0 || row < 0 || col >= size || row >= size) continue;
             const MapCell& corner = cells[static_cast<int64_t>(row) * size + col];
             if (corner.blocker.Get() != nullptr || IsRoadCell(corner)) return true;
+        }
+    }
+    return false;
+}
+
+// An Undo gives back the heights and the cell types a stroke recorded. It is refused as a whole when any of
+// them has something built on it since: a vertex that touches a blocker or a road, or a cell that is blocked,
+// is a road or no longer holds the type the stroke gave it. A part of it would leave the water mesh and the
+// ground texture, which an Undo cuts back and restores whole, out of step with the heights that stayed.
+bool UndoWouldSkip(Map* map, const Ext::TerrainEdit::Stroke& stroke, int stride, int offset) {
+    const int size = map->size;
+    for (const auto& entry : stroke.heights) {
+        const int vx = entry.first % stride;
+        const int vy = entry.first / stride;
+        if (vy >= stride) continue;
+        if (VertexTouchesBlocker(map, vx, vy, offset)) return true;
+    }
+    for (const auto& entry : stroke.types) {
+        if (entry.first < 0 || entry.first >= size * size) continue;
+        const MapCell& cell = map->cells.GetData()[entry.first];
+        const auto wrote = stroke.written.find(entry.first);
+        if (cell.blocker.Get() != nullptr || IsRoadCell(cell) || wrote == stroke.written.end() ||
+            cell.terrainType != wrote->second) {
+            return true;
         }
     }
     return false;
@@ -642,6 +667,7 @@ void AddWaterForStroke(WorldGeometry* terrain) {
         std::fprintf(stderr, "[TerrainEdit] water: the mesh already holds %d %s ranges, the most that can be "
                      "drawn: this stroke's water was not changed\n", rangesOfKind,
                      style.river ? "river" : "lake");
+        g_waterQuadsValid = false;   // step 1 took quads out of the cache that the mesh still draws
         return;
     }
     g_undo.RecordWater(vertsBefore, indicesBefore, rangesBefore, riverRangesBefore);
@@ -1076,6 +1102,7 @@ private:
             if (!SameWorld(map, heights, stride)) {
                 AdoptWorld(map, heights, stride);   // another world: the old strokes do not belong to it
             }
+            g_undoRefused = false;
             g_undo.BeginStroke();
             g_box = StrokeBox();
         }
@@ -1218,10 +1245,19 @@ bool UndoLast() {
         ForgetWorld();
         return false;
     }
-    Stroke stroke;
-    if (!g_undo.Pop(stroke)) return false;
     const int size = map->size;
     const int offset = size >> 1;
+    const Stroke* top = g_undo.Top();
+    if (top == nullptr) return false;
+    if (UndoWouldSkip(map, *top, stride, offset)) {
+        g_undoRefused = true;
+        std::fprintf(stderr, "[TerrainEdit] undo refused: something was built on this stroke\n");
+        NotifyUndoChanged();
+        return false;
+    }
+    g_undoRefused = false;
+    Stroke stroke;
+    if (!g_undo.Pop(stroke)) return false;
     std::unordered_set<int> cells;   // the cells whose trees and rocks follow the ground
     for (const auto& entry : stroke.heights) {
         const int vx = entry.first % stride;
@@ -1282,6 +1318,10 @@ bool UndoLast() {
         stroke.heights.size(), stroke.types.size());
     NotifyUndoChanged();
     return true;
+}
+
+bool UndoRefused() {
+    return g_undoRefused;
 }
 
 bool BrushActive() {

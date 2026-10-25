@@ -70,8 +70,12 @@ void ShowStatus(UI::Element* page) {
     UI::Element* e = page->FindElement(System::String("textTerrainEditStatus")).Get();
     if (!::Object::IsDerivedFromNullSafe(e, UI::TextElement::TypeId())) return;
     char text[96];
-    std::snprintf(text, sizeof text, "%s brush, %d to undo", kModeNames[static_cast<int>(State().mode)],
-                  static_cast<int>(UndoDepth()));
+    if (UndoRefused()) {
+        std::snprintf(text, sizeof text, "Cannot undo: something was built on this stroke");
+    } else {
+        std::snprintf(text, sizeof text, "%s brush, %d to undo", kModeNames[static_cast<int>(State().mode)],
+                      static_cast<int>(UndoDepth()));
+    }
     if (std::strcmp(text, g_shown) == 0) return;
     std::snprintf(g_shown, sizeof g_shown, "%s", text);
     static_cast<UI::TextElement*>(e)->SetParameter(0, System::String(text));
