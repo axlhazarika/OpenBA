@@ -4,10 +4,14 @@
 // The Windows half of src/platform/common/platform_app.h. WinMain's own SDL set-up
 // (SDL_RegisterApp, the DPI-awareness and timer-resolution hints, SDL_UnregisterApp)
 // stays inline in src/app/main.cpp, in its order; PreSdlInitHints sets the one hint
-// only the Windows video backend reads.
+// only the Windows video backend reads. Shutdown stops the boot-state watchdog before
+// SDL_Quit, so a clean exit leaves STATE=EXITED instead of the last RUNNING / QUITTING tick
+// (as the Darwin and Android twins do).
 // ============================================================================
 
 #include "platform_app.h"
+
+#include "boot_state_watchdog.h"
 
 #include <SDL3/SDL_hints.h>
 
@@ -34,6 +38,7 @@ void PostSdlInit() {
 }
 
 void Shutdown() {
+    BootState::Stop();
 }
 
 bool TakeSaveRequest() {
