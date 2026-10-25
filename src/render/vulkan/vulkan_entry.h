@@ -26,3 +26,19 @@ bool Enumerate(::Video::Device* device, const char* interfaceName);
 bool DeviceLive();
 
 }  // namespace VideoVulkan
+
+namespace Video {
+class Context;
+}  // namespace Video
+
+namespace VideoVulkan {
+
+// P4: ContextData::Finish's two halves (device.cpp; dx11 contextdata.cpp PresentFrame /
+// RecoverLostDevice), which ext.render_pipe runs on two threads (integration.cpp).
+// PresentFrame: end the frame, submit, present; VK_ERROR_DEVICE_LOST (as an int) when the device was lost
+// in this frame (submit, acquire, present, a fence wait, or the injected loss), else 0.
+int PresentFrame(::Video::Context& ctx);
+// The device-lost recovery: OnVideoError, the device rebuilt, OnVideoRestart (or the error text).
+void RecoverLostDevice(::Video::Device& device, int result);
+
+}  // namespace VideoVulkan

@@ -66,9 +66,10 @@ void SetWhy(std::string* why, const std::string& text) {
 }
 
 // PLAN.md §4.3 as a dxbc-spirv ResourceMapping: the stage picks the set, the register class and
-// number the binding. A register outside the layout, a register space other than 0, or a class the
-// SM4 retail path never uses (UAVs, UAV counters) is recorded and fails the conversion afterwards;
-// the binding handed back for it is a harmless placeholder that is never used.
+// number the binding. A register outside the layout, a register space other than 0, or a UAV counter
+// (nothing here uses one) is recorded and fails the conversion afterwards; the binding handed back for
+// it is a harmless placeholder that is never used. A UAV (P4: the AO programs' u4) maps past the game
+// layout (shader_convert.h BindingOfUav).
 class LayoutMapping final : public spv::ResourceMapping {
 public:
     explicit LayoutMapping(Stage stage) : _stage(stage) {}
@@ -89,8 +90,11 @@ public:
         } else if (type == ir::ScalarType::eSampler) {
             if (regIndex >= kMaxSamplers) Fail("sampler s" + std::to_string(regIndex));
             out.binding = BindingOfSampler(regIndex);
+        } else if (type == ir::ScalarType::eUav) {
+            if (regIndex >= kMaxUavs) Fail("UAV u" + std::to_string(regIndex));
+            out.binding = BindingOfUav(regIndex);
         } else {
-            Fail("a UAV (u" + std::to_string(regIndex) + ")");
+            Fail("a UAV counter (u" + std::to_string(regIndex) + ")");
         }
         return out;
     }
@@ -226,13 +230,13 @@ uint32_t RegisterBits(uint32_t first, uint32_t count) {
 }
 
 // The registers each resource declaration of the legalized module names. Operands of DclCbv /
-// DclSrv / DclSampler: the entry point, the register space, the first register, the count.
+// DclSrv / DclUav / DclSampler: the entry point, the register space, the first register, the count.
 void ReflectResources(const ir::Builder& builder, ShaderReflection* refl) {
     auto [a, b] = builder.getDeclarations();
     for (auto it = a; it != b; ++it) {
         const ir::OpCode code = it->getOpCode();
-        const bool resource =
-            code == ir::OpCode::eDclCbv || code == ir::OpCode::eDclSrv || code == ir::OpCode::eDclSampler;
+        const bool resource = code == ir::OpCode::eDclCbv || code == ir::OpCode::eDclSrv ||
+                              code == ir::OpCode::eDclUav || code == ir::OpCode::eDclSampler;
         if (!resource) continue;
         const uint32_t first = uint32_t(it->getOperand(2u));
         const uint32_t count = uint32_t(it->getOperand(3u));
@@ -246,6 +250,7 @@ void ReflectResources(const ir::Builder& builder, ShaderReflection* refl) {
                 refl->textureCubeMask |= bits;
         }
         if (code == ir::OpCode::eDclSampler) refl->samplerMask |= bits;
+        if (code == ir::OpCode::eDclUav) refl->uavMask |= bits;
     }
 }
 
@@ -539,6 +544,7 @@ std::vector<uint8_t> EncodeEntry(const std::vector<uint32_t>& spirv, const Shade
     Put32(out, refl.textureMask);
     Put32(out, refl.samplerMask);
     Put32(out, refl.textureCubeMask);
+    Put32(out, refl.uavMask);
     PutElements(out, refl.inputs);
     PutElements(out, refl.outputs);
     Put32(out, static_cast<uint32_t>(spirv.size()));
@@ -558,6 +564,7 @@ bool DecodeEntry(const std::vector<uint8_t>& payload, std::vector<uint32_t>* spi
     out.textureMask = r.U32();
     out.samplerMask = r.U32();
     out.textureCubeMask = r.U32();
+    out.uavMask = r.U32();
     if (!GetElements(r, &out.inputs) || !GetElements(r, &out.outputs)) return false;
     const uint32_t words = r.U32();
     if (!r.ok || payload.size() - r.at != static_cast<size_t>(words) * 4) return false;

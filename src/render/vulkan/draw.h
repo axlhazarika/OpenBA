@@ -115,4 +115,33 @@ void DrawResolve(const Video::RenderBuffer* dst, const Video::RenderBuffer* src)
 // cannot express (compressed, depth) or a size past the image's.
 bool DrawReadImage(ImageBufferData* image, void* dst, int width, int height);
 
+// ---- P4: ext.ambient_occlusion's pass (ao/assao_pass.cpp) -------------------------------------------
+// THE READABLE DEPTH (AoBackend::RequestReadableDepth, any thread): the next main-target build makes the
+// depth image sampleable too (SAMPLED usage and a depth-aspect view beside the attachment view), the
+// dx11 R24G8_TYPELESS + SRV choice; off, retail's attachment-only depth. A change remakes the main
+// targets at the next pass, as a sample-count change does. DrawDepthReadable: what exists now.
+void DrawRequestReadableDepth(bool on);
+bool DrawDepthReadable();
+// What the AO pass draws with: the frame's command buffer and slot, the main depth's sampled view (in
+// SHADER_READ_ONLY after DrawAoBegin) and the main targets' shape.
+struct AoTargets {
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    unsigned slot = 0;
+    uint64_t frame = 0;
+    VkImageView depthView = VK_NULL_HANDLE;
+    VkExtent2D extent{};
+    uint32_t samples = 1;
+    bool msrtss = false;
+    VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+};
+// Renderer::Draw's AO seam, on the recording thread inside a frame: the pass in progress ends (its
+// clears land) and the main depth moves to SHADER_READ_ONLY. False, nothing done, outside a frame or
+// while the depth is not readable (the frames between the request and the remake).
+bool DrawAoBegin(AoTargets* out);
+// A pass on the main colour alone (LOAD, no depth; resolved like every main pass), for the AO apply.
+bool DrawAoBeginApply();
+// After the AO pass: its pass ends and the command buffer's bound pipeline, sets, viewport, scissor and
+// vertex buffers are forgotten, so the next engine draw binds everything again (dx11's StateBackup).
+void DrawAoEnd();
+
 }  // namespace VideoVulkan

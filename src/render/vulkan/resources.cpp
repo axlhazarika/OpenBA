@@ -482,6 +482,7 @@ uint64_t SubmitCommands(VkCommandBuffer cb, const VkSemaphoreSubmitInfo* wait, V
     const VkResult r = vkQueueSubmit2(LiveQueue(), 1, &si, fence);
     if (r != VK_SUCCESS) {
         std::fprintf(stderr, "[Vulkan] vkQueueSubmit2: %s\n", ResultName(r));
+        NoteResult(r, "vkQueueSubmit2");   // P4: a lost device enters the recovery at the frame's Finish
         return 0;
     }
     g_lastSerial = serial;
@@ -506,7 +507,7 @@ void WaitSerial(uint64_t serial) {
     wi.semaphoreCount = 1;
     wi.pSemaphores = &g_timeline;
     wi.pValues = &serial;
-    vkWaitSemaphores(Dev(), &wi, UINT64_MAX);
+    NoteResult(vkWaitSemaphores(Dev(), &wi, UINT64_MAX), "vkWaitSemaphores");
 }
 
 // ---- frames and the retire queue --------------------------------------------------------------------
@@ -706,7 +707,9 @@ bool CreateImage(const ImageDesc& desc, GpuImage* out, std::string* why) {
     out->layers = ii.arrayLayers;
     VkImageViewCreateInfo vi = Make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
     vi.image = out->image;
-    vi.viewType = desc.cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
+    vi.viewType = desc.cube    ? VK_IMAGE_VIEW_TYPE_CUBE
+                  : desc.array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY
+                               : VK_IMAGE_VIEW_TYPE_2D;
     vi.format = desc.format;
     vi.components = desc.swizzle;
     // A depth image is sampled through its depth aspect (retail's R24_UNORM_X8_TYPELESS view); an
@@ -838,6 +841,10 @@ LayoutUse UseOf(VkImageLayout layout) {
         return { VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, false };
     case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
         return { VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, true };
+    case VK_IMAGE_LAYOUT_GENERAL:
+        // P4: the AO pass's storage image, written (and read) by the pixel stage.
+        return { VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, true };
     case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
         // As a destination: the presentation engine waits on the frame's semaphore.
         return { VK_PIPELINE_STAGE_2_NONE, 0, false };

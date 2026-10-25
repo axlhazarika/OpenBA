@@ -180,7 +180,8 @@ struct Options {
     const char* forceForesterWork    = nullptr;// BANISHED_FORCE_FORESTERWORK — forester_force_harness.cpp
     const char* forceSnow            = nullptr;// BANISHED_FORCE_SNOW — gameupdateloop.cpp
     const char* forceDeviceLost      = nullptr;// BANISHED_FORCE_DEVICE_LOST — src/render/dx11/contextdata.cpp; "bgsave" =
-                                               //   on the first Present after a background save starts (src/diag/device_lost_drive.h)
+                                               //   on the first Present after a background save starts (src/diag/device_lost_drive.h);
+                                               //   the Vulkan reader is src/render/vulkan/device.cpp (VK_ERROR_DEVICE_LOST)
     const char* screenshotAt         = nullptr;// BANISHED_SCREENSHOT_AT — gameupdateloop.cpp
     const char* showroom             = nullptr;// BANISHED_SHOWROOM=<template list> — src/diag/showroom.cpp; set by the
                                                //   issue #13 showroom run script (scratchpad showroom/run.sh)

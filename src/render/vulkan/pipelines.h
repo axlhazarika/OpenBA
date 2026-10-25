@@ -50,6 +50,9 @@ void PipelinesShutdown();
 
 // ---- the binding model ------------------------------------------------------------------------------
 VkPipelineLayout GamePipelineLayout();
+// The persistent VkPipelineCache (VK_NULL_HANDLE when none could be made). P4: the AO pass builds its
+// own pipelines through it too.
+VkPipelineCache GamePipelineCache();
 VkDescriptorSetLayout StageSetLayout(Shaders::Stage stage);
 // How many of the constant-buffer bindings 0..7 of each set are UNIFORM_BUFFER_DYNAMIC (the first N).
 uint32_t DynamicConstantBuffers();
@@ -112,11 +115,17 @@ struct StateBlock {
     uint8_t backPass = 0;
     uint8_t cullMode = 0;        // VkCullModeFlags
     uint8_t polygonMode = 0;     // VkPolygonMode
-    uint8_t pad = 0;
+    // P4, NOT RETAIL: ext.foliage_aa's A2C clone of a non-blending state (shader_rewrites.h), set by the
+    // draw: kExtAlphaToCoverage, and kExtAlphaZero (the alpha factors ZERO / ZERO while the colour keeps
+    // srcBlend / dstBlend). 0 for every retail state (the byte was padding: the warm list's keys are the
+    // same).
+    uint8_t extFlags = 0;
     int32_t depthBias = 0;       // D3D11 DepthBias (the engine's bias * 16777215, truncated)
     float slopeBias = 0.0f;      // D3D11 SlopeScaledDepthBias (the engine's slope bias * 4096)
 };
 static_assert(sizeof(StateBlock) == 28, "StateBlock is hashed and written as bytes: no padding");
+constexpr uint8_t kExtAlphaToCoverage = 1;
+constexpr uint8_t kExtAlphaZero = 2;
 
 // ---- pipelines ---------------------------------------------------------------------------------------
 struct PipelineKey {

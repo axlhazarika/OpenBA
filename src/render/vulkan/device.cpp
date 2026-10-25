@@ -29,6 +29,16 @@
 #include "pipelines.h"
 #include "resources.h"
 #include "vulkan_entry.h"
+#include "ao/assao_pass.h"                         // P4: ext.ambient_occlusion's pass objects
+#include "async_gpu_create/async_create.h"         // P4: ext.async_gpu_create (the loader bracket)
+#include "boot_device_lost/boot_device_lost.h"     // P4: fix.boot_device_lost
+#include "create_on_demand/lazy_create.h"          // P4: ext.create_on_demand
+#include "share_gpu_data/share_create.h"           // P4: ext.share_gpu_data
+#include "shader_rewrites.h"                       // P4: the DXBC rewrite stages
+
+#include "compress_ao/bc4_chain.h"                 // P4: ext.compress_ao (the load's summary)
+#include "texture_quality/texture_quality.h"       // P4: ext.texture_quality (the load's summary)
+#include "device_lost_drive.h"                     // BANISHED_FORCE_DEVICE_LOST=bgsave (src/diag)
 
 #include "app/options.h"
 #include "boot_window.h"   // BootWindow::ArmDeferredShow (src/app): the deferred first show
@@ -48,7 +58,9 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <new>
@@ -100,6 +112,11 @@ bool resourcesUp = false;   // ResourcesStartup / PipelinesStartup / DrawStartup
 // destroys the rest before the device. Its own lock: programs are created on the loader thread too.
 std::mutex moduleLock;
 std::unordered_set<VkShaderModule> liveModules;
+// P4, device loss (PLAN.md §4.5; device_objects.h NoteResult): set by the first VK_ERROR_DEVICE_LOST of a
+// submit, a wait, an acquire or a present; cleared when CreateDevice made the next device.
+std::atomic<bool> lost{false};
+bool swapchainLost = false;   // the last vkCreateSwapchainKHR answered VK_ERROR_DEVICE_LOST
+bool lostFrame = false;       // BeginCommands began a frame it could not record: Finish reports the loss
 
 // The SDL window the surface is made on. Device::windowHandle is the native handle (the HWND on
 // Windows, retail's field); the SDL window that owns it is the one window_sdl.cpp created.
@@ -367,6 +384,7 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     ci.oldSwapchain = swapchain;
     VkSwapchainKHR created = VK_NULL_HANDLE;
     r = vkCreateSwapchainKHR(device, &ci, nullptr, &created);
+    swapchainLost = r == VK_ERROR_DEVICE_LOST;
     if (r != VK_SUCCESS) {
         *why = std::string("vkCreateSwapchainKHR: ") + ResultName(r);
         return false;
@@ -450,6 +468,38 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
             swapchainDirty = true;
         }
     }
+}
+
+// BANISHED_FORCE_DEVICE_LOST (src/app/options.h): dx11 contextdata.cpp's forced device-lost drive, on
+// this backend's present. `<n>` injects VK_ERROR_DEVICE_LOST on present #n, `bgsave` on the first present
+// after a background save starts (src/diag/device_lost_drive.h); once per process. One count for the
+// faithful Finish and the render thread's packets (dx11 keeps two; with ext.render_pipe on from boot every
+// present is a packet's anyway). The device is not lost: the recovery's teardown and rebuild are real.
+bool ForceDeviceLostThisPresent() {
+    static int wanted = -2;   // -2 = not yet read, -1 = disabled, -3 = on request (`bgsave`)
+    static long frame = 0;
+    static bool fired = false;
+    if (wanted == -2) {
+        const char* v = Opt().forceDeviceLost;
+        wanted = DeviceLostDrive::Armed() ? -3 : (v && *v) ? std::atoi(v) : -1;
+        if (wanted > 0) {
+            std::fprintf(stderr, "[DeviceLost] ARMED: a synthetic VK_ERROR_DEVICE_LOST will be injected on present "
+                                 "#%d (Vulkan)\n", wanted);
+        }
+        if (wanted == -3) {
+            std::fprintf(stderr, "[DeviceLost] ARMED: a synthetic VK_ERROR_DEVICE_LOST will be injected on the first "
+                                 "present after a background save starts (Vulkan)\n");
+        }
+    }
+    ++frame;
+    if (wanted == -3) {
+        if (fired || !DeviceLostDrive::TakeRequest()) return false;
+        fired = true;
+        return true;
+    }
+    if (wanted <= 0 || fired || frame < wanted) return false;
+    fired = true;
+    return true;
 }
 
 void DestroyFrames() {
@@ -573,6 +623,19 @@ VkCommandBuffer SubmitFrameSoFar() {
 }
 
 // ---- device objects (device_objects.h) ----------------------------------------------------------
+
+void NoteResult(VkResult r, const char* what) {
+    if (r != VK_ERROR_DEVICE_LOST) return;
+    if (!lost.exchange(true)) {
+        std::fprintf(stderr, "[DeviceLost] %s: VK_ERROR_DEVICE_LOST: the device-lost recovery runs at the frame's "
+                             "Finish\n", what);
+        std::fflush(stderr);
+    }
+}
+
+bool DeviceLost() {
+    return lost.load();
+}
 
 VkShaderModule CreateShaderModule(const std::vector<uint32_t>& spirv, std::string* why) {
     std::lock_guard<std::mutex> guard(moduleLock);
@@ -732,6 +795,25 @@ bool DeviceData::CreateDevice() {
         caps.msrtss = msrtss.multisampledRenderToSingleSampled != 0;
     }
     caps.colorSamples = deviceProperties.limits.framebufferColorSampleCounts;
+    caps.fragmentStores = have2.features.fragmentStoresAndAtomics != 0;
+    caps.storageWriteWithoutFormat = have2.features.shaderStorageImageWriteWithoutFormat != 0;
+    {
+        // P4: ASSAO's targets (R16F / RG8 / R32F colour attachments sampled, RGBA8 storage) and the main
+        // depth sampled (ao/assao_pass.cpp). Optimal tiling, the features each one is used with.
+        const auto has = [&](VkFormat f, VkFormatFeatureFlags need) {
+            VkFormatProperties fp{};
+            vkGetPhysicalDeviceFormatProperties(physical, f, &fp);
+            return (fp.optimalTilingFeatures & need) == need;
+        };
+        const VkFormatFeatureFlags target = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        const VkFormat depth = caps.d24s8 ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
+        caps.aoFormats = has(VK_FORMAT_R16_SFLOAT, target | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) &&
+                         has(VK_FORMAT_R8G8_UNORM, target | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) &&
+                         has(VK_FORMAT_R32_SFLOAT, target) &&
+                         has(VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                                           VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
+                         has(depth, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+    }
     caps.samplerAnisotropy = have2.features.samplerAnisotropy != 0;
     caps.fillModeNonSolid = have2.features.fillModeNonSolid != 0;
     caps.textureCompressionBC = have2.features.textureCompressionBC != 0;
@@ -854,6 +936,9 @@ bool DeviceData::CreateDevice() {
     want2.features.independentBlend = have2.features.independentBlend;
     want2.features.depthClamp = have2.features.depthClamp;
     want2.features.shaderClipDistance = have2.features.shaderClipDistance;
+    // P4: the AO pass's normals UAV (device_objects.h Caps::fragmentStores).
+    want2.features.fragmentStoresAndAtomics = have2.features.fragmentStoresAndAtomics;
+    want2.features.shaderStorageImageWriteWithoutFormat = have2.features.shaderStorageImageWriteWithoutFormat;
     VkDeviceCreateInfo di = Make<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
     di.pNext = &want2;
     di.queueCreateInfoCount = 1;
@@ -884,25 +969,40 @@ bool DeviceData::CreateDevice() {
     if (!PipelinesStartup(&why)) return Fail("Vulkan: " + why);
     if (!DrawStartup(&why)) return Fail("Vulkan: " + why);
     StallDebug::Mark("  Vulkan resources");
+    // P4: a device made: a device-lost recovery is over, and ext.create_on_demand's deferred creates may
+    // run on it (the table was paused while there was none).
+    lost.store(false);
+    swapchainLost = false;
+    lostFrame = false;
+    CreateOnDemand::Resume();
 
     std::fprintf(stderr,
                  "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d "
-                 "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d; "
-                 "multisample %ux\n",
+                 "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d "
+                 "ao=%d/%d/%d; multisample %ux\n",
                  deviceProperties.deviceName, DeviceTypeName(deviceProperties.deviceType),
                  VK_API_VERSION_MAJOR(caps.apiVersion), VK_API_VERSION_MINOR(caps.apiVersion),
                  VK_API_VERSION_PATCH(caps.apiVersion), deviceProperties.driverVersion, caps.pushDescriptor,
                  caps.vertexInputDynamicState, caps.extendedDynamicState2, caps.loadStoreOpNone, caps.d24s8,
-                 caps.msrtss, caps.validation, mainSamples);
+                 caps.msrtss, caps.validation, caps.fragmentStores, caps.storageWriteWithoutFormat, caps.aoFormats,
+                 mainSamples);
     return true;
 }
 
 void DeviceData::Shutdown() {
+    // P4: no deferred create runs against the device going away (ext.async_gpu_create's queued jobs
+    // finish first; ext.create_on_demand's table pauses: a record that meets no device stays recorded).
+    AsyncCreate::Drain();
+    CreateOnDemand::Pause();
     if (device) {
         vkDeviceWaitIdle(device);
         if (resourcesUp) {
-            // The draw state, the pipelines (their cache is written here), then everything the
-            // companions still hold (resources.h); the shader modules after them, below.
+            // The extensions' backend objects (P4: the AO pass, the rewritten programs, the share table),
+            // the draw state, the pipelines (their cache is written here), then everything the companions
+            // still hold (resources.h); the shader modules after them, below.
+            Assao::Shutdown();
+            Rewrites::Shutdown();
+            ShareGpuData::Clear();
             DrawShutdown();
             PipelinesShutdown();
             ResourcesShutdown();
@@ -938,11 +1038,21 @@ void DeviceData::Shutdown() {
     // device rebuild reuse them.
 }
 
-// The loader bracket (dx11 devicedata_stubs.cpp Slot4): retail's body is empty; the extensions'
-// load-end summaries hook here on the other backends (none is supported yet). At a load's end the
-// backend's own program summary (companions.cpp) is logged.
+// The loader bracket (dx11 devicedata_stubs.cpp Slot4): retail's body is empty. NOT RETAIL, the dx11
+// body's extension work (P4): `true` arms ext.async_gpu_create for the loader thread, `false` waits for
+// its deferred creates and disarms it, then the load-end summaries of ext.compress_ao, ext.share_gpu_data,
+// ext.create_on_demand and ext.texture_quality, and the backend's own program summary (companions.cpp).
 void DeviceData::Slot4(bool loading) {
-    if (!loading) LogProgramSummary();
+    if (loading) {
+        AsyncCreate::Begin();
+        return;
+    }
+    AsyncCreate::End();
+    ::CompressAo::LoadEnd();
+    ShareGpuData::LoadEnd();
+    CreateOnDemand::LoadEnd();
+    ::TextureQuality::PrintIfChanged("load end (run total)");
+    LogProgramSummary();
 }
 
 float DeviceData::Slot5() {
@@ -1018,6 +1128,26 @@ Video::RenderBufferData* DeviceData::CreateRenderBufferData(Video::RenderBuffer*
 
 // ---- ContextData: the frame loop ----------------------------------------------------------------
 
+namespace {
+
+// P4, device loss: a frame on a lost device is begun with nothing to record into (every draw, clear and
+// pass is skipped: draw.cpp records only inside DrawBeginFrame / DrawEndFrame), the device lock taken as
+// for any frame; its Finish reports the loss and the recovery runs where DX11 runs it. Refusing the
+// frame instead (return false) would spin: the loop asks again and again, and no Finish ever runs.
+bool BeginLostFrame(::Video::Device* dev, ::Video::Context* ctx) {
+    dev->Lock();
+    lostFrame = true;
+    imageAcquired = false;
+    ctx->SetRenderBuffer(ctx->_defaultRenderBuffer);
+    Video::Viewport vp{};
+    vp.width = dev->backBufferWidth;
+    vp.height = dev->backBufferHeight;
+    ctx->SetViewport(vp);
+    return true;
+}
+
+}  // namespace
+
 // Slot 1 (dx11 contextdata.cpp 0x180001650). A settings change is answered and the frame refused,
 // as retail does (Dx11_DeviceData_Resize, then `return false`); the next frame begins normally.
 bool ContextData::BeginCommands() {
@@ -1037,19 +1167,33 @@ bool ContextData::BeginCommands() {
         dev->Unlock();
         return false;
     }
+    if (lost.load()) return BeginLostFrame(dev, ctx);
     auto w = GameWindow();
     if (swapchainDirty) {
         vkDeviceWaitIdle(device);
         std::string why;
         if (!CreateSwapchain(w, &why)) {
+            // FIX SEAM (NOT RETAIL, boot_device_lost/boot_device_lost.h): with fix.boot_device_lost on, a
+            // rebuild that failed on a lost device enters the device-lost recovery (this frame's Finish).
+            // Row off (and under the faithful profile): retried every frame, as DX11 retries its reset.
+            if (swapchainLost && BootDeviceLost::On()) {
+                std::fprintf(stderr, "[DeviceLost] swap-chain rebuild failed on a lost device: device-lost recovery\n");
+                NoteResult(VK_ERROR_DEVICE_LOST, "vkCreateSwapchainKHR (fix.boot_device_lost)");
+                return BeginLostFrame(dev, ctx);
+            }
             return false;   // minimised, or the surface is gone: try again next frame
         }
     }
 
     Frame& f = frames[frameSlot];
-    vkWaitForFences(device, 1, &f.done, VK_TRUE, UINT64_MAX);
+    NoteResult(vkWaitForFences(device, 1, &f.done, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+    if (lost.load()) return BeginLostFrame(dev, ctx);
     VkResult r = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, f.imageAvailable, VK_NULL_HANDLE,
                                        &imageIndex);
+    if (r == VK_ERROR_DEVICE_LOST) {
+        NoteResult(r, "vkAcquireNextImageKHR");
+        return BeginLostFrame(dev, ctx);
+    }
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
         swapchainDirty = true;
         return false;
@@ -1094,19 +1238,36 @@ bool ContextData::BeginCommands() {
 void ContextData::EndCommands() {
 }
 
-// Slot 3: end the pass and move the image to PRESENT_SRC (draw.cpp), drop the device lock, submit the
-// upload batch and then the frame (resources.h: one queue, the timeline), present.
+// Slot 3 (dx11 contextdata.cpp 0x1800017c0): present, then the device-lost recovery when the frame
+// found the device lost (PresentFrame, then RecoverLostDevice: the two halves ext.render_pipe runs on
+// two threads, Ext::RenderPipe::FinishPresent / FinishRecover in integration.cpp).
 void ContextData::Finish() {
     ::Video::Device* const dev = _owner->_device;
+    const int32_t result = PresentFrame(*_owner);
+    // The recovery destroys this Context (MainLoop::OnVideoError): nothing of `this` is read after it.
+    if (result != 0) RecoverLostDevice(*dev, result);
+}
+
+// Finish steps 1-4 (vulkan_entry.h): end the pass and move the image to PRESENT_SRC (draw.cpp), drop the
+// device lock, submit the upload batch and then the frame (resources.h: one queue, the timeline),
+// present. VK_ERROR_DEVICE_LOST from any of them, or from the frame's begin (a lost frame), is the
+// result; 0 otherwise (an out-of-date swap chain is rebuilt at the next begin, not a loss).
+int32_t PresentFrame(::Video::Context& ctx) {
+    ::Video::Device* const dev = ctx._device;
+    if (lostFrame) {
+        lostFrame = false;
+        dev->Unlock();
+        return static_cast<int32_t>(VK_ERROR_DEVICE_LOST);
+    }
     if (!device || !imageAcquired) {
         dev->Unlock();
-        return;
+        return 0;
     }
     Frame& f = frames[frameSlot];
     DrawEndFrame();
     vkEndCommandBuffer(f.commands);
     const bool logFrame = frameCount == 0 || (frameCount + 1) % 300 == 0;
-    if (logFrame) DrawLogFrame(frameCount + 1, _owner);
+    if (logFrame) DrawLogFrame(frameCount + 1, &ctx);
 
     // The DX11 order: the device lock goes before the present, so a loader thread linking a new
     // resource never waits out the presentation.
@@ -1129,12 +1290,53 @@ void ContextData::Finish() {
     VkResult r = PresentQueue(pi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
         swapchainDirty = true;
+    } else if (r == VK_ERROR_DEVICE_LOST) {
+        NoteResult(r, "vkQueuePresentKHR");
     } else if (r != VK_SUCCESS) {
         std::fprintf(stderr, "[Vulkan] vkQueuePresentKHR: %s\n", ResultName(r));
     }
     imageAcquired = false;
     frameSlot = (frameSlot + 1) % kFramesInFlight;
     ++frameCount;
+    if (ForceDeviceLostThisPresent()) {
+        std::fprintf(stderr, "[DeviceLost] INJECTING VK_ERROR_DEVICE_LOST (the real present returned %s)\n",
+                     ResultName(r));
+        std::fflush(stderr);
+        NoteResult(VK_ERROR_DEVICE_LOST, "injected (BANISHED_FORCE_DEVICE_LOST)");
+    }
+    return lost.load() ? static_cast<int32_t>(VK_ERROR_DEVICE_LOST) : 0;
+}
+
+// Finish step 5 (vulkan_entry.h), dx11 contextdata.cpp RecoverLostDevice's sequence: the notify
+// (Device+0x50, MainLoop::OnVideoError: every video External destructed, the Context destroyed),
+// ReleaseDynamic, DeviceData Shutdown + CreateDevice, then RecreateDynamic + the restore notify
+// (Device+0x58), or the error text when no device could be made. Main thread, no frame in progress.
+void RecoverLostDevice(::Video::Device& device, int32_t result) {
+    ::Video::DeviceData* const ddBase = device.deviceData;
+    ::Video::Device* const owner = ddBase->_owner;
+    void (*const onLost)() = owner->onVideoError;
+    std::fprintf(stderr, "[DeviceLost] result=%s onLost=%p -> %s\n", ResultName(static_cast<VkResult>(result)),
+                 reinterpret_cast<void*>(onLost), onLost ? "calling" : "*** NULL, notification SKIPPED ***");
+    std::fflush(stderr);
+    if (onLost) onLost();
+    // NOT RETAIL (ext.async_gpu_create): creates queued against the lost device finish first.
+    AsyncCreate::Drain();
+    owner->ReleaseDynamic();
+    ddBase->Shutdown();
+    const bool created = ddBase->CreateDevice();
+    if (!created) {
+        System::Error::SetText("Vulkan Error: VK_ERROR_DEVICE_LOST!", true);
+        System::Error::Display();
+        return;
+    }
+    owner->RecreateDynamic();
+    void (*const onRestored)() = owner->onVideoRestart;
+    std::fprintf(stderr, "[DeviceLost] recreate OK; onRestored=%p -> %s\n", reinterpret_cast<void*>(onRestored),
+                 onRestored ? "calling" : "*** NULL, notification SKIPPED ***");
+    std::fflush(stderr);
+    if (onRestored) onRestored();
+    std::fprintf(stderr, "[DeviceLost] device-lost round trip COMPLETE\n");
+    std::fflush(stderr);
 }
 
 // ---- the main targets ---------------------------------------------------------------------------

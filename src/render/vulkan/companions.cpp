@@ -18,8 +18,13 @@
 #include "VideoVulkanData.h"
 #include "device_objects.h"
 #include "draw.h"
+#include "seeded_create.h"                       // P4: the seeded creates (compress_ao, share_gpu_data)
+#include "async_gpu_create/async_create.h"       // P4: ext.async_gpu_create
+#include "create_on_demand/lazy_create.h"        // P4: ext.create_on_demand
+#include "shader_rewrites.h"                     // P4: the DXBC rewrite stages (better_trees, draw_batch)
 
 #include "ext/derived_cache/derived_cache.h"   // the SPIR-V cache's store (OpenShared)
+#include "texture_quality/texture_quality.h"   // P4: ext.texture_quality's DropFor
 #include "io/Serializer.h"
 #include "video/Buffers.h"
 #include "video/ConstantBuffer.h"   // ConstantBuffer::_uploadIndex
@@ -33,6 +38,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace VideoVulkan {
@@ -48,20 +54,25 @@ void LogOnce(uint32_t bit, const char* message) {
 
 // ---- buffers (dx11 buffers.cpp GpuBuffer_* / BufferData_*) ----
 
+// P4: a shared static buffer drops its use (seeded_create.h ReleaseBuffer), any other is retired.
 void ReleaseStore(BufferStore& store) {
-    RetireBuffer(&store.gpu);
+    ReleaseBuffer(&store.gpu, &store.shared);
     for (BufferStore::Version& v : store.versions)
         RetireBuffer(&v.buffer);
     store.versions.clear();
     store.current = -1;
     store.writeCursor = 0;
+    store.immutable = false;
 }
 
 // Slot 1 of both buffer kinds: owner->size / dynamic are stored first, as retail does; a zero size
 // makes nothing. A dynamic buffer starts with one host-visible version (seeded from `data`), a static
-// one is device-local and filled through the upload batch.
+// one is device-local and filled through the upload batch (P4: through seeded_create.h, so
+// ext.share_gpu_data may hand out an equal one; seeded = IMMUTABLE, as DX11 makes it).
 template <class Data>
 bool CreateBuffer(Data* self, uint32_t sizeBytes, uint8_t dynamicByte, const void* data, VkBufferUsageFlags usage) {
+    AsyncCreate::Await(self);       // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(self);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     auto* owner = self->_owner;
     owner->size = static_cast<int32_t>(sizeBytes);
     owner->dynamic = dynamicByte;
@@ -81,11 +92,43 @@ bool CreateBuffer(Data* self, uint32_t sizeBytes, uint8_t dynamicByte, const voi
         store.current = 0;
         return true;
     }
-    if (!CreateStaticBuffer(sizeBytes, usage, data, &store.gpu, &why)) {
+    const bool index = (usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0;
+    if (!MakeStaticBuffer(index, data, sizeBytes, usage, &store.gpu, &store.shared, &why)) {
         std::fprintf(stderr, "[Vulkan] buffer of %u bytes: %s\n", sizeBytes, why.c_str());
         return false;
     }
+    store.immutable = data != nullptr;
     return true;
+}
+
+// NOT RETAIL (ext.async_gpu_create): the deferred twin of CreateBuffer's static arm, for the Serialize
+// load arm inside an armed loader bracket. The engine-visible stores (size, dynamic: read by the
+// serializer) and the release of the old buffer happen here, on the loader, as CreateBuffer does them;
+// the worker makes the buffer from its own copy of the payload and publishes it before the object
+// counts as done.
+template <class Data>
+void CreateBufferDeferred(Data* self, std::vector<uint8_t>&& bytes, VkBufferUsageFlags usage) {
+    AsyncCreate::Await(self);
+    CreateOnDemand::Forget(self);
+    auto* owner = self->_owner;
+    BufferStore* const store = &self->store;
+    ReleaseStore(*store);
+    store->dynamic = false;
+    const uint32_t size = static_cast<uint32_t>(owner->size);
+    const bool index = (usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0;
+    auto payload = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
+    AsyncCreate::Enqueue(self, size, [store, payload, size, usage, index]() {
+        std::string why;
+        GpuBuffer made;
+        bool shared = false;
+        if (!MakeStaticBuffer(index, payload->data(), size, usage, &made, &shared, &why)) {
+            std::fprintf(stderr, "[Vulkan] buffer of %u bytes: %s\n", size, why.c_str());
+            return;
+        }
+        store->gpu = made;
+        store->shared = shared;
+        store->immutable = true;
+    });
 }
 
 // Slot 2: D3D11 UpdateSubresource over [offset, offset + size). A static buffer takes it through the
@@ -93,9 +136,14 @@ bool CreateBuffer(Data* self, uint32_t sizeBytes, uint8_t dynamicByte, const voi
 // place (D3D11 never updates a DYNAMIC buffer this way; nothing in the game does).
 template <class Data>
 bool SetBufferData(Data* self, int32_t sizeBytes, int32_t offsetBytes, const void* src) {
+    AsyncCreate::Await(self);   // NOT RETAIL (ext.async_gpu_create)
     if (self->_owner->size == 0) return true;
     if (sizeBytes <= 0 || offsetBytes < 0 || !src) return true;
     BufferStore& store = self->store;
+    // P4: D3D11 refuses UpdateSubresource on the IMMUTABLE buffer a seeded static create made
+    // (buffers.cpp); so does this backend (and a buffer still waiting for its first use is not made for a
+    // write that would do nothing).
+    if (store.immutable) return true;
     if (store.dynamic) {
         if (store.current >= 0 && offsetBytes + sizeBytes <= self->_owner->size) {
             std::memcpy(store.versions[store.current].buffer.mapped + offsetBytes, src,
@@ -113,6 +161,7 @@ bool SetBufferData(Data* self, int32_t sizeBytes, int32_t offsetBytes, const voi
 // non-dynamic buffer cannot be mapped (D3D11 fails the Map): null, as retail gets.
 template <class Data>
 void* LockBuffer(Data* self, int32_t sizeBytes, int32_t* outByteOffset) {
+    AsyncCreate::Await(self);   // NOT RETAIL (ext.async_gpu_create)
     BufferStore& store = self->store;
     const int32_t size = self->_owner->size;
     if (!store.dynamic || store.current < 0) return nullptr;
@@ -149,17 +198,42 @@ void* LockBuffer(Data* self, int32_t sizeBytes, int32_t* outByteOffset) {
 template <class Data>
 void SerializeBuffer(Data* self, IO::Serializer* serializer, VkBufferUsageFlags usage) {
     if (!serializer->GetEncoding().IsBinary()) return;
-    auto* owner = self->_owner;
+    // NOT RETAIL (ext.async_gpu_create): the save arm reads the buffer; a deferred create finishes first.
+    AsyncCreate::Await(self);
+    // NOT RETAIL (ext.create_on_demand): no eviction while this reads the buffer, and a buffer still
+    // waiting for its first use is made first (the save arm).
+    CreateOnDemand::UseScope use(self);
     const bool loading = static_cast<int>(serializer->GetDirection()) == 0;
+    if (!loading && self->store.Buffer() == VK_NULL_HANDLE) CreateOnDemand::Ensure(self);
+    auto* owner = self->_owner;
     serializer->Serialize(owner->dynamic, nullptr);
     serializer->Serialize(owner->size, nullptr);
     if (owner->size <= 0) return;
-    std::vector<uint8_t> bytes(static_cast<size_t>(owner->size), 0);
     if (loading) {
-        serializer->SerializeBytes(owner->size, bytes.data(), nullptr);
-        CreateBuffer(self, static_cast<uint32_t>(owner->size), owner->dynamic, bytes.data(), usage);
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- a static
+        // buffer read from a packed resource file is not read: its create waits for its first use and the
+        // stream skips the payload. The owner already holds the size / dynamic Create would store.
+        if (CreateOnDemand::Requested() && owner->dynamic == 0 && self->store.Buffer() == VK_NULL_HANDLE) {
+            const bool index = (usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0;
+            if (CreateOnDemand::DeferBuffer(self, serializer->_stream, index, static_cast<uint32_t>(owner->size), usage,
+                                            &self->store)) {
+                self->store.dynamic = false;
+                self->store.immutable = true;   // what the deferred create will be (BufferRecord::Publish)
+                return;
+            }
+        }
+        std::vector<uint8_t> payload(static_cast<size_t>(owner->size), 0);
+        serializer->SerializeBytes(owner->size, payload.data(), nullptr);
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/ASYNCGPUCREATE.md): inside an armed loader bracket
+        // a static buffer's create goes to a worker, which owns the payload.
+        if (AsyncCreate::Deferring() && owner->dynamic == 0) {
+            CreateBufferDeferred(self, std::move(payload), usage);
+            return;
+        }
+        CreateBuffer(self, static_cast<uint32_t>(owner->size), owner->dynamic, payload.data(), usage);
         return;
     }
+    std::vector<uint8_t> bytes(static_cast<size_t>(owner->size), 0);
     const BufferStore& store = self->store;
     if (store.dynamic && store.current >= 0) {
         std::memcpy(bytes.data(), store.versions[store.current].buffer.mapped, bytes.size());
@@ -186,15 +260,12 @@ VkFormat ImageFormat(int format) {
     }
 }
 
-// Bytes per texel (per 4x4 block for the compressed formats): dx11's kFormatBytes.
-uint32_t FormatBytes(int format) {
-    static const uint32_t kBytes[8] = { 8, 16, 16, 1, 1, 4, 4, 4 };
-    return (format >= 0 && format < 8) ? kBytes[format] : 4;
-}
-
 // dx11's SamplerDescFor: the engine's filter index into a three-entry table patched by the
 // configuration's texture filter and the comparison flag, wrap / clamp addressing, MaxLOD the mip count.
-SamplerDesc SamplerFor(const Video::ImageBuffer* ib, bool point) {
+// `droppedLevels` (NOT RETAIL, ext.texture_quality): the top levels the image was made without; maxLod
+// counts the levels it has (dx11 SamplerDescFor's same parameter; the point sampler keeps it too, as
+// dx11 AcquirePointSampler takes the creation-time MaxLOD).
+SamplerDesc SamplerFor(const Video::ImageBuffer* ib, bool point, int droppedLevels) {
     static const uint8_t kAddress[2] = { VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE };
     int aniso = Video::Configuration::_singleton ? Video::Configuration::_singleton->textureFilter : 0;
     const bool comparison = ((ib->_flags >> 6) & 1) != 0;
@@ -226,7 +297,7 @@ SamplerDesc SamplerFor(const Video::ImageBuffer* ib, bool point) {
     d.addressU = kAddress[ib->_addressU & 1];
     d.addressV = kAddress[ib->_addressV & 1];
     d.addressW = kAddress[ib->_addressW & 1];
-    d.maxLod = (ib->_flags & 1) ? static_cast<float>(ib->GetLevelCount()) - 1.0f : 0.0f;
+    d.maxLod = (ib->_flags & 1) ? static_cast<float>(ib->GetLevelCount() - droppedLevels) - 1.0f : 0.0f;
     return d;
 }
 
@@ -277,10 +348,12 @@ static void RetireAttachmentView(VkImageView* view) {
 }
 
 ImageBufferData::~ImageBufferData() {
+    AsyncCreate::Await(this);       // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): nor under a materialization
     DrawForget(this);
     DrawForgetImage(this);
     RetireAttachmentView(&attachmentView);
-    RetireImage(&image);
+    ReleaseImage(&image, &shared);   // NOT RETAIL (ext.share_gpu_data): a shared image drops its use
 }
 
 // Slot 3 (dx11 Create). Same early-out (a non-generated, non-rendered owner with no extent makes
@@ -289,13 +362,16 @@ ImageBufferData::~ImageBufferData() {
 // A render-buffer kind gets attachment usage (draw.h TARGETS renders into it); every image is created
 // readable: uploaded, or cleared (colour 0, depth 1) when it has no levels.
 bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>* levels) {
+    AsyncCreate::Await(this);       // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): this create replaces a deferred one
     Video::ImageBuffer* const ib = _owner;
     const int width = ib->Width();
     const int height = ib->Height();
     if (!ib->IsGenerated() && !ib->IsRendered() && (width == 0 || height == 0)) return true;
     DrawForgetImage(this);
     RetireAttachmentView(&attachmentView);
-    RetireImage(&image);
+    ReleaseImage(&image, &shared);   // NOT RETAIL (ext.share_gpu_data): a shared image drops its use
+    bc4 = false;
     state = ImageState{};
     const int format = static_cast<int>(ib->_format);
     const VkFormat vkFormat = ImageFormat(format);
@@ -303,31 +379,103 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
         std::fprintf(stderr, "[Vulkan] image %p: format %d is not one retail uses\n", static_cast<void*>(ib), format);
         return false;
     }
+    const int kind = static_cast<int>(ib->_kind);
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/TEXQUALITY.md): ext.texture_quality -- a qualifying
+    // texture seeded from a resource file is made without its `drop` largest levels (the engine's level
+    // reader skipped their bytes, or the array still holds them and they are left out here): the image at
+    // the first kept level's size with that many fewer mips, the levels from it, both samplers' maxLod
+    // lowered by the same count (dx11 imagebufferdata.cpp Create). 0 for every other image and while the
+    // row is off: retail's create.
+    const int drop = (levels != nullptr && kind == 2) ? TextureQuality::DropFor(*ib, levels->GetSize()) : 0;
     cube = ib->_dimension != 0;
-    ImageDesc desc;
-    desc.width = static_cast<uint32_t>(std::max(width, 1));
-    desc.height = static_cast<uint32_t>(std::max(height, 1));
-    desc.mips = ib->HasMipMaps() ? static_cast<uint32_t>(ib->GetLevelCount()) : 1;
-    desc.layers = cube ? 6 : 1;
-    desc.cube = cube;
-    desc.format = vkFormat;
+    TextureShape shape;
+    shape.width = static_cast<uint32_t>(std::max(width >> drop, 1));
+    shape.height = static_cast<uint32_t>(std::max(height >> drop, 1));
+    shape.mips = ib->HasMipMaps() ? static_cast<uint32_t>(ib->GetLevelCount() - drop) : 1;
+    shape.layers = cube ? 6 : 1;
+    shape.cube = cube;
+    shape.format = format;
+    shape.kind = kind;
+    shape.levelCount = ib->GetLevelCount();
+    shape.vkFormat = vkFormat;
     if (format == 3) {
-        desc.swizzle = { VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO,
-                         VK_COMPONENT_SWIZZLE_R };
+        shape.swizzle = { VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO,
+                          VK_COMPONENT_SWIZZLE_R };
     }
     if (ib->IsRenderBuffer()) {
-        desc.usage = ib->IsDepthBuffer() ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                                         : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        shape.usage = ib->IsDepthBuffer() ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                                          : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     }
-    std::string why;
-    if (!CreateImage(desc, &image, &why)) {
-        std::fprintf(stderr, "[Vulkan] image %dx%d format %d: %s\n", width, height, format, why.c_str());
-        return false;
+    sampler = GetSampler(SamplerFor(ib, false, drop));
+    pointSampler = GetSampler(SamplerFor(ib, true, drop));
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- the engine's
+    // level reader skipped this image's level bytes (Video::ImageBuffer::_extLevelSource): the shape and
+    // the samplers are made as for any texture; the image (after compress_ao's conversion, through
+    // share_gpu_data's create-or-share) waits for its first use. The level arrays are empty.
+    if (levels != nullptr && kind == 2 && CreateOnDemand::HasPendingLevels(ib)) {
+        CreateOnDemand::DeferTexture(this, shape);
+        return true;
     }
-    // P3: every image is tracked from here (ClearImage / UploadImage below leave it SHADER_READ_ONLY in
-    // the upload batch, which runs before any frame that uses it). A 2D render-buffer image also gets
-    // dx11's RTV / DSV: the attachment view over mip 0 and every aspect, no swizzle (a cube gets none,
-    // as dx11 makes none).
+
+    // The level blobs the image is made from: ext.texture_quality's dropped ones left out (2D only).
+    std::vector<SourceLevel> source;
+    if (levels != nullptr) {
+        for (int i = drop; i < levels->GetSize(); ++i) {
+            const Collection::Array<uint8_t>& level = levels->GetData()[i];
+            source.push_back(SourceLevel{ level.GetData(), static_cast<size_t>(level.GetSize()) });
+        }
+    }
+    const bool seeded = levels != nullptr && kind == 2;
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/ASYNCGPUCREATE.md): inside an armed loader bracket a
+    // plain texture seeded from a resource file (kind 2: never a render target) is made on a worker, from
+    // a copy of its level bytes; the samplers above are the loader's, as on DX11.
+    if (seeded && AsyncCreate::Deferring() && !ib->IsRenderBuffer()) {
+        auto bytes = std::make_shared<std::vector<uint8_t>>();
+        std::vector<size_t> offsets;
+        for (const SourceLevel& s : source) {
+            offsets.push_back(bytes->size());
+            const auto* p = static_cast<const uint8_t*>(s.data);
+            bytes->insert(bytes->end(), p, p + s.size);
+        }
+        const uint64_t total = bytes->size();
+        ImageBufferData* const self = this;
+        AsyncCreate::Enqueue(this, total, [self, shape, bytes, offsets]() {
+            std::vector<SourceLevel> copy;
+            for (size_t i = 0; i < offsets.size(); ++i) {
+                const size_t end = i + 1 < offsets.size() ? offsets[i + 1] : bytes->size();
+                copy.push_back(SourceLevel{ bytes->data() + offsets[i], end - offsets[i] });
+            }
+            GpuImage made;
+            TextureMade info;
+            if (!MakeTexture(shape, copy.data(), static_cast<int>(copy.size()), true, &made, &info)) return;
+            if (info.shortLevel) {
+                LogOnce(2, "an image level holds fewer bytes than its extent needs: that level is left cleared");
+            }
+            self->image = made;
+            self->shared = info.shared;
+            self->bc4 = info.bc4;
+            self->state.image = made.image;
+            self->state.aspect = made.aspect;
+            self->state.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        });
+        return true;
+    }
+
+    // The load's create (seeded_create.h): ext.compress_ao's BC4 conversion, then ext.share_gpu_data's
+    // create-or-share for a texture seeded from a resource file (kind 2), else the plain create.
+    TextureMade info;
+    if (!MakeTexture(shape, source.data(), static_cast<int>(source.size()), seeded, &image, &info)) return false;
+    shared = info.shared;
+    bc4 = info.bc4;
+    if (info.shortLevel) {
+        LogOnce(2, "an image level holds fewer bytes than its extent needs: that level is left cleared");
+    }
+    // P3: every image is tracked from here (ClearImage / UploadImage leave it SHADER_READ_ONLY in the
+    // upload batch, which runs before any frame that uses it). A 2D render-buffer image also gets dx11's
+    // RTV / DSV: the attachment view over mip 0 and every aspect, no swizzle (a cube gets none, as dx11
+    // makes none).
     state.image = image.image;
     state.aspect = image.aspect;
     state.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -344,63 +492,30 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
             attachmentView = VK_NULL_HANDLE;
         }
     }
-    sampler = GetSampler(SamplerFor(ib, false));
-    pointSampler = GetSampler(SamplerFor(ib, true));
-    if (!levels || levels->GetSize() == 0) {
-        ClearImage(image);
-        return true;
-    }
-    // The levels into one staging blob, each region at a 16-byte boundary (a texel / block multiple).
-    const bool compressed = ib->IsCompressed();
-    const uint32_t texelBytes = FormatBytes(format);
-    std::vector<ImageRegion> regions;
-    size_t total = 0;
-    const int count = levels->GetSize();
-    for (int i = 0; i < count; ++i)
-        total += (static_cast<size_t>(levels->GetData()[i].GetSize()) + 15) / 16 * 16;
-    std::vector<uint8_t> blob(total);
-    size_t at = 0;
-    bool shortLevel = false;
-    for (int i = 0; i < count; ++i) {
-        const uint32_t mip = static_cast<uint32_t>(i) % desc.mips;
-        const uint32_t layer = static_cast<uint32_t>(i) / desc.mips;
-        if (layer >= desc.layers) break;
-        const uint32_t w = std::max(desc.width >> mip, 1u);
-        const uint32_t h = std::max(desc.height >> mip, 1u);
-        const size_t need = compressed ? static_cast<size_t>((w + 3) / 4) * ((h + 3) / 4) * texelBytes
-                                       : static_cast<size_t>(w) * h * texelBytes;
-        const Collection::Array<uint8_t>& level = levels->GetData()[i];
-        const size_t have = static_cast<size_t>(level.GetSize());
-        if (have < need) {
-            shortLevel = true;
-            continue;
-        }
-        std::memcpy(blob.data() + at, level.GetData(), need);
-        ImageRegion r;
-        r.offset = at;
-        r.mip = mip;
-        r.layer = layer;
-        r.width = w;
-        r.height = h;
-        regions.push_back(r);
-        at += (need + 15) / 16 * 16;
-    }
-    if (shortLevel) LogOnce(2, "an image level holds fewer bytes than its extent needs: that level is left cleared");
-    // A partial set of levels: the rest is cleared first, so every subresource is defined.
-    if (regions.size() < static_cast<size_t>(desc.mips) * desc.layers) ClearImage(image);
-    UploadImage(image, regions.data(), regions.size(), blob.data(), at);
     return true;
 }
 
 // Slot 4: the pixel stage's texture and sampler at `slot` (dx11 PSSetSamplers + PSSetShaderResources).
 void ImageBufferData::Bind(void* context, unsigned slot) {
     (void)context;   // never read by retail either
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create): a queued create lands first
+    // NOT RETAIL (ext.create_on_demand): the first bind of a deferred texture makes it (the draw makes
+    // it again after an eviction: draw.cpp); a made one pays the null test.
+    CreateOnDemand::UseScope use(this);
+    if (!image.view) CreateOnDemand::Ensure(this);
     DrawSetTexture(slot, this);
 }
 
 // Slot 5: the dynamic textures' refresh (dx11: Map DISCARD for a dynamic owner, UpdateSubresource
 // otherwise; both replace mip 0 from `data`, `width * 4` bytes a row).
 bool ImageBufferData::Update(void* data, int width, int height) {
+    AsyncCreate::Await(this);                      // NOT RETAIL (ext.async_gpu_create)
+    CreateOnDemand::UseScope use(this);            // NOT RETAIL (ext.create_on_demand): no eviction meanwhile
+    if (!image.view) CreateOnDemand::Ensure(this);
+    // NOT RETAIL (ext.share_gpu_data, ext.compress_ao): a shared image is never written (D3D11 refuses
+    // its IMMUTABLE texture), and a BC4 image does not hold the R8 rows the engine would write (the Metal
+    // backend's answer).
+    if (shared || bc4) return false;
     if (!image.image || !data || width <= 0 || height <= 0) return true;
     const uint32_t w = std::min(static_cast<uint32_t>(width), image.width);
     const uint32_t h = std::min(static_cast<uint32_t>(height), image.height);
@@ -419,6 +534,9 @@ bool ImageBufferData::Update(void* data, int width, int height) {
 // device lock (the Metal backend's rule): a caller outside the frame waits for the recording thread's
 // frame to end; the recording thread itself (minimap, save thumbnail, screenshot) reads inside it.
 bool ImageBufferData::Read(void* dst, int width, int height) {
+    AsyncCreate::Await(this);                      // NOT RETAIL (ext.async_gpu_create)
+    CreateOnDemand::UseScope use(this);            // NOT RETAIL (ext.create_on_demand): no eviction meanwhile
+    if (!image.view) CreateOnDemand::Ensure(this);
     Video::Device* const dev = Video::Device::_singleton;
     dev->Lock();
     const bool ok = DrawReadImage(this, dst, width, height);
@@ -429,6 +547,8 @@ bool ImageBufferData::Read(void* dst, int width, int height) {
 // ---- IndexBufferData -----------------------------------------------------------------------
 
 IndexBufferData::~IndexBufferData() {
+    AsyncCreate::Await(this);       // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): nor under a materialization
     DrawForget(this);
     ReleaseStore(store);
 }
@@ -452,6 +572,9 @@ void IndexBufferData::Unlock() {
 // dx11: IASetIndexBuffer(buffer, R16_UINT, 0).
 void IndexBufferData::Bind(void* context) {
     (void)context;
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
+    CreateOnDemand::UseScope use(this);   // NOT RETAIL (ext.create_on_demand): made at its first bind
+    if (store.Buffer() == VK_NULL_HANDLE) CreateOnDemand::Ensure(this);
     DrawSetIndexBuffer(this);
 }
 
@@ -462,6 +585,8 @@ void IndexBufferData::Serialize(IO::Serializer* serializer) {
 // ---- VertexBufferData ----------------------------------------------------------------------
 
 VertexBufferData::~VertexBufferData() {
+    AsyncCreate::Await(this);       // NOT RETAIL (ext.async_gpu_create): never free under a running create
+    CreateOnDemand::Forget(this);   // NOT RETAIL (ext.create_on_demand): nor under a materialization
     DrawForget(this);
     ReleaseStore(store);
 }
@@ -484,6 +609,9 @@ void VertexBufferData::Unlock() {
 // dx11: IASetVertexBuffers(startSlot, 1, buffer, stride, offset).
 void VertexBufferData::Bind(void* context, uint32_t startSlot, uint32_t offsetBytes, uint32_t strideBytes) {
     (void)context;
+    AsyncCreate::Await(this);   // NOT RETAIL (ext.async_gpu_create)
+    CreateOnDemand::UseScope use(this);   // NOT RETAIL (ext.create_on_demand): made at its first bind
+    if (store.Buffer() == VK_NULL_HANDLE) CreateOnDemand::Ensure(this);
     DrawSetVertexStream(startSlot, this, offsetBytes, strideBytes);
 }
 
@@ -612,11 +740,9 @@ bool CreateProgram(Data* self, Shaders::Stage stage) {
     for (int i = 0; i < kPermutationCount; ++i) {
         if (i >= owner->_byteCode.GetSize()) continue;
         const Collection::Array<uint8_t>& blob = owner->_byteCode.GetData()[i];
-        // EXT SEAM (P4, NOT RETAIL): ext.better_trees' foliage_aa / billboard_shadow rewrites and
-        // ext.draw_batch's particle VS rewrite edit these DXBC bytes on DX11
-        // (src/ext/better_trees/foliage_aa_stage.h, billboard_shadow_stage.h,
-        // src/ext/draw_batch/smoke_vs_stage.h). On Vulkan the rewritten copy is converted the
-        // same way, through this call, into a second module per permutation; P4 wires the stages.
+        // The retail permutation. ext.better_trees' foliage_aa / billboard_shadow rewrites and
+        // ext.draw_batch's particle VS rewrite make their copies from these same bytes, converted the same
+        // way into a second registry entry per permutation (shader_rewrites.h, after this loop).
         const uint8_t* bytes = blob.GetData();
         const size_t size = static_cast<size_t>(blob.GetSize());
         const uint64_t hash = ShaderHash(bytes, size, stage);
@@ -663,6 +789,8 @@ void BindProgram(Data* self, int permutation) {
 template <class Data>
 void DestroyProgram(Data* self) {
     DrawForget(self);
+    ReleaseShader(self->rewritten);   // P4: the copy the last Bind chose (shader_rewrites.h)
+    self->rewritten = nullptr;
     for (int i = 0; i < kPermutationCount; ++i) {
         ReleaseShader(self->shaders[i]);
         self->shaders[i] = nullptr;
@@ -683,30 +811,45 @@ void LogProgramSummary() {
 }
 
 VertexProgramData::~VertexProgramData() {
+    Rewrites::VertexDestroyed(this);   // NOT RETAIL (P4): the rewrite stages forget this program
     DestroyProgram(this);
 }
 
 bool VertexProgramData::PlatformCreate() {
-    return CreateProgram(this, Shaders::Stage::Vertex);
+    if (!CreateProgram(this, Shaders::Stage::Vertex)) return false;
+    // EXT SEAM (NOT RETAIL, P4): ext.draw_batch / ext.better_trees make this program's copies now when on.
+    if (Rewrites::Active()) Rewrites::VertexCreated(this);
+    return true;
 }
 
 void VertexProgramData::Bind(void* context, int permutation) {
     (void)context;   // the DX11 slot ignores it too (shaderprograms.cpp header)
     BindProgram(this, permutation);
+    // EXT SEAM (NOT RETAIL, P4): the rewritten copy the draw uses instead, when a stage has one
+    // (shader_rewrites.h); one relaxed load while every stage is off.
+    ReleaseShader(rewritten);
+    rewritten = Rewrites::Active() ? Rewrites::BindVertex(this, boundPermutation) : nullptr;
     DrawSetVertexProgram(this);
 }
 
 PixelProgramData::~PixelProgramData() {
+    Rewrites::PixelDestroyed(this);   // NOT RETAIL (P4)
     DestroyProgram(this);
 }
 
 bool PixelProgramData::PlatformCreate() {
-    return CreateProgram(this, Shaders::Stage::Pixel);
+    if (!CreateProgram(this, Shaders::Stage::Pixel)) return false;
+    if (Rewrites::Active()) Rewrites::PixelCreated(this);   // EXT SEAM (NOT RETAIL, P4): foliage_aa
+    return true;
 }
 
 void PixelProgramData::Bind(void* context, int permutation) {
     (void)context;
     BindProgram(this, permutation);
+    // EXT SEAM (NOT RETAIL, P4): foliage_aa's copy (shader_rewrites.h).
+    ReleaseShader(rewritten);
+    coverage = false;
+    rewritten = Rewrites::Active() ? Rewrites::BindPixel(this, boundPermutation, &coverage) : nullptr;
     DrawSetPixelProgram(this);
 }
 

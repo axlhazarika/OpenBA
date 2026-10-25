@@ -37,6 +37,12 @@
 // limits below are those rounded up with headroom for the AO / ext programs of P4 (N = 8, M = 16,
 // K = 16: 40 bindings per set), and stay under the D3D10 maxima (14 / 128 / 16): a register past a
 // limit fails the conversion with a message naming it, it is never silently remapped.
+//
+// UAVs (P4). No retail program declares one; ext.ambient_occlusion's ASSAO PSPrepareDepthsAndNormals*
+// (our own SM5 DXBC, src/render/common/ao/shaders/) writes its normals through u4. A UAV register u
+// lands on binding kBindingsPerSet + u of its stage's set (u0..u7 at 40..47), past the game layout's
+// 40, so the game's set layouts never name one; the AO pass (src/render/vulkan/ao/) makes its own set
+// layout that does. A UAV counter still fails the conversion.
 // ============================================================================
 #include <cstddef>
 #include <cstdint>
@@ -67,6 +73,7 @@ constexpr uint32_t kMaxConstantBuffers = 8;   // N: b0..b7
 constexpr uint32_t kMaxTextures        = 16;  // M: t0..t15
 constexpr uint32_t kMaxSamplers        = 16;  // K: s0..s15
 constexpr uint32_t kBindingsPerSet     = kMaxConstantBuffers + kMaxTextures + kMaxSamplers;
+constexpr uint32_t kMaxUavs            = 8;   // u0..u7, after the game layout (P4: the AO pass only)
 
 constexpr uint32_t SetOfStage(Stage stage) {
     return stage == Stage::Vertex ? kSetVertex : kSetPixel;
@@ -80,11 +87,15 @@ constexpr uint32_t BindingOfTexture(uint32_t reg) {
 constexpr uint32_t BindingOfSampler(uint32_t reg) {
     return kMaxConstantBuffers + kMaxTextures + reg;
 }
+constexpr uint32_t BindingOfUav(uint32_t reg) {
+    return kBindingsPerSet + reg;
+}
 
 // Bumped whenever the layout above, the compile options or the IO passes change: it is part of the
 // cache key, so every SPIR-V module made under the old rules misses and is converted again.
 // 2 (P2): the reflection records which textures are cubes (textureCubeMask).
-constexpr uint32_t kMappingVersion = 2;
+// 3 (P4): UAV registers map to BindingOfUav and the reflection records them (uavMask).
+constexpr uint32_t kMappingVersion = 3;
 
 // ---- reflection --------------------------------------------------------------------------------
 // One interpolant, vertex input or render-target output of a program.
@@ -103,6 +114,7 @@ struct ShaderReflection {
     uint32_t textureMask        = 0;   // bit r: t<r> is read
     uint32_t samplerMask        = 0;   // bit r: s<r> is read
     uint32_t textureCubeMask    = 0;   // bit r: t<r> is declared a cube (TextureCube / array)
+    uint32_t uavMask            = 0;   // bit r: u<r> is declared (P4: the AO programs only)
     // Vertex: the vertex input semantics (P2's vertex layouts bind by these) and the interpolants it
     // writes. Pixel: the interpolants it reads and the render targets it writes.
     std::vector<IoElement> inputs;

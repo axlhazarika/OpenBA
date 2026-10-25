@@ -12,6 +12,7 @@
 #include "draw.h"
 #include "pipelines.h"
 #include "resources.h"
+#include "create_on_demand/lazy_create.h"   // P4: ext.create_on_demand's use gate around a draw
 
 #include "video/Buffers.h"
 #include "video/Context.h"
@@ -19,6 +20,7 @@
 #include "video/ImageBuffer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -161,8 +163,10 @@ PendingClear g_clear;
 struct MainTargets {
     uint32_t samples = 0;
     bool msrtss = false;
+    bool readable = false;        // P4: the depth is SAMPLED too, `depthSampled` its depth-aspect view
     VkExtent2D extent{};
     GpuImage depth;               // attachment-only: `view` covers depth and stencil
+    VkImageView depthSampled = VK_NULL_HANDLE;
     ImageState depthState;
     GpuImage color;               // MSAA only: the multisampled colour, or the tiler-MSAA colour
     ImageState colorState;
@@ -170,6 +174,10 @@ struct MainTargets {
 MainTargets g_main;
 ImageState g_swap;                // the acquired swap-chain image, this frame
 bool g_targetsChanged = false;
+// P4 (draw.h THE READABLE DEPTH): the AO extension's request (main thread) and what the main targets
+// have (built on the recording thread).
+std::atomic<bool> g_readableRequested{false};
+std::atomic<bool> g_depthReadable{false};
 // The companion images this frame moved out of SHADER_READ_ONLY (the frame's end moves them back).
 std::vector<ImageState*> g_touched;
 std::vector<VkImageMemoryBarrier2> g_barriers;
@@ -225,9 +233,32 @@ void ResetCommandState() {
 void DestroyMainTargets() {
     GpuImage depth = g_main.depth;
     GpuImage color = g_main.color;
+    const VkImageView sampled = g_main.depthSampled;
     g_main = MainTargets{};
+    g_depthReadable.store(false);
+    if (sampled) {
+        Retire([sampled]() {
+            if (LiveDevice()) vkDestroyImageView(LiveDevice(), sampled, nullptr);
+        });
+    }
     if (depth.image) RetireImage(&depth);
     if (color.image) RetireImage(&color);
+}
+
+// P4: the depth-aspect view the AO pass samples the main depth through (multisampled or not).
+bool MakeDepthSampledView() {
+    VkImageViewCreateInfo vi = Make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+    vi.image = g_main.depth.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = g_main.depth.format;
+    vi.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+    const VkResult r = vkCreateImageView(LiveDevice(), &vi, nullptr, &g_main.depthSampled);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[Vulkan] main depth sampled view: %s\n", ResultName(r));
+        g_main.depthSampled = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
 }
 
 bool MakeMainImage(VkFormat format, VkImageUsageFlags usage, uint32_t samples, bool msrtss, VkExtent2D extent,
@@ -256,8 +287,10 @@ bool EnsureMainTargets() {
     const VkExtent2D extent = g_frame.target.extent;
     const uint32_t samples = MainSampleCount();
     const bool msrtss = samples > 1 && LiveCaps().msrtss;
+    const bool readable = g_readableRequested.load();
     if (g_main.depth.image && !g_targetsChanged && g_main.extent.width == extent.width &&
-        g_main.extent.height == extent.height && g_main.samples == samples && g_main.msrtss == msrtss) {
+        g_main.extent.height == extent.height && g_main.samples == samples && g_main.msrtss == msrtss &&
+        g_main.readable == readable) {
         return true;
     }
     g_targetsChanged = false;
@@ -265,9 +298,14 @@ bool EnsureMainTargets() {
     g_main.samples = samples;
     g_main.msrtss = msrtss;
     g_main.extent = extent;
-    if (!MakeMainImage(DepthStencilFormat(), VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, samples, msrtss, extent,
-                       &g_main.depth, &g_main.depthState)) {
+    const VkImageUsageFlags depthUsage =
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (readable ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
+    if (!MakeMainImage(DepthStencilFormat(), depthUsage, samples, msrtss, extent, &g_main.depth, &g_main.depthState)) {
         return false;
+    }
+    if (readable && MakeDepthSampledView()) {
+        g_main.readable = true;
+        g_depthReadable.store(true);
     }
     if (samples > 1) {
         const VkImageUsageFlags usage =
@@ -276,8 +314,9 @@ bool EnsureMainTargets() {
             return false;
         }
     }
-    std::fprintf(stderr, "[Vulkan] main targets %ux%u, multisample %ux (%s)\n", extent.width, extent.height, samples,
-                 samples == 1 ? "swap-chain image" : (msrtss ? "tiler msrtss" : "resolve attachments"));
+    std::fprintf(stderr, "[Vulkan] main targets %ux%u, multisample %ux (%s), depth %s\n", extent.width, extent.height,
+                 samples, samples == 1 ? "swap-chain image" : (msrtss ? "tiler msrtss" : "resolve attachments"),
+                 g_main.readable ? "readable (sampled view for the AO pass)" : "attachment only");
     return true;
 }
 
@@ -759,6 +798,39 @@ StateBlock DefaultState() {
     return s;
 }
 
+// P4, NOT RETAIL (ext.create_on_demand, create_on_demand/lazy_create.h): every companion the draw reads
+// is stamped as used and, when an idle eviction gave its object back since its Bind, made again; the
+// caller holds the table's use gate for the whole draw, so no eviction meets the reads below.
+void TouchBound(CreateOnDemand::DrawScope& lazy, const ShaderEntry* ps, bool indexed) {
+    const uint32_t mask = g_bound.layout ? g_bound.layout->streamMask : 0;
+    for (uint32_t i = 0; i < kStreams; ++i) {
+        if (!((mask >> i) & 1)) continue;
+        const VertexBufferData* vb = g_bound.streams[i].vb;
+        if (vb) lazy.Touch(vb, vb->store.Buffer() != VK_NULL_HANDLE);
+    }
+    if (indexed && g_bound.index) lazy.Touch(g_bound.index, g_bound.index->store.Buffer() != VK_NULL_HANDLE);
+    if (!ps) return;
+    for (uint32_t t = 0; t < kTextureSlots; ++t) {
+        if (!((ps->reflection.textureMask >> t) & 1)) continue;
+        const ImageBufferData* img = g_bound.textures[t];
+        if (img == nullptr || img->mainTarget != ImageBufferData::MainTarget::None) continue;
+        lazy.Touch(img, img->image.view != VK_NULL_HANDLE);
+    }
+}
+
+// P4, NOT RETAIL (ext.foliage_aa, shader_rewrites.h): the A2C clone of a non-blending render state
+// (src/render/dx11/better_trees/foliage_aa_stage.cpp CloneOf): alpha to coverage, colour ONE / ZERO / ADD,
+// alpha ZERO / ZERO / ADD, every channel written.
+StateBlock CoverageClone(StateBlock s) {
+    s.blendEnable = 1;
+    s.srcBlend = VK_BLEND_FACTOR_ONE;
+    s.dstBlend = VK_BLEND_FACTOR_ZERO;
+    s.blendOp = VK_BLEND_OP_ADD;
+    s.writeMask = 0xF;
+    s.extFlags = kExtAlphaToCoverage | kExtAlphaZero;
+    return s;
+}
+
 // The one draw path of every slot below: resolve the bound state, then record the draw.
 void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first, int32_t baseVertex) {
     if (!g_frame.active || count == 0 || instances == 0) return;
@@ -767,15 +839,29 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
         ++g_frame.failedDraws;
         return;
     }
+    // P4 (shader_rewrites.h): a program's rewritten copy, when its last Bind chose one, draws instead of
+    // the retail permutation; foliage_aa's coverage copy only under a non-blending state, with its A2C
+    // clone (the faithful path while every stage is off: both `rewritten` are null).
     const VertexProgramData* vsp = g_bound.vs;
-    const ShaderEntry* vs = vsp ? vsp->shaders[vsp->boundPermutation] : nullptr;
+    const ShaderEntry* vs = vsp ? (vsp->rewritten ? vsp->rewritten : vsp->shaders[vsp->boundPermutation]) : nullptr;
     const PixelProgramData* psp = g_bound.ps;
     const ShaderEntry* ps = psp ? psp->shaders[psp->boundPermutation] : nullptr;
+    StateBlock state = g_bound.state ? g_bound.state->block : DefaultState();
+    if (psp && psp->rewritten) {
+        if (!psp->coverage) {
+            ps = psp->rewritten;
+        } else if (!state.blendEnable) {
+            ps = psp->rewritten;
+            state = CoverageClone(state);
+        }
+    }
     if (!vs) {
         LogOnce(1, "a draw with no vertex program bound is skipped");
         ++g_frame.failedDraws;
         return;
     }
+    CreateOnDemand::DrawScope lazy;
+    if (lazy.Active()) TouchBound(lazy, ps, indexed);
     PrepareTextures(ps);
     if (!EnsurePass()) {
         ++g_frame.failedDraws;
@@ -787,7 +873,7 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
     key.vs = vs->hash;
     key.ps = ps ? ps->hash : 0;
     key.layout = g_bound.layout ? g_bound.layout->layoutHash : 0;
-    key.state = g_bound.state ? g_bound.state->block : DefaultState();
+    key.state = state;
     key.colorFormat = static_cast<uint32_t>(g_frame.pass.colorFormat);
     key.depthFormat = static_cast<uint32_t>(g_frame.pass.depthFormat);
     key.topology = static_cast<uint8_t>(g_bound.topology == kTopologyLines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
@@ -916,9 +1002,11 @@ void DrawShutdown() {
         s.offset = 0;
         s.pool = 0;
     }
+    if (g_main.depthSampled) vkDestroyImageView(LiveDevice(), g_main.depthSampled, nullptr);
     DestroyImageNow(&g_main.depth);
     DestroyImageNow(&g_main.color);
     g_main = MainTargets{};
+    g_depthReadable.store(false);
     if (g_readPool) vkDestroyCommandPool(LiveDevice(), g_readPool, nullptr);
     g_readPool = VK_NULL_HANDLE;
     g_touched.clear();
@@ -1428,6 +1516,46 @@ void ContextData::EndInstancedIndexedVertices(int primitiveType) {
         static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(ctx->_unknown2120)) >> 1);
     IssueDraw(true, static_cast<uint32_t>(ctx->_unknown2124), static_cast<uint32_t>(ctx->_instanceCount), startIndex,
               0);
+}
+
+// ---- P4: ext.ambient_occlusion's pass (draw.h) --------------------------------------------------------
+
+void DrawRequestReadableDepth(bool on) {
+    g_readableRequested.store(on);
+}
+
+bool DrawDepthReadable() {
+    return g_depthReadable.load();
+}
+
+bool DrawAoBegin(AoTargets* out) {
+    if (!g_frame.active || !g_main.depth.image || !g_main.readable || !g_main.depthSampled) return false;
+    FlushPendingClear();
+    EndPass();
+    TransitionImage(g_main.depthState, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+    FlushBarriers(g_frame.target.cb, &g_barriers);
+    out->cb = g_frame.target.cb;
+    out->slot = g_frame.target.slot;
+    out->frame = g_frame.index;
+    out->depthView = g_main.depthSampled;
+    out->extent = g_main.extent;
+    out->samples = g_main.samples;
+    out->msrtss = g_main.samples > 1 && g_main.msrtss;
+    out->colorFormat = SwapchainFormat();
+    return true;
+}
+
+bool DrawAoBeginApply() {
+    if (!g_frame.active) return false;
+    Target t;
+    MainColorInto(&t);
+    g_clear = PendingClear{};
+    return BeginPass(t);
+}
+
+void DrawAoEnd() {
+    EndPass();
+    ResetCommandState();
 }
 
 }  // namespace VideoVulkan

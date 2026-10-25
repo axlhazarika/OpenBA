@@ -37,6 +37,13 @@ struct Caps {
     // the main target's MSAA is then the tiler's own, resolved on the tile (PLAN.md §4.4).
     bool msrtss = false;
     VkSampleCountFlags colorSamples = VK_SAMPLE_COUNT_1_BIT;
+    // P4, ext.ambient_occlusion: ASSAO's PSPrepareDepthsAndNormals writes its normals through a typed
+    // UAV from the pixel stage (fragmentStoresAndAtomics, shaderStorageImageWriteWithoutFormat: dxbc-spirv
+    // declares the image without a format), and the pass needs its formats as attachments / sampled
+    // images and the main depth sampleable. All of it true = AoBackend::Supported.
+    bool fragmentStores = false;
+    bool storageWriteWithoutFormat = false;
+    bool aoFormats = false;
 };
 
 // ---- the live device (valid between CreateDevice and Shutdown) --------------------------------
@@ -60,6 +67,12 @@ uint32_t MainSampleCount();
 // P3: a read-back in the middle of a frame (ImageBufferData::Read on the recording thread: the minimap
 // capture, the save thumbnail, the screenshot) needs the frame's commands so far on the GPU. This ends
 // the frame's command buffer, submits it (with the upload batch before it, and the acquire wait the
+// P4, device loss: records a VK_ERROR_DEVICE_LOST from `what` (any other result is ignored); the frame's
+// Finish then runs the device-lost recovery (device.cpp RecoverLostDevice). Any thread.
+void NoteResult(VkResult r, const char* what);
+// True from the first recorded loss until CreateDevice made the next device.
+bool DeviceLost();
+
 // first time), waits for it, and begins the next command buffer of the same frame, which it returns.
 // The frame's final submit (Finish) then carries only the rest. Recording thread, inside a frame.
 VkCommandBuffer SubmitFrameSoFar();

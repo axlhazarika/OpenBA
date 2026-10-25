@@ -46,6 +46,20 @@ the debug and perf flavours; an in-game RenderDoc capture under `/profile:faithf
 has the DX11 exe's draw count per target. The divergences left are in `docs/known_port_issues.md`
 ("Vulkan backend"). Next: P4 ext seams and the parity table.
 
+P4 (ext seams): every backend-neutral seam answers "supported" (`docs/vulkan/PARITY.md` has the table
+beside DX11 and the retail features). `ext.ambient_occlusion` runs ASSAO from the committed DXBC through
+the same converter (`ao/assao_pass.cpp`; typed UAVs map to binding 40 + u, `kMappingVersion` 3) over a
+main depth that gets a sampled view on request. foliage_aa, billboard_shadow and draw_batch's smoke VS
+convert their rewritten DXBC into second registry entries (`shader_rewrites.cpp`; foliage_aa's A2C clone
+is two bits of the pipeline key's render state). async_gpu_create, share_gpu_data, create_on_demand,
+compress_ao and texture_quality hook the companions as on DX11 (`seeded_create.h` is the load's one
+create: BC4, then create-or-share; seeded static buffers are immutable, as D3D11 makes them).
+`VK_ERROR_DEVICE_LOST` from submit, wait, acquire or present begins an empty frame whose Finish runs
+dx11's RecoverLostDevice sequence (OnVideoError, device rebuilt, OnVideoRestart); `ext.render_pipe`
+splits it into `PresentFrame` and `RecoverLostDevice`, and `fix.boot_device_lost` sends a swap-chain
+rebuild that fails on a lost device into the same recovery. `BANISHED_FORCE_DEVICE_LOST` injects the loss
+on this backend too. Next: P5 (Linux).
+
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With no Vulkan SDK
 installed, a layer built from Khronos's source with the MinGW toolchain works: build

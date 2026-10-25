@@ -393,6 +393,8 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     rs.lineWidth = 1.0f;
     auto ms = Make<VkPipelineMultisampleStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
     ms.rasterizationSamples = static_cast<VkSampleCountFlagBits>(key.samples);
+    // P4: ext.foliage_aa's A2C clone (pipelines.h StateBlock::extFlags); never set for a retail state.
+    ms.alphaToCoverageEnable = (s.extFlags & kExtAlphaToCoverage) ? VK_TRUE : VK_FALSE;
     auto ds = Make<VkPipelineDepthStencilStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
     ds.depthTestEnable = s.depthTest;
     ds.depthWriteEnable = (s.depthTest && s.depthWrite) ? VK_TRUE : VK_FALSE;   // D3D: no test, no write
@@ -417,8 +419,9 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     blend.srcColorBlendFactor = static_cast<VkBlendFactor>(s.srcBlend);
     blend.dstColorBlendFactor = static_cast<VkBlendFactor>(s.dstBlend);
     blend.colorBlendOp = static_cast<VkBlendOp>(s.blendOp);
-    blend.srcAlphaBlendFactor = static_cast<VkBlendFactor>(s.srcBlend);
-    blend.dstAlphaBlendFactor = static_cast<VkBlendFactor>(s.dstBlend);
+    const bool alphaZero = (s.extFlags & kExtAlphaZero) != 0;   // P4: ext.foliage_aa's A2C clone
+    blend.srcAlphaBlendFactor = alphaZero ? VK_BLEND_FACTOR_ZERO : static_cast<VkBlendFactor>(s.srcBlend);
+    blend.dstAlphaBlendFactor = alphaZero ? VK_BLEND_FACTOR_ZERO : static_cast<VkBlendFactor>(s.dstBlend);
     blend.alphaBlendOp = static_cast<VkBlendOp>(s.blendOp);
     blend.colorWriteMask = ps ? s.writeMask : 0;   // no pixel shader: nothing reaches the colour target
     auto cb = Make<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
@@ -760,6 +763,10 @@ void PipelinesShutdown() {
 }
 
 // ---- the binding model ------------------------------------------------------------------------------
+
+VkPipelineCache GamePipelineCache() {
+    return g_cache;
+}
 
 VkPipelineLayout GamePipelineLayout() {
     return g_pipelineLayout;

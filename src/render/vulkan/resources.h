@@ -119,6 +119,8 @@ struct ImageDesc {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     VkImageCreateFlags flags = 0;
     bool attachmentOnly = false;
+    // P4 (the AO pass's results texture): `layers` > 1 without `cube` gets a 2D-array view.
+    bool array = false;
     VkComponentMapping swizzle{ VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                                 VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
 };
@@ -147,7 +149,8 @@ struct ImageRegion {
 // The layout tracking of one image (P3, draw.cpp): the render targets, the backend's main targets and
 // the acquired swap-chain image. `layout` is what the command stream leaves the image in at the point
 // being recorded. Every image a companion owns is SHADER_READ_ONLY_OPTIMAL between frames (the frame's
-// end puts back the render targets it used), which is what UploadImage / ClearImage assume.
+// end puts back the render targets it used), which is what UploadImage / ClearImage assume. GENERAL is
+// a pixel-stage storage image (P4: the AO pass's normals UAV).
 struct ImageState {
     VkImage image = VK_NULL_HANDLE;
     VkImageAspectFlags aspect = 0;

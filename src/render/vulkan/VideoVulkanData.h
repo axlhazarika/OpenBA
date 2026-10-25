@@ -105,6 +105,10 @@ public:
     // aspect, no swizzle: dx11's RTV / DSV) and the layout tracking (draw.cpp).
     VkImageView attachmentView = VK_NULL_HANDLE;
     ImageState state;
+    // P4 (seeded_create.h): the image is ext.share_gpu_data's (never written, released through the
+    // table), or ext.compress_ao made it BC4 (the engine still says R8). Both refuse Update.
+    bool shared = false;
+    bool bc4 = false;
 };
 
 // The storage of a vertex or index buffer (companions.cpp). A static buffer is one device-local
@@ -122,6 +126,10 @@ struct BufferStore {
     int current = -1;
     int32_t writeCursor = 0;
     bool dynamic = false;
+    // P4. A static buffer created with data is D3D11_USAGE_IMMUTABLE on DX11 (buffers.cpp): its SetData
+    // (UpdateSubresource) does nothing there, and here. `shared`: ext.share_gpu_data's (seeded_create.h).
+    bool immutable = false;
+    bool shared = false;
     VkBuffer Buffer() const {
         return dynamic ? (current >= 0 ? versions[current].buffer.buffer : VK_NULL_HANDLE) : gpu.buffer;
     }
@@ -207,6 +215,9 @@ public:
     void Bind(void* context, int permutation) override;
     ShaderEntry* shaders[kPermutationCount] = {};
     int boundPermutation = 0;   // the last Bind's choice: the request when built, else 0
+    // P4 (shader_rewrites.h): the rewritten copy the last Bind chose for the draw (draw_batch's or
+    // billboard_shadow's), one registry reference held; null = the retail permutation.
+    ShaderEntry* rewritten = nullptr;
 };
 
 class PixelProgramData final : public Video::PixelProgramData {
@@ -217,6 +228,10 @@ public:
     void Bind(void* context, int permutation) override;
     ShaderEntry* shaders[kPermutationCount] = {};
     int boundPermutation = 0;
+    // P4 (shader_rewrites.h): foliage_aa's copy the last Bind chose, one reference held, and whether it
+    // needs the A2C clone of a non-blending state (draw.cpp).
+    ShaderEntry* rewritten = nullptr;
+    bool coverage = false;
 };
 
 class RenderStateData final : public Video::RenderStateData {
