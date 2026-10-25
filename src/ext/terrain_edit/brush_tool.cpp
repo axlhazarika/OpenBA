@@ -1566,8 +1566,12 @@ bool UndoLast() {
     std::fprintf(stderr, "[TerrainEdit] undo: %zu height(s), %zu terrain type(s), %zu of %zu resource(s)\n",
         stroke.heights.size(), stroke.types.size(), removedPlants, stroke.planted.size());
     // the ground the stroke changed, for the Redo to look at
-    for (const auto& entry : stroke.heights) stroke.replay.vertices.push_back(entry.first);
-    for (const auto& entry : stroke.types) stroke.replay.cells.push_back(entry.first);
+    for (const auto& entry : stroke.heights) {
+        stroke.replay.vertices.push_back(entry.first);
+    }
+    for (const auto& entry : stroke.types) {
+        stroke.replay.cells.push_back(entry.first);
+    }
     g_undo.PushRedo(std::move(stroke.replay));
     NotifyUndoChanged();
     return true;
