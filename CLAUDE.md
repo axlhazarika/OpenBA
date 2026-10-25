@@ -39,7 +39,7 @@ tools/build.sh clean [flavour] # remove the build directory (all four without a 
 tools/resave_gate/resave_gate.sh Gate   # serializer regression check (README alongside)
 BANISHED_RENDER_BACKEND=vulkan tools/build.sh run-menu   # the Vulkan backend (docs/vulkan/PLAN.md), own build dir
 ```
-`--jobs N` / `BUILD_JOBS` (default 8; agents use 2). On Linux the same CMakeLists builds `OpenBA` (Vulkan,
+`--jobs N` / `BUILD_JOBS` (default 8). Agents: jobs = 8 / agents building at once, minimum 2 (a lone agent builds at 8). On Linux the same CMakeLists builds `OpenBA` (Vulkan,
 the default there) and `unit` (`tools/linux_gamedir.sh`, `tools/linux_run.sh`). `run` is the default check of any gameplay /
 rendering / world-build change.
 **Work lands by PR.** `main` is protected: the four CI checks (Windows, Linux, macOS, Acceptance) must
