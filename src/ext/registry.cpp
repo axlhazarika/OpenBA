@@ -406,6 +406,16 @@ const Entry kEntries[] = {
       "Loads the large world textures at half or quarter resolution (the Enhanced tab's Texture quality): "
       "much less video memory, softer textures. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.texture_quality; } },
+    // PHONEMENU (docs/extensions/handins/PHONEMENU.md): the front end fitted to a phone held in
+    // landscape -- the menu backdrop moved so the logo is whole on a screen wider than 16:9, the menu
+    // dialogs laid out inside a 4.5 % safe area (rounded corners, the camera cut-out), and the UI scale
+    // slider down to 25 %. Class A: layout only, nothing saved, live. OFF by default on a desktop;
+    // the Android first run turns it on (src/platform/android/app_android.cpp).
+    { "phone_menu", Tier::Extension, Class::A, false,
+      "Phone screen fit",
+      "Keeps the main menu clear of rounded screen corners and camera cut-outs, shows the whole "
+      "Banished logo on wide screens, and lets the UI scale go down to 25% (a much larger interface).",
+      0, [](State& s) -> bool& { return s.ext.phone_menu; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.

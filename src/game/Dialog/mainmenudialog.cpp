@@ -26,6 +26,7 @@
 #include "Game/GameLoaderLoop.h"
 #include "Dialog/ModDialog.h"
 #include "Dialog/ExtensionsDialog.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/EXTSCAFFOLD.md): the Extensions button
+#include "ext/phone_menu/phone_menu.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): the menu safe area
 #include "Dialog/NewGameDialog.h"
 #include "Dialog/MapParamsDialog.h"
 #include "Dialog/AchievementDialog.h"
@@ -542,6 +543,10 @@ void MainMenuDialog::OnOpened() {
     // Extensions button beside Mods. Retail's steps above are untouched; under
     // the gate's command-line faithful profile this adds nothing.
     ExtensionsDialog_AttachMenuButton(this);
+
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu learns which
+    // dialogs are the menu's (this one and the version line) for its safe area and backdrop fit.
+    Ext::PhoneMenu::MenuOpened(_dialog, buildIdRsc);
 }
 
 // ============================================================

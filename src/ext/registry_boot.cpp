@@ -22,6 +22,7 @@
 #include "ext/large_packages/large_packages.h"   // fix.large_packages: the FileSystem mount seam
 #include "ext/package_cache/package_cache.h"       // ext.package_cache: the FileSystem index seams
 #include "ext/menu_entry/menu_entry.h"             // ext.menu_entry: the mod scan and remount seams
+#include "ext/phone_menu/phone_menu.h"             // ext.phone_menu: the menu safe area and backdrop seam
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
@@ -162,6 +163,8 @@ void InitFromSettings() {
     Ext::DrawBatch::Sync();
     // ext.render_pipe (class A, live): the Engine::MainLoop::_extFrame seam.
     Ext::RenderPipe::Sync();
+    // ext.phone_menu (class A, live): the UI::UserInterface::_extDialogPlace seam.
+    Ext::PhoneMenu::Sync();
     // ext.ambient_occlusion (class A, live): the main depth's format + the per-frame arm.
     Ext::AmbientOcclusion::Sync();
     // ext.better_trees (class A, live): the VideoDX11::g_extFoliageAA seam + the mode, and the
