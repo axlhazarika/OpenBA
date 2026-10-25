@@ -5,7 +5,7 @@
 #                                                      # apk/debug/app-debug.apk, apk/release/app-release-unsigned.apk
 #   tools/android.sh sign [IN.apk OUT.apk]             # zipalign -P 16 + apksigner (default: the release apk ->
 #                                                      # apk/release/app-release.apk); the key from OPENBA_KEYSTORE*
-#   tools/android.sh install [debug|release|FILE.apk]  # adb install -r of that apk (release = the signed one)
+#   tools/android.sh install [debug|release|FILE.apk]  # adb install -r -d (downgrade allowed) of that apk
 #   tools/android.sh push-data                        # the install's WinData/*.pkg -> the phone's data folder
 #   tools/android.sh run [KEY=VALUE ...]               # force-stop, then launch with BANISHED_* flags
 #   tools/android.sh stop                              # force-stop the app
@@ -157,10 +157,13 @@ sign)
     ls -la "$out"
     ;;
 install)
+    # -d: a dev phone moves between trees whose versionCode differs (build.gradle derives it from the
+    # CMake VERSION since P8; older trees had 1). Android takes a lower code only over a debuggable
+    # install; over a signed release apk, `adb uninstall` first (that deletes the data folder).
     type="${1:-debug}"
     case "$type" in
-        *.apk) "$ADB" install -r "$type" ;;
-        *) "$ADB" install -r "$(apk_path "$type")" ;;
+        *.apk) "$ADB" install -r -d "$type" ;;
+        *) "$ADB" install -r -d "$(apk_path "$type")" ;;
     esac
     ;;
 push-data)
