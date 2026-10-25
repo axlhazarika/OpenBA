@@ -95,6 +95,23 @@ void ShowStatus(UI::Element* page) {
     static_cast<UI::TextElement*>(e)->SetParameter(0, System::String(text));
 }
 
+// The drop down's items from the resource list, with the current resource chosen.
+void FillPlantCombo() {
+    g_plantCombo->RemoveAllItems();
+    const int count = PlantCount();
+    for (int i = 0; i < count; ++i) {
+        g_plantCombo->AddItem(UI::Sprite(), System::String(PlantNameAt(i)), nullptr);
+    }
+    g_plantCombo->SetCurrentItem(count > 0 ? PlantIndex() : -1);
+}
+
+// Choosing a resource in the drop down selects the Plant tool, and starts the brush if it is not running.
+void ChoosePlant(int chosen) {
+    PlantSet(chosen);
+    State().mode = Mode::Plant;
+    if (!BrushActive()) StartBrush();
+}
+
 // The brush's size and strength from the sliders (whole steps; the strength slider is in half units).
 void ReadSliders() {
     BrushState& st = State();
@@ -111,18 +128,18 @@ void ReadSliders() {
                                        kMaxDensity / kDensityStep);
         st.density = steps * kDensityStep;
     }
-    if (g_plantCombo != nullptr) {   // choosing a resource in the drop down selects the Plant tool
+    // A resource chosen in the drop down while another is current (the frame hook catches it while a brush
+    // runs); the pick of the resource the drop down already shows comes through PageChanged.
+    if (g_plantCombo != nullptr) {
         const int chosen = g_plantCombo->_currentItem;
-        if (chosen >= 0 && chosen != PlantIndex()) {
-            PlantSet(chosen);
-            st.mode = Mode::Plant;
-            if (!BrushActive()) StartBrush();
-        }
+        if (chosen >= 0 && chosen != PlantIndex()) ChoosePlant(chosen);
     }
 }
 
 void RefreshPage() {
     if (g_page.Get() == nullptr) return;
+    // a stroke's scan found a resource the drop down does not list yet
+    if (g_plantCombo != nullptr && g_plantCombo->GetItemCount() != PlantCount()) FillPlantCombo();
     ReadSliders();
     ShowStatus(g_page.Get());
 }
@@ -154,12 +171,8 @@ void PageOpen(UI::Element* page, int32_t idBase) {
     g_plantCombo = FindElement<UI::ComboElement>(page, "comboTerrainEditPlant");
     if (g_plantCombo != nullptr) {
         g_plantCombo->SetElementId(idBase + kPlantComboId);
-        g_plantCombo->RemoveAllItems();
-        const int count = PlantCount();
-        for (int i = 0; i < count; ++i) {
-            g_plantCombo->AddItem(UI::Sprite(), System::String(PlantNameAt(i)), nullptr);
-        }
-        g_plantCombo->SetCurrentItem(count > 0 ? PlantIndex() : -1);
+        RescanPlantList();
+        FillPlantCombo();
     }
     const BrushState& st = State();
     if (g_size != nullptr) {
@@ -191,6 +204,10 @@ bool PageChanged(UI::Element* page, int32_t id) {
         UndoLast();
     } else if (id == kPlantComboId) {
         ReadSliders();
+        // the drop down was used: Plant is the tool, even for the resource it already showed
+        if (g_plantCombo != nullptr && g_plantCombo->_currentItem >= 0) {
+            ChoosePlant(g_plantCombo->_currentItem);
+        }
     } else {
         return false;
     }

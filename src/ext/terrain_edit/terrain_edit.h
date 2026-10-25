@@ -33,6 +33,8 @@ bool UndoLast();
 // The resource tool's palette: the templates of the natural resources standing on the map (trees first, then
 // plants, then rocks and ore), by the order the Resource drop down lists them in. PlantSet picks the one a
 // Plant stroke places.
+// RescanPlantList adds the resources that have come onto the map since the last scan (nothing is taken off).
+void RescanPlantList();
 int PlantCount();
 int PlantIndex();
 const char* PlantName();

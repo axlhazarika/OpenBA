@@ -17,7 +17,8 @@
 namespace Ext {
 namespace TerrainEdit {
 
-// The share of the disc's eligible cells (free ones and those a resource stands on) that a stroke fills: 10% to 100% in steps of 10%.
+// The share of the disc's eligible cells (free ones and those a resource stands on) that a stroke fills:
+// 10% to 100% in steps of 10%.
 constexpr float kMinDensity     = 0.1f;
 constexpr float kMaxDensity     = 1.0f;
 constexpr float kDensityStep    = 0.1f;

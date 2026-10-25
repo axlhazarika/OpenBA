@@ -1039,10 +1039,13 @@ void RemoveNaturalResource(ComponentEntity* entity) {
 
 // ---- the resource tool: plant natural resources ---------------------------------------------------------
 // The Resource drop down lists the templates of the natural resources standing on the map (trees, plants,
-// rocks, ore): the distinct descriptions of the occupants that carry a NaturalResourceComponent, scanned
-// once for each world. A stroke fills the brush's disc up to the density (plant_math.h, PlantTarget and
-// PickCells) with the picked template, the way worldgen and the game's own CreateNaturalResource do
-// (starttown.cpp, Action/createnaturalresource.cpp), without the orchard parent that action wants.
+// rocks, ore): the distinct descriptions of the occupants that carry a NaturalResourceComponent. A new world
+// starts the list over; within one world each scan only adds, so a resource that came onto the map later (a
+// forester planting a tree the start did not scatter) joins the list and nothing on it ever goes away. The
+// scan runs when the page opens and when a stroke starts. A stroke fills the brush's disc up to the density
+// (plant_math.h, PlantTarget and PickCells) with the picked template, the way worldgen and the game's own
+// CreateNaturalResource do (starttown.cpp, Action/createnaturalresource.cpp), without the orchard parent that
+// action wants.
 std::vector<ComponentDescription*> g_palette;
 std::vector<std::string> g_paletteNames;
 std::string g_plantName;               // the template the drop down shows, kept across worlds by name
@@ -1051,14 +1054,19 @@ const void* g_paletteMap = nullptr;
 uint32_t g_paletteEpoch = 0;
 uint32_t g_plantSeed = 1u;
 
-void BuildPalette(Map* map) {
+void BuildPalette(Map* map, bool keepKnown) {
+    std::vector<ComponentDescription*> found;
+    std::vector<std::string> names;
+    std::set<ComponentDescription*> seen;
+    if (keepKnown) {
+        found = g_palette;
+        names = g_paletteNames;
+        seen.insert(found.begin(), found.end());
+    }
     g_palette.clear();
     g_paletteNames.clear();
     g_paletteMap = map;
     g_paletteEpoch = Ext::LockEpoch();
-    std::vector<ComponentDescription*> found;
-    std::vector<std::string> names;
-    std::set<ComponentDescription*> seen;
     const int n = map->size * map->size;
     for (int i = 0; i < n; ++i) {
         ComponentEntity* e = map->cells.GetData()[i].occupant.Get();
@@ -1089,7 +1097,14 @@ void BuildPalette(Map* map) {
 void EnsurePalette() {
     GameUpdateLoop* game = GameUpdateLoop::_singleton;
     if (game == nullptr || game->m_game == nullptr) return;
-    if (game->m_game != g_paletteMap || g_paletteEpoch != Ext::LockEpoch()) BuildPalette(game->m_game);
+    if (game->m_game != g_paletteMap || g_paletteEpoch != Ext::LockEpoch()) BuildPalette(game->m_game, false);
+}
+
+// Looks for resources that have come onto the map since the last scan and adds them to the list.
+void RescanPalette() {
+    GameUpdateLoop* game = GameUpdateLoop::_singleton;
+    if (game == nullptr || game->m_game == nullptr) return;
+    BuildPalette(game->m_game, game->m_game == g_paletteMap && g_paletteEpoch == Ext::LockEpoch());
 }
 
 // A cell takes a resource when nothing stands on it, no road is on it and it is ordinary land (not a
@@ -1144,7 +1159,7 @@ void PlantStroke(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
     int16_t* heights = terrain->_heights.data;
     const int stride = terrain->_fieldD0;
     if (heights == nullptr || stride <= 0) return;
-    EnsurePalette();
+    if (strokeStart) RescanPalette(); else EnsurePalette();
     if (g_palette.empty()) return;
     if (strokeStart || !g_undo.Open()) {
         if (!SameWorld(map, heights, stride)) AdoptWorld(map, heights, stride);
@@ -1510,6 +1525,10 @@ bool UndoRefused() {
         if (!here) g_undoRefused = false;
     }
     return g_undoRefused;
+}
+
+void RescanPlantList() {
+    RescanPalette();
 }
 
 int PlantCount() {
