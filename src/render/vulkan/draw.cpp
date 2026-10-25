@@ -8,6 +8,7 @@
 // ============================================================================
 
 #include "VideoVulkanData.h"
+#include "depth_discard.h"
 #include "device_objects.h"
 #include "draw.h"
 #include "present.h"
@@ -233,18 +234,22 @@ uint32_t g_hazardSlots = 0;
 // P7, THE DEPTH DISCARD (tilers: docs/android/PERF_P7.md §2 row 2). Nothing reads the main depth after
 // the frame's last pass on it (the AO pass is the one reader, and it asks for a readable depth first),
 // so that pass may end with STORE_OP_DONT_CARE and the tile's depth is never written out. The store op
-// is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED: the
-// pass whose index equals the previous frame's count of main-depth passes, less one, and only once
-// that count has been the same for kDiscardStableFrames frames in a row. A wrong prediction is caught
-// where it matters: a main-depth pass that LOADs while the contents are discarded clears instead (the
-// far plane, stencil 0). That pass's geometry is then drawn against an empty depth for one frame (it
-// shows through the scene), so ONE miss turns the discard off for the rest of the session (logged).
-uint32_t g_lastFrameDepthPasses = 0;
-uint32_t g_depthPassesStable = 0;  // frames in a row with the same count of main-depth passes
-bool g_depthLost = false;          // the main depth's contents were discarded and not cleared since
-bool g_discardOff = false;         // a prediction missed: no discard for the rest of the session
-uint32_t g_depthMispredicts = 0;   // since the start (the frame line)
-constexpr uint32_t kDiscardStableFrames = 600;
+// is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED from
+// the frame's structure signature (depth_discard.h, P8): BeginPass notes every pass, DrawResolve and
+// DrawReadImage note theirs. A wrong prediction is caught where it matters: a main-depth pass that
+// LOADs while the contents are discarded clears instead (the far plane, stencil 0), and the discard is
+// off for the rest of the session (logged).
+DepthDiscardPredictor g_discard;
+
+// A structural event's token for the signature: an image state's address (stable for the image's life)
+// and a kind.
+uint64_t StructureToken(const void* state, uint64_t kind) {
+    return (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(state)) << 8) ^ kind;   // CAST-OK: identity only
+}
+
+uint64_t PassToken(const Target& t) {
+    return StructureToken(t.color, 'C') * 31u + StructureToken(t.depth, t.main ? 'M' : 'D');
+}
 // A one-shot command pool for a read-back outside a frame (under the device lock).
 VkCommandPool g_readPool = VK_NULL_HANDLE;
 
@@ -506,6 +511,20 @@ bool BeginPass(const Target& t) {
     if (t.color) TransitionImage(*t.color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
     if (t.resolve) TransitionImage(*t.resolve, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
     if (t.depth) TransitionImage(*t.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, &g_barriers);
+    if (t.main) {
+        // P8 (the main-target split, docs/android/P8_VULKAN.md §4): the render buffers drawn before a main
+        // pass (the reflection, the sun map) are made to be sampled in it. Moved to SHADER_READ_ONLY here,
+        // between passes; left in their attachment layouts, the first draw sampling one (the water, after
+        // the terrain) ended the main pass (PrepareTextures) and the main target was stored and loaded
+        // once more per frame. One that is rendered again later moves back at its own pass.
+        for (ImageState* s : g_touched) {
+            if (s == t.color || s == t.depth) continue;
+            if (s->layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
+                s->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+                TransitionImage(*s, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+            }
+        }
+    }
     FlushBarriers(cb, &g_barriers);
     if (!t.main) {
         if (t.color) Touch(t.color);
@@ -547,28 +566,27 @@ bool BeginPass(const Target& t) {
         depth.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
         stencil.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
     }
+    // P8: the pass is a structural event of the frame (THE DEPTH DISCARD's signature).
+    g_discard.Note(PassToken(t));
     if (t.depth == &g_main.depthState) {
         // P7, THE DEPTH DISCARD (above).
         const uint32_t index = g_frame.depthPasses++;
         const bool loads = depth.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD ||
                            (hasStencil && stencil.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
-        if (g_depthLost && loads) {
+        bool missed = false;
+        const bool discard = g_discard.MainDepthPass(loads, !g_readableRequested.load(), &missed);
+        if (missed) {
             depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depth.clearValue.depthStencil.depth = 1.0f;
             stencil.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             stencil.clearValue.depthStencil.stencil = 0;
-            g_discardOff = true;
-            ++g_depthMispredicts;
             std::fprintf(stderr, "[Vulkan] the main depth was discarded by a pass predicted last, then loaded "
-                                 "(pass %u, last frame %u): cleared instead; the discard is off for the session "
-                                 "(THE DEPTH DISCARD)\n", index, g_lastFrameDepthPasses);
+                                 "(pass %u): cleared instead; the discard is off for the session "
+                                 "(THE DEPTH DISCARD)\n", index);
         }
-        g_depthLost = false;
-        if (!g_discardOff && g_depthPassesStable >= kDiscardStableFrames && !g_readableRequested.load() &&
-            index + 1 == g_lastFrameDepthPasses) {
+        if (discard) {
             depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            g_depthLost = true;
             ++g_frame.depthDiscards;
         }
     }
@@ -613,7 +631,31 @@ void FlushPendingClear() {
     if (!g_frame.active) return;
     if (!g_clear.color && !g_clear.depth && !g_clear.stencil) return;
     EndPass();
-    if (EnsurePass()) EndPass();
+    Target t;
+    if (!ResolveTarget(g_bound.target, &t)) {
+        g_clear = PendingClear{};
+        return;
+    }
+    // P8: the empty pass attaches only what it clears, as D3D11's ClearRenderTargetView /
+    // ClearDepthStencilView touch only their own view. With the depth attached to a colour-only clear
+    // (the game's first frame clears the main colour alone), the pass loaded and stored the depth for
+    // nothing, and read as a main-depth pass that LOADs (THE DEPTH DISCARD took it for a miss).
+    if (!g_clear.color) {
+        t.color = nullptr;
+        t.colorView = VK_NULL_HANDLE;
+        t.resolve = nullptr;
+        t.resolveView = VK_NULL_HANDLE;
+    }
+    if (!g_clear.depth && !g_clear.stencil) {
+        t.depth = nullptr;
+        t.depthView = VK_NULL_HANDLE;
+    }
+    if (!t.color && !t.depth) {
+        g_clear = PendingClear{};
+        return;
+    }
+    BeginPass(t);
+    EndPass();
 }
 
 // The textures the draw being issued samples are moved to SHADER_READ_ONLY before its pass begins (a
@@ -1283,7 +1325,8 @@ bool DrawStartup(std::string* why) {
     g_loggedTargets.clear();
     g_touched.clear();
     g_logOnce = 0;
-    auto pi = Make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+    g_discard.StructureChanged();
+    auto pi =Make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pi.queueFamilyIndex = LiveGraphicsFamily();
     if (vkCreateCommandPool(LiveDevice(), &pi, nullptr, &g_readPool) != VK_SUCCESS) {
@@ -1343,6 +1386,7 @@ void DrawBeginFrame(const FrameTarget& target) {
     g_frame.lastPair = lastPair;
     g_frame.lastValid = lastValid;
     g_clear = PendingClear{};
+    g_discard.BeginFrame();
     g_swap.image = target.image;
     g_swap.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     // A pre-rotated frame's source was left in SHADER_READ_ONLY by the previous frame's present pass:
@@ -1377,12 +1421,7 @@ void DrawEndFrame() {
     if (!g_frame.active) return;
     FlushPendingClear();
     EndPass();
-    if (g_frame.depthPasses == g_lastFrameDepthPasses) {
-        if (g_depthPassesStable < kDiscardStableFrames) ++g_depthPassesStable;
-    } else {
-        g_depthPassesStable = 0;
-    }
-    g_lastFrameDepthPasses = g_frame.depthPasses;
+    g_discard.EndFrame();
     VkCommandBuffer cb = g_frame.target.cb;
     // A frame that drew nothing on the main colour still presents a defined image: black.
     if (!g_frame.mainDrawn && EnsureMainTargets()) {
@@ -1438,13 +1477,14 @@ void DrawLogFrame(uint64_t frame, const Video::Context* context) {
                  static_cast<unsigned long long>(frame), context->_drawsSubmitted, context->_trianglesSubmitted,
                  context->_verticesSubmitted, context->_objectsSubmitted, g_frame.passes, g_frame.targetPasses,
                  g_frame.resolves, g_frame.reads, g_frame.setsAllocated, g_frame.pushes,
-                 g_frame.depthDiscards, g_frame.depthPasses, g_depthMispredicts,
+                 g_frame.depthDiscards, g_frame.depthPasses, g_discard.Mispredicts(),
                  static_cast<unsigned long long>(g_frame.ringBytes), g_frame.failedDraws, built, warmed, failed, static_cast<unsigned long long>(uploadBytes >> 10),
                  batches);
 }
 
 void DrawTargetsChanged() {
     g_targetsChanged = true;
+    g_discard.StructureChanged();
 }
 
 // ---- the companions' Bind slots ----------------------------------------------------------------------
@@ -1566,6 +1606,13 @@ void DrawResolve(const Video::RenderBuffer* dst, const Video::RenderBuffer* src)
     FlushBarriers(cb, &g_barriers);
     CopyColor(cb, source->image, sourceFormat, sourceExtent, to->image.image, to->image.format,
               { to->image.width, to->image.height });
+    // P8 (the frame-copy split, docs/android/P8_VULKAN.md §4): the copy is made to be sampled, so it is
+    // moved to SHADER_READ_ONLY here, between passes. Left in TRANSFER_DST, the first draw sampling it
+    // ended the main pass that had begun after the copy (PrepareTextures), and the main target was
+    // stored and loaded once more per frame for nothing.
+    TransitionImage(to->state, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+    FlushBarriers(cb, &g_barriers);
+    g_discard.Note(StructureToken(&to->state, 'R'));
     ++g_frame.resolves;
 }
 
@@ -1611,6 +1658,7 @@ bool DrawReadImage(ImageBufferData* image, void* dst, int width, int height) {
         vkCmdPipelineBarrier2(cb, &hostDep);
         g_frame.target.cb = SubmitFrameSoFar();
         ResetCommandState();
+        g_discard.Note(StructureToken(&image->state, 'Q'));
         ++g_frame.reads;
     } else {
         // Between frames (the device lock is held): a command buffer of its own, after the upload batch.
