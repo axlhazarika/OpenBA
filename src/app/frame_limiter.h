@@ -8,23 +8,29 @@
 // thousands of FPS and pegs one CPU core to 100%. The only natural throttle
 // is Present blocking on vsync, which the standalone never enables.
 //
-// FrameLimiter::Tick() is called once per rendered frame (from the loop's Draw
-// vtable slot — the only per-frame chokepoint we own in standalone, since the
-// outer Frame loop lives in the Runtime DLL). It paces the loop to an UPPER
-// ceiling of (display refresh + headroom) FPS.
+// FrameLimiter::Tick() is called once per rendered frame of the menu (the menu loop's Draw vtable
+// slot), TickInGame() once per rendered frame of the game (GameUpdateLoop::Draw): the per-frame
+// chokepoints we own. Both sleep at the start of the frame's Draw; MainLoop::Frame's fixed-step
+// accumulator (mainloop_frame.cpp) still runs every simulation step the elapsed time owes, so a
+// slower frame rate never changes the sim tick rate, only how many frames draw it.
 //
-// The ceiling sits ABOVE the refresh rate on purpose: it exists only to kill
-// the multi-thousand-FPS spin, never to be the real limiter. Any external
-// pacing the user has — G-Sync/FreeSync, driver/in-game vsync, RTSS, a driver
-// frame cap — runs at or below refresh and therefore engages first; our
-// limiter then measures elapsed >= interval and sleeps zero. So external frame
-// limiting always works and is never fought.
+// Which ceiling a loop gets is frame_limiter_ceiling.h (ResolveCeiling):
+//   * the menu: an UPPER ceiling of (display refresh + headroom) FPS that sits ABOVE the refresh
+//     rate on purpose: it exists only to kill the multi-thousand-FPS spin, never to be the real
+//     limiter. Any external pacing the user has (G-Sync/FreeSync, vsync, RTSS, a driver cap) runs
+//     at or below refresh and engages first; the limiter then measures elapsed >= interval and
+//     sleeps zero, so external frame limiting is never fought;
+//   * the game: nothing, unless a cap is asked for (uncapped, as retail);
+//   * both: the settings cap (ext.fps_cap, the Options dialog's "Frame rate cap"; the phone's first
+//     run turns it on at 60), set through SetSettingsCap;
+//   * both, over everything: the harness flag.
 //
-// Tuning (env vars, read once at first Tick):
-//   BANISHED_FPS_CAP=<n>        Absolute ceiling in FPS. 0 / "off" = disabled
-//                              (fully uncapped). Overrides the auto ceiling.
-//   BANISHED_FPS_HEADROOM=<p>   Percent above display refresh for the auto
-//                              ceiling. Default 50 (=> refresh * 1.5).
+// Tuning (env vars, read once at first Tick, through Opt()):
+//   BANISHED_FPS_CAP=<n>        Absolute ceiling in FPS for the menu AND the game. 0 / "off" =
+//                              disabled (fully uncapped). Overrides the auto ceiling and the
+//                              settings cap.
+//   BANISHED_FPS_HEADROOM=<p>   Percent above display refresh for the menu's auto ceiling.
+//                              Default 50 (=> refresh * 1.5).
 
 #pragma once
 
@@ -37,12 +43,19 @@ namespace FrameLimiter {
 // lowest added latency. First call only primes the timestamp.
 void Tick();
 
+// The game loop's twin of Tick (GameUpdateLoop::Draw): paces only to the settings cap or the
+// harness flag; a no-op (no clock read beyond one test) when neither asks for a cap.
+void TickInGame();
+
+// The settings cap in FPS, 0 = none (src/ext/fps_cap/: at boot and when the Options dialog
+// applies). Main thread. Takes effect at the next Tick / TickInGame.
+void SetSettingsCap(double fps);
+
 // Most recent measured frame rate (frames/sec), updated ~once per second.
 // 0 until enough frames have elapsed. Intended for HUD/log readout.
 double GetFps();
 
-// The active ceiling in FPS (0 if the limiter is disabled). Valid after the
-// first Tick().
+// The ceiling the last Tick / TickInGame paced to, in FPS (0 if that loop is not paced).
 double GetCapFps();
 
 } // namespace FrameLimiter

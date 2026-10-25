@@ -3,6 +3,7 @@
 
 
 #include "frame_limiter.h"
+#include "frame_limiter_ceiling.h"
 #include "options.h"
 
 #include "platform_window.h"   // Platform::Window::GetCurrentDisplayRefreshHz (SDL W4)
@@ -19,13 +20,20 @@ namespace FrameLimiter {
 namespace {
 
 bool      g_initialized   = false;
-bool      g_enabled       = true;     // false => fully uncapped (no-op Tick)
 int64_t   g_qpcFreq       = 0;        // QueryPerformanceFrequency
+
+// The three sources (frame_limiter_ceiling.h), resolved at the first Tick except the settings cap.
+HarnessCap g_harness      = HarnessCap::None;   // BANISHED_FPS_CAP
+double    g_harnessFps    = 0.0;
+double    g_autoFps       = 0.0;      // the menu's refresh + headroom ceiling
+double    g_settingsFps   = 0.0;      // SetSettingsCap (ext.fps_cap), 0 = none
+
 int64_t   g_intervalTicks = 0;        // QPC ticks per frame at the ceiling
-double    g_capFps        = 0.0;      // resolved ceiling (FPS)
+double    g_capFps        = 0.0;      // the ceiling the last tick paced to (0 = not paced)
+bool      g_lastMenu      = true;     // which loop the last tick was
 
 int64_t   g_lastFrameTick = 0;        // QPC stamp the prior frame was released at
-bool      g_havePrev      = false;    // false until the first Tick primes it
+bool      g_havePrev      = false;    // false until the first paced tick primes it
 
 // High-resolution waitable timer (Win10 1803+). Lets us sleep with sub-ms
 // precision without timeBeginPeriod's process-wide clock bump. Null => fall
@@ -59,59 +67,72 @@ void Init() {
     Platform::PerfFrequency(&f);  // QueryPerformanceFrequency
     g_qpcFreq = f;
 
-    // --- Resolve the ceiling FPS ---
-    double targetFps = 0.0;
-    bool   capFromEnv = false;
-
+    // --- The harness flag ---
     if (const char* capEnv = Opt().fpsCap) {
         if (rtcrt::StrICmp(capEnv, "off") == 0 || rtcrt::StrICmp(capEnv, "false") == 0) {
-            g_enabled = false;
+            g_harness = HarnessCap::Off;
         } else {
             double v = atof(capEnv);
             if (v <= 0.0) {
-                g_enabled = false;      // "0" => disabled
+                g_harness = HarnessCap::Off;   // "0" => disabled
             } else {
-                targetFps  = v;
-                capFromEnv = true;
+                g_harness    = HarnessCap::Fixed;
+                g_harnessFps = v;
             }
         }
     }
 
-    if (g_enabled && !capFromEnv) {
-        int refresh = QueryDisplayRefreshHz();
-        if (refresh <= 0) refresh = 60;     // safe default if the query fails
-
-        double headroomPct = 50.0;          // default: ceiling = refresh * 1.5
-        if (const char* hrEnv = Opt().fpsHeadroom) {
-            double h = atof(hrEnv);
-            if (h >= 0.0) headroomPct = h;
-        }
-        targetFps = (double)refresh * (1.0 + headroomPct / 100.0);
+    // --- The menu's automatic ceiling ---
+    int refresh = QueryDisplayRefreshHz();
+    if (refresh <= 0) refresh = 60;     // safe default if the query fails
+    double headroomPct = 50.0;          // default: ceiling = refresh * 1.5
+    if (const char* hrEnv = Opt().fpsHeadroom) {
+        double h = atof(hrEnv);
+        if (h >= 0.0) headroomPct = h;
     }
+    g_autoFps = (double)refresh * (1.0 + headroomPct / 100.0);
 
-    if (g_enabled) {
-        g_capFps        = targetFps;
-        g_intervalTicks = (int64_t)((double)g_qpcFreq / targetFps);
-        if (g_intervalTicks < 1) g_intervalTicks = 1;
-
-        // CreateWaitableTimerExW(.., HIGH_RESOLUTION, TIMER_ALL_ACCESS), and on an
-        // older OS without the high-res flag CreateWaitableTimerW(NULL, FALSE, NULL).
-        g_timer = Platform::WaitTimerCreate();
-
+    if (g_harness == HarnessCap::Off) {
         // Log to stderr: in standalone, stdout is freopen'd to standalone_debug.log
         // which a stale instance can hold open (redirect silently fails, output
         // lost); stderr -> standalone_error.log is reliable and survives close.
-        fprintf(stderr,
-               "[FrameLimiter] ceiling = %.1f FPS (%.3f ms/frame)%s, "
-               "hi-res timer=%s. External limiters (vsync/G-Sync/RTSS) at or "
-               "below refresh are never affected.\n",
-               g_capFps, 1000.0 / g_capFps,
-               capFromEnv ? " [BANISHED_FPS_CAP]" : " [refresh+headroom]",
-               g_timer ? "yes" : "no (Sleep fallback)");
-    } else {
         fprintf(stderr, "[FrameLimiter] disabled (uncapped) via BANISHED_FPS_CAP\n");
+        fflush(stderr);
     }
-    fflush(stderr);
+}
+
+// A new ceiling for the loop about to be paced (0 = none): the interval, the timer, one log line,
+// and the cadence primed again.
+void SetCeiling(double fps, bool menu) {
+    if (fps == g_capFps && menu == g_lastMenu) return;
+    const bool logIt = (fps != g_capFps);
+    g_capFps   = fps;
+    g_lastMenu = menu;
+    g_havePrev = false;
+    if (fps <= 0.0) {
+        if (logIt) {
+            fprintf(stderr, "[FrameLimiter] %s: not paced\n", menu ? "menu" : "game");
+            fflush(stderr);
+        }
+        return;
+    }
+    g_intervalTicks = (int64_t)((double)g_qpcFreq / fps);
+    if (g_intervalTicks < 1) g_intervalTicks = 1;
+    // CreateWaitableTimerExW(.., HIGH_RESOLUTION, TIMER_ALL_ACCESS), and on an
+    // older OS without the high-res flag CreateWaitableTimerW(NULL, FALSE, NULL).
+    if (g_timer == nullptr) g_timer = Platform::WaitTimerCreate();
+    if (logIt) {
+        const char* source = g_harness == HarnessCap::Fixed ? "BANISHED_FPS_CAP"
+                             : fps == g_settingsFps          ? "settings cap"
+                                                             : "refresh+headroom";
+        fprintf(stderr,
+               "[FrameLimiter] %s: ceiling = %.1f FPS (%.3f ms/frame) [%s], "
+               "hi-res timer=%s. External limiters (vsync/G-Sync/RTSS) at or "
+               "below the ceiling are never affected.\n",
+               menu ? "menu" : "game", fps, 1000.0 / fps, source,
+               g_timer ? "yes" : "no (Sleep fallback)");
+        fflush(stderr);
+    }
 }
 
 // Block until `deadlineTick`. Coarse-sleeps the bulk via the waitable timer,
@@ -144,11 +165,11 @@ void WaitUntil(int64_t deadlineTick) {
     }
 }
 
-} // namespace
-
-void Tick() {
+// One paced frame of `menu`'s loop (Tick / TickInGame).
+void Pace(bool menu) {
     if (!g_initialized) Init();
-    if (!g_enabled) return;
+    SetCeiling(ResolveCeiling(g_harness, g_harnessFps, g_autoFps, g_settingsFps, menu), menu);
+    if (g_capFps <= 0.0) return;
 
     int64_t now = QpcNow();
 
@@ -176,18 +197,45 @@ void Tick() {
         g_lastFrameTick = deadline;
     }
 
-    // --- FPS measurement (once per ~second) ---
+    // --- FPS measurement (once per ~second; the readout every second in the menu, every ten in
+    // game, so a long session's log stays short) ---
     g_fpsFrameCount++;
     int64_t elapsed = now - g_fpsWindowStart;
     if (elapsed >= g_qpcFreq) {
         g_measuredFps    = (double)g_fpsFrameCount * (double)g_qpcFreq / (double)elapsed;
         g_fpsWindowStart = now;
         g_fpsFrameCount  = 0;
-        // Periodic readout to stderr (reliable; see Init()).
-        fprintf(stderr, "[FrameLimiter] fps=%.1f (cap=%.1f)\n",
-                g_measuredFps, g_capFps);
-        fflush(stderr);
+        static int s_gameWindows = 0;
+        if (menu || (++s_gameWindows % 10) == 0) {
+            // Periodic readout to stderr (reliable; see Init()).
+            fprintf(stderr, "[FrameLimiter] fps=%.1f (cap=%.1f)%s\n",
+                    g_measuredFps, g_capFps, menu ? "" : " in game");
+            fflush(stderr);
+        }
     }
+}
+
+} // namespace
+
+void Tick() {
+    Pace(true);
+}
+
+void TickInGame() {
+    // The common case off the phone (no flag, no settings cap): one test, no clock read.
+    if (g_initialized && g_harness != HarnessCap::Fixed && g_settingsFps <= 0.0) {
+        if (g_capFps != 0.0 || g_lastMenu) SetCeiling(0.0, false);
+        return;
+    }
+    Pace(false);
+}
+
+void SetSettingsCap(double fps) {
+    if (fps < 0.0) fps = 0.0;
+    if (fps == g_settingsFps) return;
+    g_settingsFps = fps;
+    fprintf(stderr, "[FrameLimiter] settings cap = %.0f FPS%s\n", fps, fps > 0.0 ? "" : " (none)");
+    fflush(stderr);
 }
 
 double GetFps()    { return g_measuredFps; }
