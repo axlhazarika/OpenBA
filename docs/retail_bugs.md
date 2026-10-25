@@ -423,3 +423,38 @@ same request against the same table and drops it the same way.
 
 **Lever.** Add 0x15 to state 9's transitions, so the all-done branch reaches the re-clear (ClearArea
 state 0x15) as states 10 and 11 do.
+
+## 12. A dragged slider snaps back when the pointer strays off it
+
+**Symptom.** Drag the thumb of any slider (the Options dialog's "User interface scale", the
+volume sliders, a terrain-edit brush slider) and let the pointer drift more than 32 pixels above,
+below or past either end of the slider: the thumb jumps back to where the drag began and stays
+there while the pointer is outside. Releasing the button out there discards the drag. Dragging
+past an end to pin the value at its minimum or maximum therefore does not work unless the pointer
+stays within 32 pixels of the track.
+
+**Retail mechanism.**
+- `SliderElement::Update` (`0x1800d67e0`) arms the drag on a press over the thumb:
+  `_dragAnchor = _value` and flag bit 21 (`kFlagDragging`).
+- It then tests a band 32 pixels (`0x20`) around the slider's layout rectangle. While dragging
+  and outside the band it stores `_value = _dragAnchor`, calls `UpdateNumber` (`0x1800d6c20`) and
+  returns -- before the release test and before the drag arm.
+- Inside the band the drag arm sets `_value = _dragAnchor - dragDx / span * (max - min)`
+  (`dragDx` = press x minus current x, `UserInterface::Update` `0x1801213c0`), and the tail clamps
+  `_value` to `[_minimum, _maximum]`.
+- Because the early return skips the release test, a release outside the band leaves bit 21 set;
+  the next release inside the band clears it.
+
+**Proof it is retail.** The port's `src/engine/ui/sliderelement.cpp` `SliderElement::Update` is
+the address-by-address port of `0x1800d67e0`; the early return is retail's block. Reported by
+the user 2026-10-25 on the UI scale slider.
+
+**Lever.** In the band test, while dragging, treat the pointer as inside the band: the drag arm
+follows `dragDx`, the existing tail clamp holds the value at its ends, and a release clears bit 21
+and keeps the value (the release frame's `dragDx` is 0, but the drag arm re-reads the flag after
+the release cleared it, so the value is not recomputed). The page-step arm (a press left or right
+of the thumb) is unchanged.
+
+Fix: `fix.slider_drag_clamp` (tier 1), default on, engine seam `UI::SliderElement::_extFixDragClamp`
+(a null-by-default pointer the game side points at the fix's bool at boot: DESIGN.md hook rule 5).
+Hand-in `docs/extensions/handins/SLIDERCLAMP.md`.
