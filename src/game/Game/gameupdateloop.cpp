@@ -361,10 +361,24 @@ extern "C" int GameUpdateLoop_CurrentFrame() { return s_frameNum; }
 // Android answers): a save the platform asked for (SDL_EVENT_LOW_MEMORY / TERMINATING) runs the
 // game's own autosave body, AutoSaveDialog::Autosave (0x14005dec0), with its own refusals (the UI
 // pauses the game, the world is blocked, an operation runs). A refused request is retried every 120
-// frames, up to ten times.
+// frames, up to ten times. A request is for the game being played: one made while no game ran (the
+// main menu, a load) is dropped when the next game starts (ResetPlatformSaveRequest), so it never
+// rotates that game's Auto.sav unasked.
+static int s_savePending = 0;   // tries left
+static int s_saveWait = 0;      // frames to the next try
+
+static void ResetPlatformSaveRequest() {
+    if (Platform::App::TakeSaveRequest()) {
+        fprintf(stderr, "[Lifecycle] a save request made while no game ran is dropped\n");
+        fflush(stderr);
+    }
+    s_savePending = 0;
+    s_saveWait = 0;
+}
+
 static void HonourPlatformSaveRequest(UI::UserInterface* ui) {
-    static int s_pending = 0;   // tries left
-    static int s_wait = 0;      // frames to the next try
+    int& s_pending = s_savePending;
+    int& s_wait = s_saveWait;
     if (Platform::App::TakeSaveRequest()) {
         s_pending = 10;
         s_wait = 0;
@@ -385,6 +399,13 @@ static void HonourPlatformSaveRequest(UI::UserInterface* ui) {
         }
     }
     --s_pending;
+    if (saveLoad != nullptr && saveLoad->GetOperation() == Save::SaveLoad::kOpSave) {
+        fprintf(stderr, "[Lifecycle] the platform's save request found a save already running (frame %d)\n",
+                s_frameNum);
+        fflush(stderr);
+        s_pending = 0;
+        return;
+    }
     if (autoSave != nullptr && saveLoad != nullptr) {
         autoSave->Autosave();
         if (saveLoad->GetOperation() == Save::SaveLoad::kOpSave) {
@@ -1628,6 +1649,7 @@ void GameUpdateLoop::Draw(float alpha) {
 // ============================================================
 
 void GameUpdateLoop::Startup() {
+    ResetPlatformSaveRequest();   // NOT RETAIL (P7): a game starts; earlier save requests are not its
     // [HUD-DIAG] Unconditional one-shot: confirm Startup is invoked at all, and
     // whether the world is already built (m_game set) when it runs. If Startup
     // fires before Load (m_game==null), it early-returns forever and the HUD
