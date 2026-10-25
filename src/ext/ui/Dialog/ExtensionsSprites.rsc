@@ -64,6 +64,7 @@ SpriteSheet resource
 		{ String _name = "ExtensionsGlyph_terrain_mountain";	String _source = "Sprite/Extensions/Glyph_terrain_mountain.png"; }
 		{ String _name = "ExtensionsGlyph_terrain_smooth";	String _source = "Sprite/Extensions/Glyph_terrain_smooth.png"; }
 		{ String _name = "ExtensionsGlyph_terrain_undo";	String _source = "Sprite/Extensions/Glyph_terrain_undo.png"; }
+		{ String _name = "ExtensionsGlyph_terrain_plant";	String _source = "Sprite/Extensions/Glyph_terrain_plant.png"; }
 		{ String _name = "ToolbarExtensions";	String _source = "Sprite/Extensions/Toolbar_extensions.png"; }	// the toolbar's one extension button (ExtensionsWindow.rsc, src/ext/toolbar)
 		{ String _name = "ExtensionsEntry_terrain_batch";	String _source = "Sprite/Extensions/Entry_terrain_batch.png"; }
 		{ String _name = "ExtensionsEntry_decode_ahead";	String _source = "Sprite/Extensions/Entry_decode_ahead.png"; }

@@ -43,8 +43,16 @@ StringTable resource
 		{ String _name = "TerrainEditTab";				String _text = "Terrain"; }
 		{ String _name = "TerrainEditHint";				String _text = "Pick a brush, then hold the left mouse button over the map."; }
 		{ String _name = "TerrainEditHint2";			String _text = "Lower digs lakes; Flatten levels ground to build on; Mountain raises peaks."; }
-		{ String _name = "TerrainEditHint3";			String _text = "Right click ends the brush. Undo reverses the last stroke."; }
+		{ String _name = "TerrainEditHint3";			String _text = "Right click ends the tool."; }
+		{ String _name = "TerrainEditHeadingBrushes";		String _text = "Terrain Brushes"; }
+		{ String _name = "TerrainEditHeadingResources";		String _text = "Place Resources"; }
+		{ String _name = "TerrainEditHeadingShared";		String _text = "Both Tools"; }
+		{ String _name = "TerrainEditUndoNote";			String _text = "Undo reverses the last stroke of either tool."; }
 		{ String _name = "TerrainEditHint4";			String _text = "Undo does not bring back trees or rocks a lake covered."; }
+		{ String _name = "TerrainEditPlantHint";			String _text = "Plant: pick a resource, press the tree, then hold the left mouse button."; }
+		{ String _name = "TerrainEditPlantHint2";			String _text = "Density is how full the area gets; resources already there count."; }
+		{ String _name = "TerrainEditDensityLabel";		String _text = "Density"; }
+		{ String _name = "TerrainEditPlant";			String _text = "Plant the resource picked on the right"; }
 		{ String _name = "TerrainEditRaise";			String _text = "Raise"; }
 		{ String _name = "TerrainEditLower";			String _text = "Lower"; }
 		{ String _name = "TerrainEditFlatten";			String _text = "Flatten"; }

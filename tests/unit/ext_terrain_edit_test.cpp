@@ -6,6 +6,7 @@
 // the disc, its falloff and the height-word arithmetic. The tool and the page need the running game.
 // ============================================================================
 #include "unit.h"
+#include "ext/terrain_edit/plant_math.h"
 #include "ext/terrain_edit/terrain_edit_math.h"
 #include "ext/terrain_edit/terrain_undo.h"
 #include "ext/terrain_edit/terrain_water.h"
@@ -13,6 +14,7 @@
 #include "ext/registry.h"
 #include "io/settings_file.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -223,7 +225,7 @@ UNIT_TEST(ext_terrain_edit_mountain_height_is_a_peaked_cone) {
 
 UNIT_TEST(ext_terrain_edit_smooth_moves_toward_the_neighbours_in_both_directions) {
     using namespace Ext::TerrainEdit;
-    CHECK(kModeCount == 5);
+    CHECK(kModeCount == 6);   // the five brushes and the resource tool
     // a spike above its neighbours' average comes down, a pit below it comes up, and neither overshoots
     const float neighbours = 1.0f;
     const int avgWord = static_cast<int>(std::llround(neighbours * 256.0f));
@@ -285,6 +287,87 @@ UNIT_TEST(ext_terrain_edit_undo_records_the_type_the_stroke_wrote) {
     CHECK(u.Pop(s));
     CHECK(s.types.size() == 2 && s.types.at(9) == 2 && s.types.at(11) == 7);
     CHECK(s.written.size() == 2 && s.written.at(9) == 6 && s.written.at(11) == 2);
+}
+
+// The Resource drop down shows a template by its short name: no folder, no ".rsc:resource", no
+// "NaturalResource".
+UNIT_TEST(ext_terrain_edit_resource_names_are_short) {
+    using namespace Ext::TerrainEdit;
+    CHECK(ResourceShortName("Template\\NaturalResourceWillowTree.rsc:resource") == "WillowTree");
+    CHECK(ResourceShortName("Template\\Flax\\NaturalResourceFlax.rsc:resource") == "Flax");
+    CHECK(ResourceShortName("Template/NaturalResourceRock.rsc:resource") == "Rock");
+    CHECK(ResourceShortName("Template\\Mushroom.rsc") == "Mushroom");   // no prefix to take off
+    CHECK(ResourceShortName("Odd") == "Odd");
+    CHECK(ResourceShortName("").empty());
+}
+
+// Trees first, plants between, rocks, ore and salt last; each group by name.
+UNIT_TEST(ext_terrain_edit_resources_are_listed_trees_then_plants_then_rocks) {
+    using namespace Ext::TerrainEdit;
+    const std::vector<std::string> names = { "Rock", "Reed", "Tree", "Ore",
+                                             "WillowTree", "Bushes", "ShoreSalt", "Grass" };
+    const std::vector<size_t> order = ResourceOrder(names);
+    CHECK(order.size() == names.size());
+    const std::vector<std::string> expected = { "Tree", "WillowTree", "Bushes", "Grass",
+                                                "Reed", "Ore", "Rock", "ShoreSalt" };
+    for (size_t i = 0; i < order.size() && i < expected.size(); ++i) {
+        CHECK(names[order[i]] == expected[i]);
+    }
+    CHECK(ResourceOrder(std::vector<std::string>()).empty());
+}
+
+// The density is how full the disc ends up: the share of its eligible cells, rounded up, and what already
+// stands there counts toward it.
+UNIT_TEST(ext_terrain_edit_density_is_a_share_of_the_eligible_cells) {
+    using namespace Ext::TerrainEdit;
+    CHECK(PlantTarget(113, 0.1f) == 12);   // 11.3 rounds up
+    CHECK(PlantTarget(113, 0.5f) == 57);
+    CHECK(PlantTarget(113, 1.0f) == 113);
+    CHECK(PlantTarget(10, 1.0f) == 10);
+    CHECK(PlantTarget(3, 0.1f) == 1);      // a click on a small disc at a low density still plants one
+    CHECK(PlantTarget(0, 0.5f) == 0);      // nothing eligible
+    CHECK(PlantTarget(50, 0.0f) == 0);
+    CHECK(kMinDensity > 0.0f && kMaxDensity <= 1.0f && kDefaultDensity >= kMinDensity &&
+          kDefaultDensity <= kMaxDensity);
+}
+
+// A stroke picks exactly the number of cells it needs, the same ones for the same seed, and other cells for
+// another seed.
+UNIT_TEST(ext_terrain_edit_a_stroke_picks_the_cells_it_needs) {
+    using namespace Ext::TerrainEdit;
+    std::vector<int> cells;
+    for (int i = 0; i < 100; ++i) cells.push_back(1000 + i * 3);
+    const std::vector<int> a = PickCells(cells, 12, 7u);
+    CHECK(a.size() == 12);
+    CHECK(a == PickCells(cells, 12, 7u));   // the same seed picks the same cells
+    for (const int c : a) CHECK(std::find(cells.begin(), cells.end(), c) != cells.end());
+    std::vector<int> sorted = a;
+    std::sort(sorted.begin(), sorted.end());
+    CHECK(std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end());   // no cell twice
+    CHECK(a != PickCells(cells, 12, 8u));   // another stroke picks other cells
+    CHECK(PickCells(cells, 0, 7u).empty());
+    CHECK(PickCells(cells, -3, 7u).empty());
+    CHECK(PickCells(cells, 100, 7u).size() == 100);   // all of them
+    CHECK(PickCells(cells, 500, 7u).size() == 100);   // more than there are: all of them
+    CHECK(PickCells(std::vector<int>(), 5, 7u).empty());
+}
+
+// A stroke remembers what it planted, and a stroke that only planted is still a stroke.
+UNIT_TEST(ext_terrain_edit_undo_remembers_what_a_stroke_planted) {
+    using namespace Ext::TerrainEdit;
+    UndoStack u;
+    u.RecordPlanted(3, 0x1000);   // no stroke open: ignored
+    u.BeginStroke();
+    u.RecordPlanted(3, 0x1000);
+    u.RecordPlanted(9, 0x2000);
+    u.CommitStroke();
+    CHECK(u.Depth() == 1);   // planted resources alone make a step
+    Stroke s;
+    CHECK(u.Pop(s));
+    CHECK(s.planted.size() == 2);
+    CHECK(s.planted[0].cell == 3 && s.planted[0].entity == 0x1000);
+    CHECK(s.planted[1].cell == 9 && s.planted[1].entity == 0x2000);
+    CHECK(s.heights.empty() && s.types.empty());
 }
 
 UNIT_TEST(ext_terrain_edit_undo_is_last_in_first_out_and_skips_empty_strokes) {

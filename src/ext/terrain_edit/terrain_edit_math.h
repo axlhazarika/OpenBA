@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "ext/terrain_edit/plant_math.h"
+
 namespace Ext {
 namespace TerrainEdit {
 
@@ -67,8 +69,8 @@ inline int RaisedWord(int word, float delta) {
 // and the mountain brush aims above the mountain line. Lower goes down to the lake floor, and a cell that
 // falls under the water line becomes water; the page draws that water again when the stroke ends
 // (brush_tool.cpp, terrain_water.h), because the game builds its water mesh only once, at world generation.
-enum class Mode : int { Raise = 0, Lower = 1, Flatten = 2, Mountain = 3, Smooth = 4 };
-constexpr int kModeCount = 5;
+enum class Mode : int { Raise = 0, Lower = 1, Flatten = 2, Mountain = 3, Smooth = 4, Plant = 5 };
+constexpr int kModeCount = 6;
 
 constexpr float kDefaultRadius   = 6.0f;
 constexpr float kRadiusStep      = 2.0f;
@@ -101,6 +103,8 @@ struct BrushState {
     Mode  mode     = Mode::Raise;
     float radius   = kDefaultRadius;
     float strength = 1.0f;
+    // the resource tool: how full it leaves the disc (plant_math.h, PlantTarget)
+    float density  = kDefaultDensity;
 };
 
 inline float ClampFloat(float v, float lo, float hi) {
@@ -194,6 +198,8 @@ inline int NextWord(int word, Mode mode, float weight, float strength, float tar
             const int moved = static_cast<int>(std::llround(gap * static_cast<double>(share)));
             return RaisedWord(word, static_cast<float>(moved) / 256.0f);
         }
+        case Mode::Plant:
+            return word;   // the resource tool writes no height
         case Mode::Flatten:
         case Mode::Mountain: {
             const int targetWord = static_cast<int>(std::llround(target * 256.0f));
