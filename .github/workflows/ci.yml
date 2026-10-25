@@ -63,6 +63,10 @@ jobs:
       # src/render comes out of ccache. Headers only: no Vulkan runtime is needed to build it.
       - name: Build OpenBA (debug, vulkan backend)
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" BANISHED_RENDER_BACKEND=vulkan tools/build.sh build debug
+      # The unit tests again on the vulkan configure: they add tests/unit/vulkan_*_test.cpp (the
+      # dxbc-spirv shader converter and its SPIR-V cache), which only that configure builds.
+      - name: Unit tests (debug, vulkan backend)
+        run: BANISHED_RENDER_BACKEND=vulkan tools/build.sh unit debug
       - name: ccache statistics
         if: always()
         run: ccache -s
@@ -98,6 +102,10 @@ jobs:
         run: tools/build.sh unit debug
       - name: Build OpenBA (debug, vulkan backend)
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" BANISHED_RENDER_BACKEND=vulkan tools/build.sh build debug
+      # The unit tests again on the vulkan configure: they add tests/unit/vulkan_*_test.cpp (the
+      # dxbc-spirv shader converter and its SPIR-V cache), which only that configure builds.
+      - name: Unit tests (debug, vulkan backend)
+        run: BANISHED_RENDER_BACKEND=vulkan tools/build.sh unit debug
       - name: ccache statistics
         if: always()
         run: ccache -s

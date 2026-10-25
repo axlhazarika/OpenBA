@@ -8,13 +8,15 @@
 // bodies are device.cpp (DeviceData, ContextData, the render-target attach slots) and
 // companions.cpp (buffers, images, programs, layouts, states).
 //
-// P0 (docs/vulkan/PLAN.md §5): the device, swap chain and frame loop are real; every
-// resource class is a stub that accepts what the engine hands it and draws nothing. Each
-// stub says so in its body. No retail layout constraints apply to a backend subclass's own
+// P0 (docs/vulkan/PLAN.md §5): the device, swap chain and frame loop are real. P1: the two
+// program classes convert their DXBC to SPIR-V shader modules. Every other resource class is
+// still a stub that accepts what the engine hands it and draws nothing; each stub says so in
+// its body. No retail layout constraints apply to a backend subclass's own
 // members (the base pins the two words every companion starts with).
 // ============================================================================
 
 #include "vk_api.h"
+#include "shader_convert.h"
 #include "video/CompanionData.h"
 
 #include <cstdint>
@@ -139,20 +141,36 @@ public:
     void PlatformCreate() override;
 };
 
+// The programs (P1): the owner's DXBC permutation blobs (Video::ShaderProgram::_byteCode, up to four,
+// the DX11 `variants` rule of src/render/dx11/shaderprograms.cpp) converted to SPIR-V
+// (shader_convert.h, through the derived-data cache), one VkShaderModule per permutation the
+// program has, with its reflection. Bind records the permutation P2's pipeline key reads.
+constexpr int kPermutationCount = 4;
+
+// One log line with the modules made, served from the cache and failed since the last call
+// (nothing when none); the loader bracket's end calls it (DeviceData::Slot4). companions.cpp.
+void LogProgramSummary();
+
 class VertexProgramData final : public Video::VertexProgramData {
 public:
     explicit VertexProgramData(Owner* o) : Video::VertexProgramData(o) {}
-    ~VertexProgramData() override = default;
+    ~VertexProgramData() override;
     bool PlatformCreate() override;
     void Bind(void* context, int permutation) override;
+    VkShaderModule modules[kPermutationCount] = {};
+    Shaders::ShaderReflection reflection[kPermutationCount];
+    int boundPermutation = 0;   // the last Bind's choice: the request when built, else 0
 };
 
 class PixelProgramData final : public Video::PixelProgramData {
 public:
     explicit PixelProgramData(Owner* o) : Video::PixelProgramData(o) {}
-    ~PixelProgramData() override = default;
+    ~PixelProgramData() override;
     bool PlatformCreate() override;
     void Bind(void* context, int permutation) override;
+    VkShaderModule modules[kPermutationCount] = {};
+    Shaders::ShaderReflection reflection[kPermutationCount];
+    int boundPermutation = 0;
 };
 
 class RenderStateData final : public Video::RenderStateData {

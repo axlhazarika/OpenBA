@@ -81,7 +81,9 @@ namespace VideoVulkan {
     X(vkDestroySemaphore)                                \
     X(vkQueueSubmit2)                                    \
     X(vkCmdPipelineBarrier2)                             \
-    X(vkCmdClearColorImage)
+    X(vkCmdClearColorImage)                              \
+    X(vkCreateShaderModule)                              \
+    X(vkDestroyShaderModule)
 
 #define VIDEO_VULKAN_DECLARE(name) extern PFN_##name name;
 VIDEO_VULKAN_GLOBAL_FUNCS(VIDEO_VULKAN_DECLARE)

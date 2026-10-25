@@ -10,3 +10,11 @@
 	path = third_party/Vulkan-Headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers
 	shallow = true
+[submodule "third_party/dxbc-spirv"]
+	path = third_party/dxbc-spirv
+	url = https://github.com/doitsujin/dxbc-spirv
+	shallow = true
+[submodule "third_party/SPIRV-Headers"]
+	path = third_party/SPIRV-Headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers
+	shallow = true

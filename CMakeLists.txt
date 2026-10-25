@@ -293,7 +293,7 @@ target_link_options(OpenBA PRIVATE ${FLAVOUR_FLAGS} -static -static-libgcc -stat
 target_link_libraries(OpenBA PRIVATE user32 dbghelp shell32 gdi32)
 # SDL3 static: the target carries its include directory and its system libraries
 target_link_libraries(OpenBA PRIVATE SDL3::SDL3-static)
-# The backend's own link libraries (dx11, vulkan: none; the Vulkan loader is opened by SDL).
+# The backend's own link libraries (dx11: none; vulkan: dxbc_spv, the loader is opened by SDL).
 target_link_libraries(OpenBA PRIVATE ${RENDER_BACKEND_LINK_LIBRARIES})
 # xWMA -> PCM (third_party/wmadec): the target carries its include directory
 target_link_libraries(OpenBA PRIVATE wmadec)
@@ -413,7 +413,12 @@ file(GLOB UNIT_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/*.cpp)
 if(NOT APPLE)
   list(FILTER UNIT_SRCS EXCLUDE REGEX "/platform_mac_data_test\\.cpp$")
 endif()
-add_executable(unit EXCLUDE_FROM_ALL ${UNIT_SRCS} ${UNIT_TREE_SRCS})
+# tests/unit/vulkan_*_test.cpp test the Vulkan backend's pure parts and build only when that backend
+# is configured (BANISHED_RENDER_BACKEND=vulkan): they need its RENDER_BACKEND_UNIT_SRCS / _LIBS.
+if(NOT BANISHED_RENDER_BACKEND STREQUAL "vulkan")
+  list(FILTER UNIT_SRCS EXCLUDE REGEX "/vulkan_[a-z_]+_test\\.cpp$")
+endif()
+add_executable(unit EXCLUDE_FROM_ALL ${UNIT_SRCS} ${UNIT_TREE_SRCS} ${RENDER_BACKEND_UNIT_SRCS})
 set_target_properties(unit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 add_dependencies(OpenBA ext-rsc-text openba-build-info)
 add_dependencies(unit ext-rsc-text)
@@ -433,6 +438,10 @@ endif()
 target_link_libraries(unit PRIVATE wmadec)
 # tests/unit/ext_font_raster_test.cpp: the FreeType rasteriser (and, on Windows, its GDI comparison)
 target_link_libraries(unit PRIVATE freetype_min)
+# The backend's unit-only library (vulkan: dxbc_spv; the other backends set none)
+if(RENDER_BACKEND_UNIT_LIBS)
+  target_link_libraries(unit PRIVATE ${RENDER_BACKEND_UNIT_LIBS})
+endif()
 add_custom_target(run-unit COMMAND unit DEPENDS unit WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ---------------------------------------------------------------------------------------

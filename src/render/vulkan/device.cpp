@@ -24,6 +24,7 @@
 // ============================================================================
 
 #include "VideoVulkanData.h"
+#include "device_objects.h"
 #include "vulkan_entry.h"
 
 #include "app/options.h"
@@ -45,8 +46,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace VideoVulkan {
@@ -101,6 +104,10 @@ uint64_t frameCount = 0;
 // The engine's Clear for the frame: colour as 0xAARRGGBB, applied in Finish.
 bool clearRequested = false;
 uint32_t clearColor = 0;
+// The shader modules CreateShaderModule made and nothing destroyed yet (device_objects.h); Shutdown
+// destroys the rest before the device. Its own lock: programs are created on the loader thread too.
+std::mutex moduleLock;
+std::unordered_set<VkShaderModule> liveModules;
 
 // The SDL window the surface is made on. Device::windowHandle is the native handle (the HWND on
 // Windows, retail's field); the SDL window that owns it is the one window_sdl.cpp created.
@@ -500,6 +507,34 @@ bool DeviceLive() {
     return device != VK_NULL_HANDLE;
 }
 
+// ---- device objects (device_objects.h) ----------------------------------------------------------
+
+VkShaderModule CreateShaderModule(const std::vector<uint32_t>& spirv, std::string* why) {
+    std::lock_guard<std::mutex> guard(moduleLock);
+    if (device == VK_NULL_HANDLE) {
+        if (why) *why = "no live device";
+        return VK_NULL_HANDLE;
+    }
+    auto ci = Make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+    ci.codeSize = spirv.size() * sizeof(uint32_t);
+    ci.pCode = spirv.data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    const VkResult r = vkCreateShaderModule(device, &ci, nullptr, &module);
+    if (r != VK_SUCCESS) {
+        if (why) *why = std::string("vkCreateShaderModule: ") + ResultName(r);
+        return VK_NULL_HANDLE;
+    }
+    liveModules.insert(module);
+    return module;
+}
+
+void DestroyShaderModule(VkShaderModule module) {
+    if (module == VK_NULL_HANDLE) return;
+    std::lock_guard<std::mutex> guard(moduleLock);
+    if (liveModules.erase(module) == 0 || device == VK_NULL_HANDLE) return;
+    vkDestroyShaderModule(device, module, nullptr);
+}
+
 // One GraphicsInterface with one Adapter per physical device (dxgiAdapterIndex = its index in
 // physicalDevices; CreateDevice reads it back from Device::dxgiAdapterIndex). The mode list is
 // the usable screen's, as on Metal: there is no DXGI output to ask.
@@ -761,6 +796,17 @@ void DeviceData::Shutdown() {
         if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
         swapchain = VK_NULL_HANDLE;
         DestroyFrames();
+        {
+            // Programs still alive at shutdown: their modules die with the device (device_objects.h).
+            std::lock_guard<std::mutex> guard(moduleLock);
+            if (!liveModules.empty()) {
+                std::fprintf(stderr, "[Vulkan] shutdown: %zu shader module(s) still held, destroyed with the device\n",
+                             liveModules.size());
+            }
+            for (VkShaderModule module : liveModules)
+                vkDestroyShaderModule(device, module, nullptr);
+            liveModules.clear();
+        }
         vkDestroyDevice(device, nullptr);
         device = VK_NULL_HANDLE;
         queue = VK_NULL_HANDLE;
@@ -777,9 +823,10 @@ void DeviceData::Shutdown() {
 }
 
 // The loader bracket (dx11 devicedata_stubs.cpp Slot4): retail's body is empty; the extensions'
-// load-end summaries hook here on the other backends. None are supported yet.
+// load-end summaries hook here on the other backends (none is supported yet). At a load's end the
+// backend's own program summary (companions.cpp) is logged.
 void DeviceData::Slot4(bool loading) {
-    (void)loading;
+    if (!loading) LogProgramSummary();
 }
 
 float DeviceData::Slot5() {
