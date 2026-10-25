@@ -438,14 +438,9 @@ char CropFieldComponent::State9PerFrame(StateMachine* sm) {
 
     if (done == total) {
         CF_ReleaseWorkSlot(this);
-        std::fprintf(stderr, "[CropXition] state 9 -> 21 (all %d done)\n", total);
-        std::fflush(stderr);
         ::ControllerLive::RequestStateTransition(sm, 21);
     } else if (growing + done == total) {
         CF_ReleaseWorkSlot(this);
-        std::fprintf(stderr, "[CropXition] state 9 -> 10 TEND (growing=%d done=%d total=%d)\n",
-                     growing, done, total);
-        std::fflush(stderr);
         ::ControllerLive::RequestStateTransition(sm, 10);
     }
     return 1;
@@ -454,8 +449,6 @@ char CropFieldComponent::State9PerFrame(StateMachine* sm) {
 // ── state 10 enter — 0x14011a100 — post a TendArea ────────────────────────────────
 // TendArea is 0x60 with no per-slot array and no desc field (vtable 0x140161990).
 char CropFieldComponent::State10Enter() {
-    std::fprintf(stderr, "[CropXition] STATE 10 ENTER - posting TendArea\n");
-    std::fflush(stderr);
     CF_PostWork(this, CF_MakeTendArea(this));
     return 1;
 }
@@ -469,8 +462,6 @@ char CropFieldComponent::State10Update() {
 // ── event 4 on state 10 — 0x140119f00 — the panel's HARVEST command ───────────────
 // It reads no field of the component (RCX unused): it stays a free function (B1).
 static char CropField_Event4Harvest(CropFieldComponent* /*self*/, StateMachine* sm) {
-    std::fprintf(stderr, "[CropXition] event 4 -> STATE 11 HARVEST\n");
-    std::fflush(stderr);
     ::ControllerLive::RequestStateTransition(sm, 11);
     return 1;
 }
@@ -517,8 +508,6 @@ char CropFieldComponent::State10PerFrame(StateMachine* sm) {
 // ── state 11 enter — 0x140119e60 — post a HarvestArea ─────────────────────────────
 // HarvestArea is 0x68 with a per-slot byte array and no desc field (vtable 0x1401614a0).
 char CropFieldComponent::State11Enter() {
-    std::fprintf(stderr, "[CropXition] STATE 11 ENTER - posting HarvestArea\n");
-    std::fflush(stderr);
     CF_PostWork(this, CF_MakeHarvestArea(this));
     return 1;
 }
