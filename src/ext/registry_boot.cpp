@@ -51,6 +51,8 @@
 #include <cstring>
 #include "system/String.h"
 #include "ui/UserInterface.h"   // the fix.ui_scale_layout seam (DESIGN.md hook rule 5)
+#include "ui/SliderElement.h"   // the fix.slider_drag_clamp seam (DESIGN.md hook rule 5)
+#include "ui/ScrollElement.h"   // the fix.slider_drag_clamp seam, scroll-bar half
 #include "engine/MainLoop.h"     // the fix.boot_device_lost seam (DESIGN.md hook rule 5)
 #include "boot_device_lost/boot_device_lost_backend.h"   // fix.boot_device_lost: the backend half
 #include "Game/WorldGeometry.h"  // the ext.terrain_batch seam (DESIGN.md hook rule 5)
@@ -132,6 +134,8 @@ void InitFromSettings() {
     // Engine-side fix seams: null by default, pointed at the live bool here
     // (fixes are global and live: the pointer follows the menu toggle).
     ::UI::UserInterface::_extFixScaleLayout = &Fix().ui_scale_layout;
+    ::UI::SliderElement::_extFixDragClamp = &Fix().slider_drag_clamp;
+    ::UI::ScrollElement::_extFixDragClamp = &Fix().slider_drag_clamp;
     // fix.boot_device_lost: one row, two seams -- the engine's SaveLoad-walk skip and the
     // renderer backend's recovery of a reset that failed on a removed device.
     ::Engine::MainLoop::_extFixBootDeviceLost = &Fix().boot_device_lost;
