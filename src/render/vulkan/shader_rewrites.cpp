@@ -122,8 +122,10 @@ ShaderEntry* EntryOf(const std::vector<uint8_t>& dxbc, Shaders::Stage stage, std
     std::vector<uint32_t> spirv;
     Shaders::ShaderReflection refl;
     bool hit = false;
+    Shaders::ConvertOptions options;
+    options.combineSamplers = true;   // P8: as the retail programs (shader_convert.h)
     if (!Shaders::LoadOrConvert(Ext::DerivedCache::OpenShared(), dxbc.data(), dxbc.size(), stage, &spirv, &refl, &hit,
-                                why)) {
+                                why, options)) {
         return nullptr;
     }
     VkShaderModule module = CreateShaderModule(spirv, why);

@@ -75,24 +75,34 @@ struct Bound {
 };
 Bound g_bound;
 
+// P8, combined image samplers (shader_convert.h): a stage's image descriptors, indexed i = t for the
+// texture bindings (BindingOfTexture(t)) and i = kTextureSlots + k for the further pairs
+// (BindingOfSampler(k)). Each is a view and the sampler it is combined with.
+constexpr uint32_t kImageBindings = Shaders::kMaxTextures + Shaders::kMaxSamplers;
+static_assert(kTextureSlots == Shaders::kMaxTextures, "texture slots are the texture registers");
+
+uint32_t ImageBinding(uint32_t i) {
+    return i < kTextureSlots ? Shaders::BindingOfTexture(i) : Shaders::BindingOfSampler(i - kTextureSlots);
+}
+
 // The descriptor contents of one stage's set (hashed bytes: no padding).
 struct SetKey {
     uint32_t stage = 0;
     uint32_t cbMask = 0;
-    uint32_t texMask = 0;
-    uint32_t smpMask = 0;
+    uint32_t imageMask = 0;   // bit i: image descriptor i (above)
+    uint32_t pad = 0;
     VkBuffer cb[kCbSlots] = {};
     VkDeviceSize cbOffset[kCbSlots] = {};   // static (non-dynamic) bindings only
-    VkImageView view[kTextureSlots] = {};
-    VkSampler sampler[kTextureSlots] = {};
+    VkImageView view[kImageBindings] = {};
+    VkSampler sampler[kImageBindings] = {};
 };
 
 // P7, the pair-layout path (pipelines.h): the contents of a vertex set (its offsets are dynamic).
 struct VertexSetKey {
     const PairLayout* pair = nullptr;
     VkBuffer cb[kCbSlots] = {};
-    VkImageView view[kTextureSlots] = {};
-    VkSampler sampler[kTextureSlots] = {};
+    VkImageView view[kImageBindings] = {};
+    VkSampler sampler[kImageBindings] = {};
 };
 
 struct SlotResources {
@@ -745,8 +755,8 @@ VkDescriptorPool NewPool() {
     uint32_t count = 0;
     if (dyn) sizes[count++] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kSetsPerPool * dyn };
     if (kCbSlots > dyn) sizes[count++] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSetsPerPool * (kCbSlots - dyn) };
-    sizes[count++] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSetsPerPool * kTextureSlots };
-    sizes[count++] = { VK_DESCRIPTOR_TYPE_SAMPLER, kSetsPerPool * kTextureSlots };
+    // P8: every texture binding (and every further pair in the sampler range) is combined.
+    sizes[count++] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSetsPerPool * kImageBindings };
     auto pi = Make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     pi.maxSets = kSetsPerPool;
     pi.poolSizeCount = count;
@@ -803,6 +813,37 @@ VkSampler TextureSampler(const ImageBufferData* image) {
     return image->sampler;
 }
 
+// P8: the image descriptors a stage's program reads (shader_convert.h COMBINED IMAGE SAMPLERS), into
+// views[i] / samplers[i] (ImageBinding(i)); returns their mask. Each combines texture t's view (the
+// placeholder of the declared type when nothing usable is bound, or for a hazard slot) with the
+// sampler the engine binds at the pair's sampler register: the sampler of the image bound at that
+// slot, as dx11 ImageBufferData::Bind sets both. The vertex stage's slots are never bound by the DX11
+// backend: they read the placeholders.
+uint32_t StageImages(const Shaders::ShaderReflection* refl, bool pixel, VkImageView* views, VkSampler* samplers) {
+    if (!refl) return 0;
+    const auto view = [&](uint32_t t) {
+        const bool cube = (refl->textureCubeMask >> t) & 1;
+        return TextureView(pixel ? g_bound.textures[t] : nullptr, cube, pixel && ((g_hazardSlots >> t) & 1));
+    };
+    const auto sampler = [&](uint32_t s) {
+        return TextureSampler(pixel && s < kTextureSlots ? g_bound.textures[s] : nullptr);
+    };
+    uint32_t mask = 0;
+    for (uint32_t t = 0; t < kTextureSlots; ++t) {
+        if (!((refl->textureMask >> t) & 1)) continue;
+        views[t] = view(t);
+        samplers[t] = sampler(refl->textureSampler[t]);
+        mask |= 1u << t;
+    }
+    for (const Shaders::CombinedPair& p : refl->extraPairs) {
+        const uint32_t i = kTextureSlots + (p.binding - Shaders::BindingOfSampler(0));
+        views[i] = view(p.texture);
+        samplers[i] = sampler(p.sampler);
+        mask |= 1u << i;
+    }
+    return mask;
+}
+
 // Builds (or reuses) the set of `stage` for the bound resources the shader reads, and fills its
 // dynamic offsets.
 VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* refl, uint32_t* dynOffsets) {
@@ -811,8 +852,6 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     SetKey key;
     key.stage = s;
     key.cbMask = refl ? refl->constantBufferMask : 0;
-    key.texMask = refl ? refl->textureMask : 0;
-    key.smpMask = refl ? refl->samplerMask : 0;
     for (uint32_t b = 0; b < kCbSlots; ++b) {
         const bool used = (key.cbMask >> b) & 1;
         dynOffsets[b] = 0;
@@ -830,16 +869,7 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
             key.cbOffset[b] = offset;
         }
     }
-    // The vertex stage's texture slots are never bound by the DX11 backend (ImageBufferData::Bind
-    // binds the pixel stage): they read the placeholder here.
-    const bool pixel = stage == Shaders::Stage::Pixel;
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if ((key.texMask >> t) & 1) {
-            const bool cube = refl && ((refl->textureCubeMask >> t) & 1);
-            key.view[t] = TextureView(pixel ? g_bound.textures[t] : nullptr, cube, pixel && ((g_hazardSlots >> t) & 1));
-        }
-        if ((key.smpMask >> t) & 1) key.sampler[t] = TextureSampler(pixel ? g_bound.textures[t] : nullptr);
-    }
+    key.imageMask = StageImages(refl, stage == Shaders::Stage::Pixel, key.view, key.sampler);
 
     SlotResources& slot = g_slots[g_frame.target.slot];
     const uint64_t hash = HashKey(key);
@@ -850,8 +880,7 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     VkDescriptorSet set = AllocateSet(StageSetLayout(stage));
     if (!set) return VK_NULL_HANDLE;
     VkDescriptorBufferInfo buffers[kCbSlots];
-    VkDescriptorImageInfo images[kTextureSlots];
-    VkDescriptorImageInfo samplers[kTextureSlots];
+    VkDescriptorImageInfo images[kImageBindings];
     VkWriteDescriptorSet writes[Shaders::kBindingsPerSet];
     uint32_t n = 0;
     for (uint32_t b = 0; b < kCbSlots; ++b) {
@@ -865,27 +894,16 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
         writes[n].pBufferInfo = &buffers[b];
         ++n;
     }
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if (key.view[t]) {
-            images[t] = { VK_NULL_HANDLE, key.view[t], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            writes[n] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-            writes[n].dstSet = set;
-            writes[n].dstBinding = Shaders::BindingOfTexture(t);
-            writes[n].descriptorCount = 1;
-            writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            writes[n].pImageInfo = &images[t];
-            ++n;
-        }
-        if (key.sampler[t]) {
-            samplers[t] = { key.sampler[t], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
-            writes[n] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-            writes[n].dstSet = set;
-            writes[n].dstBinding = Shaders::BindingOfSampler(t);
-            writes[n].descriptorCount = 1;
-            writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-            writes[n].pImageInfo = &samplers[t];
-            ++n;
-        }
+    for (uint32_t i = 0; i < kImageBindings; ++i) {
+        if (!((key.imageMask >> i) & 1)) continue;
+        images[i] = { key.sampler[i], key.view[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        writes[n] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+        writes[n].dstSet = set;
+        writes[n].dstBinding = ImageBinding(i);
+        writes[n].descriptorCount = 1;
+        writes[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[n].pImageInfo = &images[i];
+        ++n;
     }
     vkUpdateDescriptorSets(LiveDevice(), n, writes, 0, nullptr);
     bucket.emplace_back(key, set);
@@ -899,8 +917,6 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
 void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::ShaderReflection* refl) {
     const uint32_t s = Shaders::kSetPixel;
     const uint32_t cbMask = refl ? refl->constantBufferMask : 0;
-    const uint32_t texMask = refl ? refl->textureMask : 0;
-    const uint32_t smpMask = refl ? refl->samplerMask : 0;
     PushedValue values[Shaders::kBindingsPerSet];
     VkDescriptorType types[Shaders::kBindingsPerSet];
     uint32_t n = 0;
@@ -915,24 +931,18 @@ void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sha
         types[n] = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         ++n;
     }
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if ((texMask >> t) & 1) {
-            const bool cube = refl && ((refl->textureCubeMask >> t) & 1);
-            const VkImageView view = TextureView(g_bound.textures[t], cube, (g_hazardSlots >> t) & 1);
-            values[n] = PushedValue{};
-            values[n].binding = Shaders::BindingOfTexture(t);
-            values[n].a = reinterpret_cast<uint64_t>(view);   // CAST-OK: a handle compared as bytes
-            types[n] = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            ++n;
-        }
-        if ((smpMask >> t) & 1) {
-            const VkSampler sampler = TextureSampler(g_bound.textures[t]);
-            values[n] = PushedValue{};
-            values[n].binding = Shaders::BindingOfSampler(t);
-            values[n].a = reinterpret_cast<uint64_t>(sampler);   // CAST-OK: a handle compared as bytes
-            types[n] = VK_DESCRIPTOR_TYPE_SAMPLER;
-            ++n;
-        }
+    // P8: one combined image sampler per texture binding and per further pair (StageImages).
+    VkImageView views[kImageBindings];
+    VkSampler samplers[kImageBindings];
+    const uint32_t imageMask = StageImages(refl, true, views, samplers);
+    for (uint32_t i = 0; i < kImageBindings; ++i) {
+        if (!((imageMask >> i) & 1)) continue;
+        values[n] = PushedValue{};
+        values[n].binding = ImageBinding(i);
+        values[n].a = reinterpret_cast<uint64_t>(views[i]);      // CAST-OK: a handle compared as bytes
+        values[n].b = reinterpret_cast<uint64_t>(samplers[i]);   // CAST-OK: as above
+        types[n] = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ++n;
     }
     PushedStage& last = g_frame.pushed;
     if (last.layout == pair.layout && last.count == n &&
@@ -956,15 +966,10 @@ void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sha
             buffers[i].offset = values[i].b;
             buffers[i].range = kConstantBufferRange;
             writes[i].pBufferInfo = &buffers[i];
-        } else if (types[i] == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
-            images[i].sampler = VK_NULL_HANDLE;
+        } else {
+            images[i].sampler = reinterpret_cast<VkSampler>(values[i].b);       // CAST-OK: as above
             images[i].imageView = reinterpret_cast<VkImageView>(values[i].a);   // CAST-OK: as above
             images[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            writes[i].pImageInfo = &images[i];
-        } else {
-            images[i].sampler = reinterpret_cast<VkSampler>(values[i].a);   // CAST-OK: as above
-            images[i].imageView = VK_NULL_HANDLE;
-            images[i].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             writes[i].pImageInfo = &images[i];
         }
     }
@@ -988,10 +993,7 @@ bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sh
         key.cb[b] = c.buffer;
         offsets[n++] = static_cast<uint32_t>(c.offset);
     }
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if ((refl.textureMask >> t) & 1) key.view[t] = TextureView(nullptr, (refl.textureCubeMask >> t) & 1, false);
-        if ((refl.samplerMask >> t) & 1) key.sampler[t] = TextureSampler(nullptr);
-    }
+    StageImages(&refl, false, key.view, key.sampler);
     VertexSetState& v = g_frame.vertex;
     if (!v.found || std::memcmp(&v.key, &key, sizeof(VertexSetKey)) != 0) {
         SlotResources& slot = g_slots[g_frame.target.slot];
@@ -1006,10 +1008,9 @@ bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sh
             set = AllocateSet(pair.vertexSet);
             if (!set) return false;
             VkDescriptorBufferInfo buffers[kCbSlots];
-            VkDescriptorImageInfo images[2 * kTextureSlots];
+            VkDescriptorImageInfo images[kImageBindings];
             VkWriteDescriptorSet writes[Shaders::kBindingsPerSet];
             uint32_t w = 0;
-            uint32_t image = 0;
             for (uint32_t b = 0; b < kCbSlots; ++b) {
                 if (!key.cb[b]) continue;
                 buffers[b].buffer = key.cb[b];
@@ -1023,31 +1024,18 @@ bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sh
                 writes[w].pBufferInfo = &buffers[b];
                 ++w;
             }
-            for (uint32_t t = 0; t < kTextureSlots; ++t) {
-                if (key.view[t]) {
-                    images[image].sampler = VK_NULL_HANDLE;
-                    images[image].imageView = key.view[t];
-                    images[image].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                    writes[w].dstSet = set;
-                    writes[w].dstBinding = Shaders::BindingOfTexture(t);
-                    writes[w].descriptorCount = 1;
-                    writes[w].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    writes[w].pImageInfo = &images[image++];
-                    ++w;
-                }
-                if (key.sampler[t]) {
-                    images[image].sampler = key.sampler[t];
-                    images[image].imageView = VK_NULL_HANDLE;
-                    images[image].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                    writes[w].dstSet = set;
-                    writes[w].dstBinding = Shaders::BindingOfSampler(t);
-                    writes[w].descriptorCount = 1;
-                    writes[w].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                    writes[w].pImageInfo = &images[image++];
-                    ++w;
-                }
+            for (uint32_t i = 0; i < kImageBindings; ++i) {
+                if (!key.view[i]) continue;
+                images[i].sampler = key.sampler[i];
+                images[i].imageView = key.view[i];
+                images[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                writes[w].dstSet = set;
+                writes[w].dstBinding = ImageBinding(i);
+                writes[w].descriptorCount = 1;
+                writes[w].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[w].pImageInfo = &images[i];
+                ++w;
             }
             if (w != 0) vkUpdateDescriptorSets(LiveDevice(), w, writes, 0, nullptr);
             slot.vertexSets.emplace_back(key, set);

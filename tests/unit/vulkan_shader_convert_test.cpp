@@ -469,3 +469,172 @@ UNIT_TEST(vulkan_shader_cache_round_trip) {
     CHECK(LoadOrConvert(nullptr, blob.data(), blob.size(), Stage::Pixel, &spirv, &refl, &hit, &why));
     CHECK(!hit);
 }
+
+// ---- P8: combined image samplers (src/render/vulkan/spirv_combine.{h,cpp}) ----------------------
+
+namespace {
+
+// A pixel program that samples each (texture, sampler) pair of `samples` at v1.xy and sums the
+// results into o0; `loadOnly` (>= 0) adds a texture read with `ld` alone (no sampler). Textures are 2D
+// float4.
+std::vector<uint8_t> PairsPixelBlob(const std::vector<std::pair<uint32_t, uint32_t>>& samples, int loadOnly) {
+    constexpr uint32_t kImmediate4 = 2u | (4u << 12);   // l(x, y, z, w): immediate32, four components
+    Tokens t;
+    std::set<uint32_t> textures;
+    std::set<uint32_t> samplers;
+    for (const auto& p : samples) {
+        textures.insert(p.first);
+        samplers.insert(p.second);
+    }
+    if (loadOnly >= 0) textures.insert(static_cast<uint32_t>(loadOnly));
+    for (uint32_t s : samplers)
+        Raw(t, Op::DclSampler, {kSamplerOperand, s});
+    for (uint32_t r : textures)
+        Raw(t, Op::DclResource, {kResourceOperand, r, 0x5555}, 3u << 11);
+    DclIo(t, kDclInputPs, OT::Input, 1, 0x3, 2u << 11);
+    DclIo(t, kDclOutput, OT::Output, 0, 0xF);
+    Raw(t, Op::DclTemps, {2});
+    {
+        Ins i(t);
+        Dst(t, OT::Temp, 1, 0xF);
+        t.push_back(kImmediate4);
+        t.insert(t.end(), {0u, 0u, 0u, 0u});
+        i.End(Op::Mov);
+    }
+    const auto addInto = [&]() {
+        Ins i(t);
+        Dst(t, OT::Temp, 1, 0xF);
+        Src(t, OT::Temp, 1, kXYZW);
+        Src(t, OT::Temp, 0, kXYZW);
+        i.End(0);   // add
+    };
+    for (const auto& p : samples) {
+        {
+            Ins i(t);
+            Dst(t, OT::Temp, 0, 0xF);
+            Src(t, OT::Input, 1, Enc::Swizzle(0, 1, 0, 0));
+            Src(t, OT::Resource, p.first, kXYZW);
+            t.push_back(kSamplerOperand);
+            t.push_back(p.second);
+            i.End(Op::Sample);
+        }
+        addInto();
+    }
+    if (loadOnly >= 0) {
+        {
+            Ins i(t);
+            Dst(t, OT::Temp, 0, 0xF);
+            t.push_back(kImmediate4);
+            t.insert(t.end(), {0u, 0u, 0u, 0u});
+            Src(t, OT::Resource, static_cast<uint32_t>(loadOnly), kXYZW);
+            i.End(45);   // ld
+        }
+        addInto();
+    }
+    {
+        Ins i(t);
+        Dst(t, OT::Output, 0, 0xF);
+        Src(t, OT::Temp, 1, kXYZW);
+        i.End(Op::Mov);
+    }
+    Raw(t, Op::Ret, {});
+    return Container(0x40, t,
+                     {{"SV_POSITION", 0, 1, 0, 0xF, 0x0}, {"TEXCOORD", 0, 0, 1, 0x3, 0x3}},
+                     {{"SV_TARGET", 0, 64, 0, 0xF, 0x0}});
+}
+
+// The count of instructions with opcode `op` in the module.
+size_t CountOp(const std::vector<uint32_t>& spirv, uint32_t op) {
+    size_t n = 0;
+    for (size_t at = 5; at < spirv.size();) {
+        const uint32_t words = spirv[at] >> 16;
+        if (words == 0) break;
+        if ((spirv[at] & 0xFFFF) == op) ++n;
+        at += words;
+    }
+    return n;
+}
+
+bool ConvertCombined(const std::vector<uint8_t>& blob, std::vector<uint32_t>* code, ShaderReflection* refl) {
+    std::string why;
+    ConvertOptions options;
+    options.combineSamplers = true;
+    const bool ok = ConvertDxbc(blob.data(), blob.size(), Stage::Pixel, code, refl, &why, options);
+    if (!ok) std::printf("    convert: %s\n", why.c_str());
+    return ok;
+}
+
+}  // namespace
+
+UNIT_TEST(vulkan_combine_one_pair) {
+    std::vector<uint32_t> code;
+    ShaderReflection refl;
+    const std::vector<uint8_t> blob = PixelBlob();
+    CHECK(ConvertCombined(blob, &code, &refl));
+    CHECK(refl.combined);
+    CHECK_EQ(refl.textureMask, 1u);
+    CHECK_EQ(refl.samplerMask, 1u);
+    CHECK_EQ(static_cast<uint32_t>(refl.textureSampler[0]), 0u);
+    CHECK(refl.extraPairs.empty());
+    const auto bindings = Bindings(code);
+    CHECK(bindings.count({kSetPixel, BindingOfConstantBuffer(1)}) == 1);
+    CHECK(bindings.count({kSetPixel, BindingOfTexture(0)}) == 1);
+    CHECK(bindings.count({kSetPixel, BindingOfSampler(0)}) == 0);   // no separate sampler is left
+    CHECK_EQ(bindings.size(), (size_t)2);
+    CHECK_EQ(CountOp(code, 86 /* OpSampledImage */), (size_t)0);
+    std::string why;
+    CHECK(CheckSpirvStructure(code, &why));
+    // a combined conversion is another cache entry, and its reflection round-trips
+    ConvertOptions options;
+    options.combineSamplers = true;
+    CHECK(CacheKey(blob.data(), blob.size(), Stage::Pixel).shape[0] !=
+          CacheKey(blob.data(), blob.size(), Stage::Pixel, options).shape[0]);
+    std::vector<uint32_t> back;
+    ShaderReflection backRefl;
+    CHECK(DecodeEntry(EncodeEntry(code, refl), &back, &backRefl));
+    CHECK(back == code);
+    CHECK(backRefl.combined);
+    CHECK(backRefl.textureSampler == refl.textureSampler);
+}
+
+UNIT_TEST(vulkan_combine_texture_with_two_samplers) {
+    // t0 with s0 and s1 (D3D allows it), t1 with s0: t0's primary pair (t0, s0) is at its texture
+    // binding, (t0, s1) a further pair at BindingOfSampler(0), (t1, s0) at t1's texture binding.
+    std::vector<uint32_t> code;
+    ShaderReflection refl;
+    CHECK(ConvertCombined(PairsPixelBlob({{0, 0}, {0, 1}, {1, 0}}, -1), &code, &refl));
+    CHECK(refl.combined);
+    CHECK_EQ(refl.textureMask, 3u);
+    CHECK_EQ(static_cast<uint32_t>(refl.textureSampler[0]), 0u);
+    CHECK_EQ(static_cast<uint32_t>(refl.textureSampler[1]), 0u);
+    CHECK_EQ(refl.extraPairs.size(), (size_t)1);
+    if (refl.extraPairs.size() == 1) {
+        CHECK_EQ(static_cast<uint32_t>(refl.extraPairs[0].binding), BindingOfSampler(0));
+        CHECK_EQ(static_cast<uint32_t>(refl.extraPairs[0].texture), 0u);
+        CHECK_EQ(static_cast<uint32_t>(refl.extraPairs[0].sampler), 1u);
+    }
+    const auto bindings = Bindings(code);
+    CHECK(bindings.count({kSetPixel, BindingOfTexture(0)}) == 1);
+    CHECK(bindings.count({kSetPixel, BindingOfTexture(1)}) == 1);
+    CHECK(bindings.count({kSetPixel, BindingOfSampler(0)}) == 1);
+    CHECK(bindings.count({kSetPixel, BindingOfSampler(1)}) == 0);
+    CHECK_EQ(bindings.size(), (size_t)3);
+    CHECK_EQ(CountOp(code, 86 /* OpSampledImage */), (size_t)0);
+    std::string why;
+    CHECK(CheckSpirvStructure(code, &why));
+}
+
+UNIT_TEST(vulkan_combine_texture_read_without_sampler) {
+    // t2 is read with ld only: still combined (no sampler register), its image taken with OpImage.
+    std::vector<uint32_t> code;
+    ShaderReflection refl;
+    CHECK(ConvertCombined(PairsPixelBlob({{0, 0}}, 2), &code, &refl));
+    CHECK_EQ(refl.textureMask, 5u);
+    CHECK_EQ(static_cast<uint32_t>(refl.textureSampler[0]), 0u);
+    CHECK_EQ(static_cast<uint32_t>(refl.textureSampler[2]), static_cast<uint32_t>(kNoSampler));
+    const auto bindings = Bindings(code);
+    CHECK(bindings.count({kSetPixel, BindingOfTexture(2)}) == 1);
+    CHECK(CountOp(code, 100 /* OpImage */) >= 1);
+    std::string why;
+    CHECK(CheckSpirvStructure(code, &why));
+}

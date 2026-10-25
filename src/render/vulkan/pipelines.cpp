@@ -31,7 +31,7 @@ namespace {
 
 constexpr uint32_t kSetBindings = Shaders::kBindingsPerSet;
 constexpr size_t kWarmRecordCap = 4096;
-constexpr char kCacheMagic[8] = { 'O', 'B', 'A', 'V', 'K', 'P', 'C', '1' };
+constexpr char kCacheMagic[8] = { 'O', 'B', 'A', 'V', 'K', 'P', 'C', '2' };   // 2 (P8): combined image samplers
 constexpr const char* kWarmHeader = "OpenBA vulkan pipelines 1";
 
 // ---- hashing helpers ----
@@ -65,7 +65,7 @@ struct StageMasks {
     uint32_t set = 0;
     uint32_t cb = 0;
     uint32_t tex = 0;
-    uint32_t smp = 0;
+    uint32_t smp = 0;   // P8: the further pairs' bits k (BindingOfSampler(k)); no separate sampler is left
 };
 struct PairMasks {
     StageMasks vs;
@@ -364,6 +364,7 @@ VkShaderModule LinkedPixelModule(const ShaderEntry* vs, const ShaderEntry* ps, s
     }
     Shaders::ConvertOptions options;
     options.previousStage = &vs->reflection;
+    options.combineSamplers = true;   // P8 (shader_convert.h)
     std::vector<uint32_t> spirv;
     Shaders::ShaderReflection refl;
     bool hit = false;
@@ -391,7 +392,10 @@ StageMasks MasksOf(uint32_t set, const Shaders::ShaderReflection* refl) {
     if (refl) {
         m.cb = refl->constantBufferMask & ((1u << Shaders::kMaxConstantBuffers) - 1u);
         m.tex = refl->textureMask & ((1u << Shaders::kMaxTextures) - 1u);
-        m.smp = refl->samplerMask & ((1u << Shaders::kMaxTextures) - 1u);
+        // P8: every game program is combined (shader_convert.h COMBINED IMAGE SAMPLERS): its texture
+        // bindings are COMBINED_IMAGE_SAMPLER, and its further pairs sit in the sampler range.
+        for (const Shaders::CombinedPair& p : refl->extraPairs)
+            m.smp |= 1u << (p.binding - Shaders::BindingOfSampler(0));
     }
     return m;
 }
@@ -422,7 +426,7 @@ VkDescriptorSetLayout PairSetLayoutLocked(const StageMasks& m) {
         if ((m.tex >> r) & 1) {
             VkDescriptorSetLayoutBinding b{};
             b.binding = Shaders::BindingOfTexture(r);
-            b.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b.descriptorCount = 1;
             b.stageFlags = stage;
             bindings.push_back(b);
@@ -430,7 +434,7 @@ VkDescriptorSetLayout PairSetLayoutLocked(const StageMasks& m) {
         if ((m.smp >> r) & 1) {
             VkDescriptorSetLayoutBinding b{};
             b.binding = Shaders::BindingOfSampler(r);
-            b.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b.descriptorCount = 1;
             b.stageFlags = stage;
             bindings.push_back(b);
@@ -788,10 +792,9 @@ bool PipelinesStartup(std::string* why) {
             if (i < Shaders::kMaxConstantBuffers) {
                 b[i].descriptorType = i < g_dynamicCbs ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
                                                        : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            } else if (i < Shaders::kMaxConstantBuffers + Shaders::kMaxTextures) {
-                b[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             } else {
-                b[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                // P8: textures and the further pairs in the sampler range are combined image samplers.
+                b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             }
         }
         auto li = Make<VkDescriptorSetLayoutCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);

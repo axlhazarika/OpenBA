@@ -9,8 +9,9 @@
 // 24..39). The constant buffers are UNIFORM_BUFFER_DYNAMIC on the per-frame ring (draw.cpp), as
 // many per set as the device allows dynamic (half of maxDescriptorSetUniformBuffersDynamic, at most
 // 8: 7 on the NVIDIA dev box, retail uses b0..b4); the rest are plain uniform buffers, whose offset
-// is then written into the set. Textures are SAMPLED_IMAGE and samplers SAMPLER (dxbc-spirv keeps
-// them separate and combines at the use).
+// is then written into the set. P8: textures are COMBINED_IMAGE_SAMPLER descriptors, each with the
+// sampler of its pair (shader_convert.h COMBINED IMAGE SAMPLERS); the 24..39 range holds only a
+// texture's further pairs, which no retail program has.
 //
 // THE SHADER REGISTRY. One VkShaderModule per distinct DXBC blob (Hash64 of the bytes, mixed with
 // the stage), shared by every program permutation that carries the same bytes and reference-counted
