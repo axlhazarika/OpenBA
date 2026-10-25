@@ -221,6 +221,26 @@ job `android` + `tools/android.sh sign`; the first real run is the next tag or a
 in-game trim-memory save after the latch fix (verified in P8: `Auto.sav` the same second, and it loads), rotation / display change at render scale 50, the Windows Vulkan boot
 state left RUNNING after a clean exit.
 
+**P8 outcome (2026-10-25, four opus agents, merged on `android/p8`; the per-agent logs are `docs/android/P8_UI.md`,
+`P8_INPUT_OPTIONS.md`, `P8_VULKAN.md`, `P8_SHADOWS_RELEASE.md`).** Done: the in-game HUD / panels / tooltips inside
+ext.phone_menu's safe area (seen on the S25); ext.phone_menu verified on the phone; the Android font rasteriser
+(`font_raster_android.cpp`, the TTF in the data folder); the lost middle-mouse release (SDL's Java glue drops captured
+pointer events: `OpenBASurface.java` forwards them; verified with a uinput mouse only); Options > Enhanced rows Render
+scale (live, Android) and Frame rate cap (`ext.fps_cap` class A + `ext.fps_cap_rate`, the in-game limiter; phone seed
+60); rotation at render scale 50; the depth discard re-armed by frame signature and the main pass 3 -> 2; combined image
+samplers (all 465 permutations, caches re-versioned); the oversized push-pair path exercised; boot state EXITED on a
+clean exit (Windows + Linux); the signed apk job in `release.yml` (never run yet) and a non-required Android job in
+`ci.yml`; the trim-memory save verified; shadows off = retail's Shadow Quality None. Gate + resave PASS on the merged tree.
+
+Left / for the owner: the citizen shadow flicker is NOT reproduced (pinned camera, 512 map, half res: no frame-to-frame
+change; needs a recording or the settings in force, then a RenderDoc capture on the phone); a real KVM mouse test of the
+middle-button fix; a phone whose `settings.cfg` predates P8 is NOT capped (the seed runs on a first launch only: the
+coordinator's merged-tree run on the S25 logged `game: not paced`; decide whether the seed should add missing keys);
+UI scale at render scale Quarter pushes the Options tab row off the top (known_port_issues); the 60 cap sleeps, the
+panel stays at 120 Hz (a panel-rate request was not built); the frame-copy split stays (the remaining redesigns are
+unfaithful or large); the sun map is still allocated at Shadow Quality None (unmeasured); the Android CI job as a fifth
+required check or not; a dispatch dry run of `release.yml` before the next tag; whether the apk bundles the font.
+
 ## 3. Rules that hold (do not relax)
 
 - CLAUDE.md's hard rules: no null guard on a faithful crash (find what handed us the null); no `getenv`, flags through
