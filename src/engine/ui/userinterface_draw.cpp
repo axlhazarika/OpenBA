@@ -416,6 +416,17 @@ void UI::UserInterface::Draw(Video::Context& context) {
                             y2 = mid + half;
                         }
 
+                        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu
+                        // may move the menu's backdrop so its logo is not cut off; retail's fit otherwise.
+                        if (_extDialogPlace != nullptr) {
+                            int32_t rect[4] = {x1, y1, x2, y2};
+                            _extDialogPlace(kExtPlaceBackdrop, d, width, height, rect);
+                            x1 = rect[0];
+                            y1 = rect[1];
+                            x2 = rect[2];
+                            y2 = rect[3];
+                        }
+
                         // 0x180121e7c — unguarded on +0x18, but INSIDE the
                         // sprite test: ComboDialog's ctor leaves `_dialog` NULL
                         // by design and has spriteIndex -1, so hoisting this out

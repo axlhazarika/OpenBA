@@ -163,7 +163,15 @@ bool WantTwin2x(float pxPerUnitX, float pxPerUnitY) {
 
 int PickFontHeight(int baseHeight, float pxPerUnit, float density, bool* keepRetail) {
     *keepRetail = false;
-    if (!(density > 1.0f)) return PickVariantHeight(baseHeight, pxPerUnit);
+    if (!(density > 1.0f)) {
+        // Above the slider's retail range at 1x (ext.phone_menu's slider below 75 %, a ratio up
+        // to 4): retail's scaled quads, not the base glyphs at their own pixel size spaced by the
+        // magnified advances. Inside retail's 75..150 % the selection is upstream's, unchanged.
+        const int pick = PickVariantHeight(baseHeight, pxPerUnit);
+        if (pxPerUnit > kRetailRatioMax && pick == baseHeight && !NativePickFitsRatio(baseHeight, pxPerUnit))
+            *keepRetail = true;
+        return pick;
+    }
     const int pick = PickRetinaVariantHeight(baseHeight, pxPerUnit);
     if (pick == baseHeight && !NativePickFitsRatio(baseHeight, pxPerUnit)) *keepRetail = true;
     return pick;

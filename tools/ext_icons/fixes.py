@@ -107,10 +107,29 @@ def draw_window(px):
     ])
 
 
+def draw_slider(px):
+    # slider track with the thumb held at its right end stop (a dragged slider clamps, never jumps back)
+    _paint(px, [
+        "............",
+        "............",
+        "..........##",
+        "........####",
+        "#.......####",
+        "#+++++++####",
+        "#+++++++####",
+        "#.......####",
+        "........####",
+        "..........##",
+        "............",
+        "............",
+    ])
+
+
 ICONS = {
     "icon_slide": ("fix", draw_slide),               # "!" marker over a ground line
     "residence_goto": ("fix", draw_goto),            # house with a target box on the wall
     "tavern_counter": ("fix", draw_mug),             # tankard with foam and handle
     "start_barn_height": ("fix", draw_barn),         # barn with door on a ground line
     "ui_scale_layout": ("fix", draw_window),         # centred dialog frame, resize corner marks
+    "slider_drag_clamp": ("fix", draw_slider),       # slider track, thumb at its end stop
 }

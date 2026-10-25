@@ -260,16 +260,23 @@ void SliderElement::Update(const System::Time& time, UserInterface* ui,
         }
     }
 
-    const bool isNear = !(mx < _layoutLeft   - 0x20 ||
-                          _layoutRight + 0x20 < mx  ||
-                          my < _layoutTop    - 0x20 ||
-                          _layoutBottom + 0x20 < my);
+    bool isNear = !(mx < _layoutLeft   - 0x20 ||
+                    _layoutRight + 0x20 < mx  ||
+                    my < _layoutTop    - 0x20 ||
+                    _layoutBottom + 0x20 < my);
 
     const uint32_t flags = _flags;
     if ((flags & kFlagDragging) != 0 && !isNear) {
-        _value = _dragAnchor;
-        UpdateNumber();                                                     // 0x1800d6c20
-        return;
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/SLIDERCLAMP.md): fix.slider_drag_clamp -- a drag
+        // off the band is treated as on it: the thumb keeps following the pointer (clamped below) and a
+        // release there keeps the value. Off / null = retail's snap back to the anchor.
+        if (_extFixDragClamp != nullptr && *_extFixDragClamp) {
+            isNear = true;
+        } else {
+            _value = _dragAnchor;
+            UpdateNumber();                                                 // 0x1800d6c20
+            return;
+        }
     }
 
     bool doDrag = true;
@@ -296,6 +303,10 @@ void SliderElement::Update(const System::Time& time, UserInterface* ui,
 
     UpdateNumber();                                                         // 0x1800d6c20
 }
+
+// EXT SEAM (NOT RETAIL, docs/extensions/handins/SLIDERCLAMP.md): fix.slider_drag_clamp, null by default
+// (SliderElement.h); set by Ext::InitFromSettings.
+const bool* SliderElement::_extFixDragClamp = nullptr;
 
 // ??1SliderElement@UI@@UEAA@XZ   0x180049ee0 — retail's body is a BARE TAIL
 // JUMP to ~Element with no restamp: the compiler's chain is all of it.

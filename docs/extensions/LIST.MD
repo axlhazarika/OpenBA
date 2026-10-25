@@ -5,6 +5,7 @@
 | Fix | Tavern statistics | Counts the good actually consumed (edge case). |
 | Fix | Grounded starting buildings | Lower starter barn to actually sit h terrain |
 | Fix | Steady dialogs on UI rescale | Open dialogs no longer flash to a corner, instead stay centered. |
+| Fix | Sliders follow the mouse | A slider or scroll bar being dragged keeps following the mouse and stops at its ends, instead of jumping back when the pointer strays off it. |
 | Fix | Graphics reset during start-up | A graphics driver reset while the game is starting up recovers instead of crashing or hanging. Off under the faithful profile, where retail's crash or hang remains. |
 | Ext A | Eye-level camera | Follow a citizen at eye level (replaces overhead follow). |
 | Ext B | Better camera | Zoom in much closer and out much farther (6 to 200 instead of 20 to 130) and keep the camera tilt when zoomed out instead of flattening to top-down. Off by default; locked for the game and recorded in saves. |
@@ -38,6 +39,7 @@
 | Ext A | Mod loading screen | While mods load at start-up, shows the loading screen and which mod is loading instead of a black window. |
 | Ext A | Background saving | Writes the save on a worker thread while the town holds still for a moment; the screen and camera keep moving. Identical save files. |
 | Ext A | No fog | Removes the fog that hazes the far map when the camera is zoomed far out. Off by default; live. |
+| Ext A | Phone screen fit | On a screen wider than 16:9 the main menu's logo sits whole on the left and the buttons on the right; the menu stays inside a 4.5 % safe area (rounded corners, camera cut-outs); the UI scale slider goes down to 25 %. Off by default (on in the Android first run); live. |
 | Ext B | Faster pathfinding | Looks for same length routes to save pathfinding work. |
 | Ext B | Parallel pathfinding | Spread pathfinding to multiple cores. |
 | Ext B | Batched animation | Batch animations together above 1x speed. |

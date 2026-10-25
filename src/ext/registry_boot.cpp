@@ -22,6 +22,7 @@
 #include "ext/large_packages/large_packages.h"   // fix.large_packages: the FileSystem mount seam
 #include "ext/package_cache/package_cache.h"       // ext.package_cache: the FileSystem index seams
 #include "ext/menu_entry/menu_entry.h"             // ext.menu_entry: the mod scan and remount seams
+#include "ext/phone_menu/phone_menu.h"             // ext.phone_menu: the menu safe area and backdrop seam
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
@@ -51,6 +52,8 @@
 #include <cstring>
 #include "system/String.h"
 #include "ui/UserInterface.h"   // the fix.ui_scale_layout seam (DESIGN.md hook rule 5)
+#include "ui/SliderElement.h"   // the fix.slider_drag_clamp seam (DESIGN.md hook rule 5)
+#include "ui/ScrollElement.h"   // the fix.slider_drag_clamp seam, scroll-bar half
 #include "engine/MainLoop.h"     // the fix.boot_device_lost seam (DESIGN.md hook rule 5)
 #include "boot_device_lost/boot_device_lost_backend.h"   // fix.boot_device_lost: the backend half
 #include "Game/WorldGeometry.h"  // the ext.terrain_batch seam (DESIGN.md hook rule 5)
@@ -132,6 +135,8 @@ void InitFromSettings() {
     // Engine-side fix seams: null by default, pointed at the live bool here
     // (fixes are global and live: the pointer follows the menu toggle).
     ::UI::UserInterface::_extFixScaleLayout = &Fix().ui_scale_layout;
+    ::UI::SliderElement::_extFixDragClamp = &Fix().slider_drag_clamp;
+    ::UI::ScrollElement::_extFixDragClamp = &Fix().slider_drag_clamp;
     // fix.boot_device_lost: one row, two seams -- the engine's SaveLoad-walk skip and the
     // renderer backend's recovery of a reset that failed on a removed device.
     ::Engine::MainLoop::_extFixBootDeviceLost = &Fix().boot_device_lost;
@@ -158,6 +163,8 @@ void InitFromSettings() {
     Ext::DrawBatch::Sync();
     // ext.render_pipe (class A, live): the Engine::MainLoop::_extFrame seam.
     Ext::RenderPipe::Sync();
+    // ext.phone_menu (class A, live): the UI::UserInterface::_extDialogPlace seam.
+    Ext::PhoneMenu::Sync();
     // ext.ambient_occlusion (class A, live): the main depth's format + the per-frame arm.
     Ext::AmbientOcclusion::Sync();
     // ext.better_trees (class A, live): the VideoDX11::g_extFoliageAA seam + the mode, and the

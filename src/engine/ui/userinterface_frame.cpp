@@ -198,6 +198,8 @@ static_assert(sizeof(Node) == 0x18, "MemAlloc(0x18, 8) in the drain");
 
 // ENDGAME B.3.6 block E: the body is the member (the main-loop hot path).
 const bool* UI::UserInterface::_extFixScaleLayout = nullptr;   // fix.ui_scale_layout seam
+void (*UI::UserInterface::_extDialogPlace)(int32_t, const UI::DialogInstance*, int32_t, int32_t,
+                                           int32_t*) = nullptr;   // ext.phone_menu seam
 
 int32_t UI::UserInterface::Update(const System::Time& timeRef) {
     // 0x1801213ef — _mouseCaptured = 0, BEFORE anything else.
@@ -323,8 +325,18 @@ int32_t UI::UserInterface::Update(const System::Time& timeRef) {
         layoutW = static_cast<int32_t>(static_cast<float>(vdev->backBufferWidth) * _uiScale);
         layoutH = static_cast<int32_t>(static_cast<float>(vdev->backBufferHeight) * _uiScale);
     }
-    for (Node* n = _dialogs._head; n; n = n->next) {
-        n->element->ComputeLayout(0, 0, layoutW, layoutH);
+    if (_extDialogPlace == nullptr) {
+        for (Node* n = _dialogs._head; n; n = n->next) {
+            n->element->ComputeLayout(0, 0, layoutW, layoutH);
+        }
+    } else {
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu may lay a
+        // dialog out inside a safe area; retail's rectangle otherwise.
+        for (Node* n = _dialogs._head; n; n = n->next) {
+            int32_t rect[4] = {0, 0, layoutW, layoutH};
+            _extDialogPlace(kExtPlaceLayout, n->element, layoutW, layoutH, rect);
+            n->element->ComputeLayout(rect[0], rect[1], rect[2], rect[3]);
+        }
     }
 
     // 0x18012161e — a fade in progress swallows the whole input half AND the

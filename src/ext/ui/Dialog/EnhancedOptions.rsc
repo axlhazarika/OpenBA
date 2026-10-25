@@ -1,5 +1,5 @@
 // Dialog/EnhancedOptions.rsc -- the Options dialog's fifth tab "Enhanced" (NOT RETAIL; blocks AOMENU,
-// FAA-MENU, BETTER-TREES: five rows, docs/extensions/AO.md §6.3; was AoOptions.rsc). Added at run time by UI::TabElement::AddTab from
+// FAA-MENU, BETTER-TREES, TEXQUALITY, COMPRESSAO: eight rows in the Game tab's container, docs/extensions/AO.md §6.3; was AoOptions.rsc). Added at run time by UI::TabElement::AddTab from
 // OptionsDialog::OnOpened (src/ext/enhanced_tab/enhanced_tab.cpp). Every name here is NEW:
 // a loose .crs never overrides a name the game's packages hold (IO::FileSystem::OpenFile looks
 // in the packfile index first, handins/AOSPIKE.md S5). The look inherits the kit's own
@@ -16,7 +16,8 @@ StringTable aoStrings
 		{ String _name = "MaxShadowRes";	String _text = "Max shadow resolution"; }
 		{ String _name = "SeamlessLoops";	String _text = "Seamless ambient loops"; }
 		{ String _name = "TextureQuality";	String _text = "Texture quality"; }
-		{ String _name = "DerivedCache";	String _text = "Data cache on disk: @0"; }
+		{ String _name = "DerivedCache";	String _text = "Data cache on disk"; }
+		{ String _name = "DerivedCacheSize";	String _text = "@0"; }
 		{ String _name = "DerivedCacheClear";	String _text = "Clear cache"; }
 	]
 }
@@ -113,9 +114,20 @@ LabelDescription labelEnhanced
 	String _spriteName = "OptionsEnhanced";
 }
 
-// The page: Options.rsc:gameOptionsTable's shape, seven rows (AO combo, AO slider, Better trees, shadow,
-// loops, texture quality (TEXQUALITY), the derived-data cache's size + its "Clear cache" button: COMPRESSAO).
-TableDescription enhancedOptions
+// The page: the Game tab's own scrolling container (Options.rsc:gameOptions: its size, clip region and
+// vertical scroll bar), so the Enhanced tab takes exactly the room the retail tabs take and never widens
+// the dialog. Its viewport is the container's width less the scroll bar and its gap; every row below
+// fits in it with the retail tabs' column widths (labels 200, controls 180).
+ContainerDescription enhancedOptions : "Options.rsc:gameOptions"
+{
+	ElementDescription _content = "enhancedOptionsTable";
+}
+
+// The rows: Options.rsc:gameOptionsTable's shape, eight rows (AO combo, AO slider, Better trees, shadow,
+// loops, texture quality (TEXQUALITY), the derived-data cache's size and, under it, its "Clear cache"
+// button: COMPRESSAO). The size sits in the control column, not in the label: "0 MB (cleared at the next
+// start)" in the label column made that column, and so the dialog, wider than the retail tabs.
+TableDescription enhancedOptionsTable
 {
 	int _leftPad = 6;
 	int _topPad = 4;
@@ -125,7 +137,7 @@ TableDescription enhancedOptions
 	Alignment _alignment = TopLeft;
 
 	int _width = 2;
-	int _height = 7;
+	int _height = 8;
 
 	TableItem _items
 	[
@@ -143,7 +155,8 @@ TableDescription enhancedOptions
 		{ int _x = 1; int _y = 3; ElementDescription _element = "comboMaxShadowRes"; }
 		{ int _x = 1; int _y = 4; ElementDescription _element = "comboSeamlessLoops"; }
 		{ int _x = 1; int _y = 5; ElementDescription _element = "comboTextureQuality"; }
-		{ int _x = 1; int _y = 6; ElementDescription _element = "buttonDerivedCacheClear"; }
+		{ int _x = 1; int _y = 6; ElementDescription _element = "textDerivedCacheSize"; }
+		{ int _x = 1; int _y = 7; ElementDescription _element = "buttonDerivedCacheClear"; }
 	]
 }
 
@@ -161,7 +174,10 @@ TextDescription textBetterTrees : "textAoOption" { String _text = "BetterTrees";
 TextDescription textMaxShadowRes : "textAoOption" { String _text = "MaxShadowRes"; }
 TextDescription textSeamlessLoops : "textAoOption" { String _text = "SeamlessLoops"; }
 TextDescription textTextureQuality : "textAoOption" { String _text = "TextureQuality"; }
-TextDescription textDerivedCache : "textAoOption" { String _text = "DerivedCache"; }
+// The cache row's label and size take the combo rows' spacing (a combo row is 26 + 3 high, its label
+// sits 5 down), so the size and the button under it do not crowd the row above.
+TextDescription textDerivedCache : "textAoOption" { String _text = "DerivedCache"; int _topPad = 5; int _bottomPad = 3; }
+TextDescription textDerivedCacheSize : "textAoOption" { String _text = "DerivedCacheSize"; int _minWidth = 180; int _topPad = 5; int _bottomPad = 3; }
 
 // The derived-data cache's "Clear cache" (COMPRESSAO): SharedElements.rsc's Apply button with our
 // caption (the Options dialog's own buttons are that object, so the packages hold it).

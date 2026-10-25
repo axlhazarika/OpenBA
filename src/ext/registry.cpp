@@ -84,6 +84,16 @@ const Entry kEntries[] = {
       "A graphics driver reset while the game is starting up no longer crashes it.",
       0, [](State& s) -> bool& { return s.fix.boot_device_lost; } },
 
+    // SLIDERCLAMP (docs/extensions/handins/SLIDERCLAMP.md, docs/retail_bugs.md section 12): a slider
+    // or scroll bar dragged with the pointer off its 32-pixel band keeps following the pointer and
+    // stops at its ends, and a release there keeps the value. Retail snaps back to where the drag
+    // began. UI only. One row, two seams (SliderElement, ScrollElement).
+    { "slider_drag_clamp", Tier::Fix, Class::None, true,
+      "Sliders follow the mouse",
+      "A slider or scroll bar being dragged keeps following the mouse and stops at its ends, instead "
+      "of jumping back when the pointer strays off it.",
+      0, [](State& s) -> bool& { return s.fix.slider_drag_clamp; } },
+
     // Extensions. Each one adds a field to Ext::Extensions and a row here:
     // Tier::Extension, its Class, default true for class A / false for B or C, and for class B or C its
     // formatVersion (>= 1). The id is [a-z0-9_]+ (the unit tests check every row).
@@ -396,6 +406,16 @@ const Entry kEntries[] = {
       "Loads the large world textures at half or quarter resolution (the Enhanced tab's Texture quality): "
       "much less video memory, softer textures. Takes effect at the next start.",
       0, [](State& s) -> bool& { return s.ext.texture_quality; } },
+    // PHONEMENU (docs/extensions/handins/PHONEMENU.md): the front end fitted to a phone held in
+    // landscape -- the menu backdrop moved so the logo is whole on a screen wider than 16:9, the menu
+    // dialogs laid out inside a 4.5 % safe area (rounded corners, the camera cut-out), and the UI scale
+    // slider down to 25 %. Class A: layout only, nothing saved, live. OFF by default on a desktop;
+    // the Android first run turns it on (src/platform/android/app_android.cpp).
+    { "phone_menu", Tier::Extension, Class::A, false,
+      "Phone screen fit",
+      "Keeps the main menu clear of rounded screen corners and camera cut-outs, shows the whole "
+      "Banished logo on wide screens, and lets the UI scale go down to 25% (a much larger interface).",
+      0, [](State& s) -> bool& { return s.ext.phone_menu; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
