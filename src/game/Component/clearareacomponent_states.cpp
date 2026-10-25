@@ -85,7 +85,7 @@ static T* FindOn(ComponentEntity* entity) {
 }
 
 // ============================================================
-// Grid area-status helpers (ports of FUN_14009d860 / dac0 / d930).
+// Grid area-status helpers (port of FUN_14009d930; d860 / dac0 are Map members).
 // grid = int*; grid[0] = width; *(char*)grid+0x80 = tile array base; tile stride
 // 0x30; tile+0x08 = occupant entity IBP; tile+0x29 flags byte, +0x2a byte;
 // *(void**)((char*)grid+0xe8) = reserved-cell BST root {key@0, left@0x10, right@0x18}.
@@ -100,47 +100,7 @@ static inline ComponentEntity* GridOccupant(const MapCell* tiles, int cell) {
     return tiles[static_cast<uintptr_t>(cell)].occupant.Get();
 }
 
-// FUN_14009d860 — ground cells are clear & unreserved. Returns true if every cell in
-// the rect is passable (flags bit0/1 clear, +0x2a == 0xff) and not in the reserved BST.
-static bool Grid_GroundClear(const Map* grid, int x1, int y1, int w, int h) {
-    int width = grid->size;
-    const MapCell* tiles = GridTiles(grid);
-    const AvlNode28* bstRoot = grid->field_0xE8.root;   // the reserved-cell BST root (Map +0xE8)
-    for (int row = y1; row < y1 + h; ++row) {
-        for (int col = x1; col < x1 + w; ++col) {
-            int cell = width * row + col;
-            const MapCell& t = tiles[static_cast<uintptr_t>(cell)];
-            uint32_t f = 1u << (t.terrainType & 0x1f);   // +0x29
-            if ((f & 2) || (f & 1) || static_cast<int8_t>(t.field_0x2A) != -1)
-                return false;
-            for (const AvlNode28* node = bstRoot; node;) {
-                int nk = node->key;
-                if (cell < nk)      node = node->left;    // +0x10
-                else if (cell <= nk) return false;   // reserved
-                else                node = node->right;   // +0x18
-            }
-        }
-    }
-    return true;
-}
-
-// FUN_14009dac0 — every cell in the rect is empty (no occupant entity at tile+0x08).
-// Retail tests only `occ != 0` (row 1272): a foundation claims its own cells only at
-// ClearArea state 2 (MapComponent::OnEvent(1) -> AddToMap), after this test, so its
-// own entity is never in the rect here. (CountRemaining 0x140118330 is the one that
-// skips self; this one does not.)
-static bool Grid_AllEmpty(const Map* grid, int x1, int y1, int w, int h) {
-    int width = grid->size;
-    const MapCell* tiles = GridTiles(grid);
-    for (int row = y1; row < y1 + h; ++row) {
-        for (int col = x1; col < x1 + w; ++col) {
-            ComponentEntity* occ = GridOccupant(tiles, width * row + col);
-            if (occ != nullptr)
-                return false;
-        }
-    }
-    return true;
-}
+// FUN_14009d860 / FUN_14009dac0 are Map::IsGroundClear / Map::IsAreaEmpty (Game/maparea.cpp).
 
 // FUN_14009d930 — true if NO target NaturalResourceComponent remains in the rect
 // (optionally filtered to occupants whose description (entity+0x28) == filter).
@@ -163,8 +123,8 @@ static bool Grid_NoTargetResource(const Map* grid, int x1, int y1, int w, int h,
 // ============================================================
 // ClearAreaComponent::IsDone — FUN_140118440: is the clear area fully done?
 //   desc = the ClearAreaDescription; footprint from FindComponent<MapComponent>(owner).
-//   groundOK = (desc._clearGround==0) || Grid_GroundClear
-//   if (desc._clearTrees==0 || desc._clearBuildings!=0) done = groundOK && Grid_AllEmpty
+//   groundOK = (desc._clearGround==0) || Map::IsGroundClear
+//   if (desc._clearTrees==0 || desc._clearBuildings!=0) done = groundOK && Map::IsAreaEmpty
 //   else                                                done = groundOK && Grid_NoTargetResource(target)
 // B6 (14d G2): 0x140118458-0x140118476 IsDerivedFrom(+0x18, ClearAreaDescription cell
 // 0x1401c7200), CMOVNZ to 0; the flags (+0x29 at 0x140118499, +0x28, +0x2a, +0x20) are read
@@ -188,10 +148,10 @@ bool ClearAreaComponent::IsDone() {
 
     const Map* grid = GameUpdateLoop::_singleton->m_game;
 
-    bool groundOK = !clearGround || Grid_GroundClear(grid, x1, y1, w, h);
+    bool groundOK = !clearGround || grid->IsGroundClear(x1, y1, w, h);
     if (!groundOK) return false;
     const bool allEmptyBranch = (!clearTrees || clearBuildings);
-    const bool done = allEmptyBranch ? Grid_AllEmpty(grid, x1, y1, w, h)
+    const bool done = allEmptyBranch ? grid->IsAreaEmpty(x1, y1, w, h)
                                      : Grid_NoTargetResource(grid, x1, y1, w, h, target);
 
     return done;
@@ -306,14 +266,11 @@ char ClearAreaComponent::State0Enter(StateMachine* sm) {
     if (doSweep)
         FootprintSweep();
 
-    // (2) is-done? A footprint whose only occupant is the building itself (an
-    // already-built house — its cells register their own entity at tile+0x08, so
-    // Grid_AllEmpty is never true) has nothing to clear: CountRemaining skips self,
-    // so remaining==0 means "no clearable resource" and we finish immediately rather
-    // than posting phantom clear-work every state entry.
-    int remaining = CountRemaining();
-    clearState = remaining;   // progress bookkeeping (+0x48)
-    if (remaining == 0 || IsDone()) {
+    // (2) is-done? (0x1401179c8): IsDone is the only test, as in State0PerFrame. A
+    // footprint with no occupant is not done while its ground still holds a road
+    // (_clearGround, Map::IsGroundClear): the Remove Roads marker (Template/Clear.rsc on a
+    // road cell) is exactly that case.
+    if (IsDone()) {
         ::ControllerLive::RequestStateTransition(sm, 1);   // finish: 0 -> 1
         return 1;
     }
@@ -331,6 +288,7 @@ char ClearAreaComponent::State0Enter(StateMachine* sm) {
         int h  = static_cast<int16_t>(mc->tileY1);
         kind = ClearArea_ScanKindFlags(grid, x1, y1, w, h);
     }
+    clearState = CountRemaining();   // progress bookkeeping (+0x48), stored after the scan
 
     if (!workComp || !::System::MemoryAllocator::_singleton) return 1;
 
@@ -354,16 +312,14 @@ char ClearAreaComponent::State0Enter(StateMachine* sm) {
 // State-0 PER-FRAME — ClearAreaComponent::State0PerFrame, 0x1401178f0.
 //   When the footprint is finally clear, request the 0 -> 1 transition.
 // ============================================================
-//   Faithful to 78f0: the ONLY done-test is the grid-emptiness IsDone (0x140118440).
-//   The CountRemaining==0 short-circuit that State0Enter uses must NOT appear here.
+//   Faithful to 78f0: the ONLY done-test is the grid-emptiness IsDone (0x140118440), as
+//   in State0Enter. A CountRemaining==0 short-circuit must NOT appear in either.
 //   CountRemaining only counts natural-resource occupants, so it drops to 0 the moment
 //   the tree is felled — finishing the job (and stopping the citizen's work slot) before
 //   ClearArea::Execute Phase 3 can gather the harvest pile the felling just spawned. That
 //   is what stranded piles on the ground. The pile registers itself into its cell+0x08
-//   (see the grid claim in action_base_cnr.cpp), so Grid_AllEmpty stays false while it
+//   (see the grid claim in action_base_cnr.cpp), so Map::IsAreaEmpty stays false while it
 //   lies there, holding the job open until a citizen hauls it away — exactly as retail.
-//   State0Enter keeps its short-circuit: that guards the already-built founding houses,
-//   whose own footprint self-occupancy would otherwise post phantom clear-work forever.
 char ClearAreaComponent::State0PerFrame(StateMachine* sm) {
     if (IsDone()) {
         ::ControllerLive::RequestStateTransition(sm, 1);

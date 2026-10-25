@@ -38,6 +38,8 @@ Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CM
 - `fix.boot_device_lost` (on): a device removed by a GPU reset during boot is recovered from the reset path, not
   only from Present, and the main loop no longer walks a SaveLoad that does not exist yet during a device loss
   before the menu (a retail bug, `docs/retail_bugs.md` section 10). Off under `/profile:faithful`.
+- Remove Roads works again: finished road tiles are marked and a laborer removes them, as in retail. The
+  removal marker used to finish the moment it was placed, because nothing stands on a road cell.
 
 ## v1.0.1 (2026-10-23)
 
