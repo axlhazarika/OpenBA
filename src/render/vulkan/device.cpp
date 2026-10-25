@@ -7,11 +7,11 @@
 // (src/render/dx11/devicedata.cpp, contextdata.cpp); docs/vulkan/PLAN.md §4 is the design.
 //
 // P0 (PLAN.md §5): instance, physical device, logical device, SDL surface, swap chain and a
-// three-deep frame loop. A frame is: BeginCommands waits for its slot, acquires an image and
-// opens its command buffer; Clear records the engine's clear colour; Finish clears the
-// swap-chain image to it, submits and presents. No draw reaches the GPU yet: the resource
-// companions (companions.cpp) are stubs, and the lazily-begun dynamic-rendering pass of
-// PLAN.md §4.4 arrives with the first real draw (P2/P3).
+// three-deep frame loop. P2: a frame is BeginCommands (wait for the slot, collect the retired
+// objects, acquire an image, open the command buffer, reset the slot's ring and pools: draw.h),
+// the draws (draw.cpp records them into the lazily-begun dynamic-rendering pass), then Finish (end
+// the pass, submit the upload batch and the frame, present). The resource files are resources.h
+// (memory, submission, retire queue), pipelines.h and draw.h; this file starts and stops them.
 //
 // Threads: BeginCommands / Clear / Finish run on whichever thread drives the frame (the
 // main thread, or ext.render_pipe's render thread); the device lock (Video::Device::Lock,
@@ -25,6 +25,9 @@
 
 #include "VideoVulkanData.h"
 #include "device_objects.h"
+#include "draw.h"
+#include "pipelines.h"
+#include "resources.h"
 #include "vulkan_entry.h"
 
 #include "app/options.h"
@@ -56,21 +59,6 @@ namespace VideoVulkan {
 
 namespace {
 
-constexpr unsigned kFramesInFlight = 3;
-
-// What the instance / device creation found out, for the log line and the later phases.
-struct Caps {
-    uint32_t apiVersion = 0;
-    bool debugUtils = false;             // VK_EXT_debug_utils on the instance
-    bool validation = false;             // VK_LAYER_KHRONOS_validation enabled
-    bool pushDescriptor = false;         // VK_KHR_push_descriptor
-    bool vertexInputDynamicState = false;// VK_EXT_vertex_input_dynamic_state
-    bool extendedDynamicState2 = false;  // VK_EXT_extended_dynamic_state2 (EDS1 is 1.3 core)
-    bool loadStoreOpNone = false;        // VK_KHR_load_store_op_none / VK_EXT_load_store_op_none
-    bool d24s8 = false;                  // D24_UNORM_S8_UINT as a depth-stencil attachment
-    VkSampleCountFlags colorSamples = VK_SAMPLE_COUNT_1_BIT;
-};
-
 struct Frame {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer commands = VK_NULL_HANDLE;
@@ -101,9 +89,7 @@ Caps caps;
 VkPhysicalDeviceProperties deviceProperties{};
 int lastFullscreen = -1;
 uint64_t frameCount = 0;
-// The engine's Clear for the frame: colour as 0xAARRGGBB, applied in Finish.
-bool clearRequested = false;
-uint32_t clearColor = 0;
+bool resourcesUp = false;   // ResourcesStartup / PipelinesStartup / DrawStartup ran
 // The shader modules CreateShaderModule made and nothing destroyed yet (device_objects.h); Shutdown
 // destroys the rest before the device. Its own lock: programs are created on the loader thread too.
 std::mutex moduleLock;
@@ -388,6 +374,7 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     }
     swapchainDirty = false;
     imageAcquired = false;
+    DrawTargetsChanged();
     std::fprintf(stderr, "[Vulkan] swap chain %ux%u, %u images, format %d, present mode %d\n", extent.width,
                  extent.height, count, static_cast<int>(swapFormat), static_cast<int>(presentMode));
     return true;
@@ -474,27 +461,6 @@ bool CreateFrames(std::string* why) {
     return true;
 }
 
-// A full-image layout transition on the current swap-chain image (synchronization2).
-void TransitionSwapImage(VkCommandBuffer cb, VkImageLayout from, VkImageLayout to,
-                         VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                         VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-    VkImageMemoryBarrier2 b = Make<VkImageMemoryBarrier2>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
-    b.srcStageMask = srcStage;
-    b.srcAccessMask = srcAccess;
-    b.dstStageMask = dstStage;
-    b.dstAccessMask = dstAccess;
-    b.oldLayout = from;
-    b.newLayout = to;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = swapImages[imageIndex];
-    b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    VkDependencyInfo d = Make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
-    d.imageMemoryBarrierCount = 1;
-    d.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cb, &d);
-}
-
 }  // namespace
 
 // ---- the entry points (vulkan_entry.h) ----------------------------------------------------------
@@ -505,6 +471,44 @@ void TransitionSwapImage(VkCommandBuffer cb, VkImageLayout from, VkImageLayout t
 
 bool DeviceLive() {
     return device != VK_NULL_HANDLE;
+}
+
+// ---- the live device (device_objects.h) ---------------------------------------------------------
+
+VkDevice LiveDevice() {
+    return device;
+}
+
+VkPhysicalDevice LivePhysical() {
+    return physical;
+}
+
+VkQueue LiveQueue() {
+    return queue;
+}
+
+uint32_t LiveGraphicsFamily() {
+    return graphicsFamily;
+}
+
+const VkPhysicalDeviceProperties& LiveProperties() {
+    return deviceProperties;
+}
+
+const Caps& LiveCaps() {
+    return caps;
+}
+
+VkInstance LiveInstance() {
+    return instance;
+}
+
+VkFormat DepthStencilFormat() {
+    return caps.d24s8 ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
+}
+
+VkFormat SwapchainFormat() {
+    return swapFormat;
 }
 
 // ---- device objects (device_objects.h) ----------------------------------------------------------
@@ -577,7 +581,7 @@ bool Enumerate(Video::Device* dev, const char* name) {
         a.name.Set(props.deviceName);
         a.dxgiAdapterIndex = i;
         a.dxgiOutputIndex = 0;
-        a.maxFilterLevel = 4;
+        a.maxFilterLevel = std::min(16, static_cast<int>(props.limits.maxSamplerAnisotropy));   // dx11: 16
         // Array<bool>: multisampleData[k] is "k+1 samples works" for k = 0..7.
         a.multisampleData = static_cast<uint8_t*>(A::MemAlloc(8, 4));
         std::memset(a.multisampleData, 0, 8);
@@ -638,6 +642,9 @@ bool DeviceData::CreateDevice() {
     if (!have13.dynamicRendering || !have13.synchronization2) {
         return Fail("Vulkan: the driver lacks dynamicRendering or synchronization2 (Vulkan 1.3 core)");
     }
+    if (!have12.timelineSemaphore) {
+        return Fail("Vulkan: the driver lacks timelineSemaphore (Vulkan 1.2 core)");
+    }
     if (!HasDeviceExtension(physical, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
         return Fail("Vulkan: the device has no VK_KHR_swapchain");
     }
@@ -653,6 +660,9 @@ bool DeviceData::CreateDevice() {
         caps.d24s8 = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
     }
     caps.colorSamples = deviceProperties.limits.framebufferColorSampleCounts;
+    caps.samplerAnisotropy = have2.features.samplerAnisotropy != 0;
+    caps.fillModeNonSolid = have2.features.fillModeNonSolid != 0;
+    caps.textureCompressionBC = have2.features.textureCompressionBC != 0;
 
     // 3 -- the graphics queue family (it must also present to the surface, checked after the surface).
     uint32_t qCount = 0;
@@ -778,6 +788,13 @@ bool DeviceData::CreateDevice() {
     dev->settingsChanged = 0;
     StallDebug::Mark("  Vulkan swap chain");
 
+    // 12 -- the resource layer (P2): memory and submission, the pipeline layout and cache, the draw state.
+    if (!ResourcesStartup(&why)) return Fail("Vulkan: " + why);
+    resourcesUp = true;
+    if (!PipelinesStartup(&why)) return Fail("Vulkan: " + why);
+    if (!DrawStartup(&why)) return Fail("Vulkan: " + why);
+    StallDebug::Mark("  Vulkan resources");
+
     std::fprintf(stderr,
                  "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d "
                  "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d validation=%d\n",
@@ -792,6 +809,14 @@ bool DeviceData::CreateDevice() {
 void DeviceData::Shutdown() {
     if (device) {
         vkDeviceWaitIdle(device);
+        if (resourcesUp) {
+            // The draw state, the pipelines (their cache is written here), then everything the
+            // companions still hold (resources.h); the shader modules after them, below.
+            DrawShutdown();
+            PipelinesShutdown();
+            ResourcesShutdown();
+            resourcesUp = false;
+        }
         DestroySwapchainObjects();
         if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
         swapchain = VK_NULL_HANDLE;
@@ -841,9 +866,9 @@ bool DeviceData::Slot7() {
     return true;
 }
 
-// Retail slot 8 (dx11 devicedata.cpp): the game cursor from a 32x32 ImageBuffer. P0 has no
-// readable textures (ImageBufferData::Read answers false), so the cursor stays the platform's
-// until P2 brings the texture read-back; the Metal body is the template.
+// Retail slot 8 (dx11 devicedata.cpp): the game cursor from a 32x32 ImageBuffer. It needs the
+// texture read-back (ImageBufferData::Read), which is P3 with the render targets; until then the
+// cursor stays the platform's. The Metal body is the template.
 void DeviceData::SetImageBuffer(Video::ImageBuffer* imageBuffer, int hotX, int hotY) {
     (void)imageBuffer;
     (void)hotX;
@@ -934,9 +959,18 @@ bool ContextData::BeginCommands() {
     VkCommandBufferBeginInfo bi = Make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(f.commands, &bi);
-    clearRequested = false;
 
     dev->Lock();
+    // The slot's previous frame completed (the fence above): its ring, pools and the objects
+    // released before it can go.
+    CollectRetired();
+    FrameTarget target;
+    target.cb = f.commands;
+    target.slot = frameSlot;
+    target.image = swapImages[imageIndex];
+    target.view = swapViews[imageIndex];
+    target.extent = swapExtent;
+    DrawBeginFrame(target);
     ctx->SetRenderBuffer(ctx->_defaultRenderBuffer);
     Video::Viewport vp{};
     vp.x = 0;
@@ -950,8 +984,8 @@ bool ContextData::BeginCommands() {
 void ContextData::EndCommands() {
 }
 
-// Slot 3: clear the acquired image to the frame's clear colour, submit, drop the device lock,
-// present. The P0 frame has no draws, so the whole GPU work is one vkCmdClearColorImage.
+// Slot 3: end the pass and move the image to PRESENT_SRC (draw.cpp), drop the device lock, submit the
+// upload batch and then the frame (resources.h: one queue, the timeline), present.
 void ContextData::Finish() {
     ::Video::Device* const dev = _owner->_device;
     if (!device || !imageAcquired) {
@@ -959,48 +993,21 @@ void ContextData::Finish() {
         return;
     }
     Frame& f = frames[frameSlot];
-    TransitionSwapImage(f.commands, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_CLEAR_BIT,
-                        VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    VkClearColorValue colour{};
-    if (clearRequested) {
-        colour.float32[0] = ((clearColor >> 16) & 255) / 255.0f;
-        colour.float32[1] = ((clearColor >> 8) & 255) / 255.0f;
-        colour.float32[2] = (clearColor & 255) / 255.0f;
-        colour.float32[3] = ((clearColor >> 24) & 255) / 255.0f;
-    }
-    VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCmdClearColorImage(f.commands, swapImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1,
-                         &range);
-    TransitionSwapImage(f.commands, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                        VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+    DrawEndFrame();
     vkEndCommandBuffer(f.commands);
+    const bool logFrame = frameCount == 0 || (frameCount + 1) % 300 == 0;
+    if (logFrame) DrawLogFrame(frameCount + 1, _owner);
 
     // The DX11 order: the device lock goes before the present, so a loader thread linking a new
     // resource never waits out the presentation.
     dev->Unlock();
 
+    FlushUploads();
     VkSemaphoreSubmitInfo wait = Make<VkSemaphoreSubmitInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO);
     wait.semaphore = f.imageAvailable;
-    wait.stageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkSemaphoreSubmitInfo signal = Make<VkSemaphoreSubmitInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO);
-    signal.semaphore = renderFinished[imageIndex];
-    signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    auto cbi = Make<VkCommandBufferSubmitInfo>(
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO);
-    cbi.commandBuffer = f.commands;
-    VkSubmitInfo2 si = Make<VkSubmitInfo2>(VK_STRUCTURE_TYPE_SUBMIT_INFO_2);
-    si.waitSemaphoreInfoCount = 1;
-    si.pWaitSemaphoreInfos = &wait;
-    si.commandBufferInfoCount = 1;
-    si.pCommandBufferInfos = &cbi;
-    si.signalSemaphoreInfoCount = 1;
-    si.pSignalSemaphoreInfos = &signal;
-    VkResult r = vkQueueSubmit2(queue, 1, &si, f.done);
-    if (r != VK_SUCCESS) {
-        std::fprintf(stderr, "[Vulkan] vkQueueSubmit2: %s\n", ResultName(r));
-    }
+    wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const uint64_t serial = SubmitCommands(f.commands, &wait, renderFinished[imageIndex], f.done);
+    NoteFrameSubmitted(serial);
 
     VkPresentInfoKHR pi = Make<VkPresentInfoKHR>(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
     pi.waitSemaphoreCount = 1;
@@ -1008,7 +1015,7 @@ void ContextData::Finish() {
     pi.swapchainCount = 1;
     pi.pSwapchains = &swapchain;
     pi.pImageIndices = &imageIndex;
-    r = vkQueuePresentKHR(queue, &pi);
+    VkResult r = PresentQueue(pi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
         swapchainDirty = true;
     } else if (r != VK_SUCCESS) {
@@ -1017,97 +1024,18 @@ void ContextData::Finish() {
     imageAcquired = false;
     frameSlot = (frameSlot + 1) % kFramesInFlight;
     ++frameCount;
-    if (frameCount == 1 || frameCount % 300 == 0) {
-        std::fprintf(stderr, "[Vulkan] frame=%llu present=%s\n", static_cast<unsigned long long>(frameCount),
-                     ResultName(r));
-    }
-}
-
-// Slot 4: retail clears the bound targets at once. P0 keeps the colour and applies it to the
-// swap-chain image in Finish (there is no other target yet); depth and stencil have nothing to
-// clear. P3 turns this into the lazily-begun pass's LOAD_OP_CLEAR (PLAN.md §4.4).
-void ContextData::Clear(unsigned flags, unsigned color, float depth, int stencil) {
-    (void)depth;
-    (void)stencil;
-    if (flags & 1) {
-        clearColor = color;
-        clearRequested = true;
-    }
-}
-
-void ContextData::BindRenderBuffer() {
-}
-void ContextData::BindViewport() {
-}
-void ContextData::BindScissor() {
-}
-void ContextData::BindTransforms() {
-}
-void ContextData::BindTextureNone(int slot) {
-    (void)slot;
-}
-void ContextData::BindIndexNone() {
-}
-void ContextData::BindVertexNone(int slot) {
-    (void)slot;
-}
-
-void ContextData::DrawIndexed(int primitiveType, int baseVertex, int vertexCount, int startIndex,
-                              int indexCount, int instanceCount) {
-    (void)primitiveType;
-    (void)baseVertex;
-    (void)vertexCount;
-    (void)startIndex;
-    (void)indexCount;
-    (void)instanceCount;
-    _owner->_drawsSubmitted++;   // counted, not drawn (P2)
-}
-
-int ContextData::GetMaxDynamicInstances(int a, int b, int c) {
-    (void)a;
-    (void)b;
-    (void)c;
-    return 1;
-}
-
-// The dynamic-vertex path (dx11 contextdata.cpp slots 14-19): the engine fills the context's
-// dynamic buffers through the vertex buffer Lock and draws them. P0 accepts and drops them.
-bool ContextData::BeginVertices(int vertexCount, int vertexStride) {
-    (void)vertexCount;
-    (void)vertexStride;
-    return false;
-}
-void ContextData::EndVertices(int primitiveType) {
-    (void)primitiveType;
-}
-bool ContextData::BeginIndexedVertices(int vertexCount, int vertexStride, int indexCount) {
-    (void)vertexCount;
-    (void)vertexStride;
-    (void)indexCount;
-    return false;
-}
-void ContextData::EndIndexedVertices(int primitiveType) {
-    (void)primitiveType;
-}
-bool ContextData::BeginInstancedIndexedVertices(int vertexCount, int vertexStride, int indexCount,
-                                                int instanceCount) {
-    (void)vertexCount;
-    (void)vertexStride;
-    (void)indexCount;
-    (void)instanceCount;
-    return false;
-}
-void ContextData::EndInstancedIndexedVertices(int primitiveType) {
-    (void)primitiveType;
 }
 
 // ---- the main targets ---------------------------------------------------------------------------
 // RenderBuffer::Create on the default render buffer calls these on its colour and depth images:
 // the companion publishes the back-buffer shape through the owner's fields (dx11
 // imagebufferdata.cpp AttachColorBuffer / AttachDepthBuffer: format 5 = BGRA8, 7 = D24S8; kind
-// 0 = render target, 1 = depth). P3 gives them the real images.
+// 0 = render target, 1 = depth) and marks itself a main target: the draws aim at the swap-chain
+// image and the backend's depth image (draw.cpp), and a Bind of either as a texture reads the
+// placeholder.
 
 void ImageBufferData::AttachColorBuffer() {
+    mainTarget = MainTarget::Color;
     auto dev = Video::Device::_singleton;
     _owner->_width = dev->backBufferWidth;
     _owner->_height = dev->backBufferHeight;
@@ -1118,6 +1046,7 @@ void ImageBufferData::AttachColorBuffer() {
 }
 
 void ImageBufferData::AttachDepthBuffer() {
+    mainTarget = MainTarget::Depth;
     if (_owner->Width() <= 0 || _owner->Height() <= 0) {
         auto dev = Video::Device::_singleton;
         _owner->_width = dev->backBufferWidth;
@@ -1128,14 +1057,23 @@ void ImageBufferData::AttachDepthBuffer() {
     _owner->_format = 7;
 }
 
+// dx11: OMSetRenderTargets(colour, depth). Here the render buffer becomes the draw target (draw.h:
+// P2 draws only into the main one).
 void RenderBufferData::Bind(void* context) {
     (void)context;
+    DrawSetRenderBuffer(_owner);
 }
 
+// dx11: ResolveSubresource from `other`'s colour into this one's. P3 (render targets).
 void RenderBufferData::Resolve(void* context, Video::RenderBuffer* other, bool flag) {
     (void)context;
     (void)other;
     (void)flag;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        std::fprintf(stderr, "[Vulkan] RenderBuffer::Resolve is P3: skipped\n");
+    }
 }
 
 }  // namespace VideoVulkan

@@ -9,13 +9,15 @@
 // companions.cpp (buffers, images, programs, layouts, states).
 //
 // P0 (docs/vulkan/PLAN.md §5): the device, swap chain and frame loop are real. P1: the two
-// program classes convert their DXBC to SPIR-V shader modules. Every other resource class is
-// still a stub that accepts what the engine hands it and draws nothing; each stub says so in
-// its body. No retail layout constraints apply to a backend subclass's own
-// members (the base pins the two words every companion starts with).
+// program classes convert their DXBC to SPIR-V shader modules. P2: buffers, images, layouts,
+// states and the draws are real (resources.h, pipelines.h, draw.h); render buffers other than the
+// main one are P3. No retail layout constraints apply to a backend subclass's own members (the
+// base pins the two words every companion starts with).
 // ============================================================================
 
 #include "vk_api.h"
+#include "pipelines.h"
+#include "resources.h"
 #include "shader_convert.h"
 #include "video/CompanionData.h"
 
@@ -79,49 +81,83 @@ public:
 class ImageBufferData final : public Video::ImageBufferData {
 public:
     explicit ImageBufferData(Owner* o) : Video::ImageBufferData(o) {}
-    ~ImageBufferData() override = default;
+    ~ImageBufferData() override;
     void AttachColorBuffer() override;
     void AttachDepthBuffer() override;
     bool Create(const Collection::Array<Collection::Array<uint8_t>>* levels) override;
     void Bind(void* context, unsigned slot) override;
     bool Update(void* data, int width, int height) override;
     bool Read(void* dst, int width, int height) override;
+    // P2: the texture (resources.h), its samplers (retail's and ext point sampling's), and whether the
+    // owner is one of the main targets (the swap-chain image / the backend's depth image, which are
+    // not sampled: a Bind of one binds the placeholder).
+    GpuImage image;
+    bool cube = false;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkSampler pointSampler = VK_NULL_HANDLE;
+    enum class MainTarget : uint8_t { None, Color, Depth };
+    MainTarget mainTarget = MainTarget::None;
+};
+
+// The storage of a vertex or index buffer (companions.cpp). A static buffer is one device-local
+// buffer filled through the upload batch. A dynamic one (D3D11_USAGE_DYNAMIC) is host-visible and
+// RENAMED the way D3D11's MAP_WRITE_DISCARD renames: a Lock past the end starts a fresh version and
+// the old one goes back to the pool once every frame that used it completed; NO_OVERWRITE Locks
+// append to the current version (the dx11 writeCursor rule).
+struct BufferStore {
+    struct Version {
+        GpuBuffer buffer;
+        uint64_t busyUntilFrame = 0;   // the last frame index that may read it
+    };
+    GpuBuffer gpu;                     // static
+    std::vector<Version> versions;     // dynamic: versions[current] is the one being written
+    int current = -1;
+    int32_t writeCursor = 0;
+    bool dynamic = false;
+    VkBuffer Buffer() const {
+        return dynamic ? (current >= 0 ? versions[current].buffer.buffer : VK_NULL_HANDLE) : gpu.buffer;
+    }
 };
 
 class IndexBufferData final : public Video::IndexBufferData {
 public:
     explicit IndexBufferData(Owner* o) : Video::IndexBufferData(o) {}
-    ~IndexBufferData() override = default;
+    static constexpr VkBufferUsageFlags kUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    ~IndexBufferData() override;
     bool Create(uint32_t sizeBytes, uint8_t dynamic, const void* data) override;
     bool SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) override;
     void* Lock(int32_t sizeBytes, int32_t* outByteOffset) override;
     void Unlock() override;
     void Bind(void* context) override;
     void Serialize(IO::Serializer* serializer) override;
-    // P0: the engine writes through Lock's pointer, so a stub still has to hand out memory.
-    std::vector<uint8_t> scratch;
+    BufferStore store;
 };
 
 class VertexBufferData final : public Video::VertexBufferData {
 public:
     explicit VertexBufferData(Owner* o) : Video::VertexBufferData(o) {}
-    ~VertexBufferData() override = default;
+    static constexpr VkBufferUsageFlags kUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    ~VertexBufferData() override;
     bool Create(uint32_t sizeBytes, uint8_t dynamic, const void* data) override;
     bool SetData(int32_t sizeBytes, int32_t offsetBytes, const void* src) override;
     void* Lock(int32_t sizeBytes, int32_t* outByteOffset) override;
     void Unlock() override;
     void Bind(void* context, uint32_t startSlot, uint32_t offsetBytes, uint32_t strideBytes) override;
     void Serialize(IO::Serializer* serializer) override;
-    std::vector<uint8_t> scratch;
+    BufferStore store;
 };
 
 class ConstantBufferData final : public Video::ConstantBufferData {
 public:
     explicit ConstantBufferData(Owner* o) : Video::ConstantBufferData(o) {}
-    ~ConstantBufferData() override = default;
+    ~ConstantBufferData() override;
     bool Create() override;
     void Bind(void* context, const void* srcData, int32_t first, int32_t sizeBytes) override;
     int32_t SlotIndexPlusOne() override;
+    // P2: the bytes the last Bind uploaded (what D3D11's UpdateSubresource left in the bound rung);
+    // the draw copies them into the frame's constant ring (draw.cpp).
+    std::vector<uint8_t> shadow;
+    uint32_t generation = 0;   // bumped by every Bind
 };
 
 class RenderBufferData final : public Video::RenderBufferData {
@@ -136,15 +172,19 @@ public:
 class VertexLayoutData final : public Video::VertexLayoutData {
 public:
     explicit VertexLayoutData(Owner* o) : Video::VertexLayoutData(o) {}
-    ~VertexLayoutData() override = default;
+    ~VertexLayoutData() override;
     void Bind(void* context) override;
     void PlatformCreate() override;
+    // P2: the element list interned for the pipeline key (pipelines.h) and the streams it reads.
+    uint64_t layoutHash = 0;
+    uint32_t streamMask = 0;
 };
 
 // The programs (P1): the owner's DXBC permutation blobs (Video::ShaderProgram::_byteCode, up to four,
 // the DX11 `variants` rule of src/render/dx11/shaderprograms.cpp) converted to SPIR-V
-// (shader_convert.h, through the derived-data cache), one VkShaderModule per permutation the
-// program has, with its reflection. Bind records the permutation P2's pipeline key reads.
+// (shader_convert.h, through the derived-data cache), one shader-registry entry (pipelines.h: one
+// VkShaderModule per distinct blob, with its reflection) per permutation the program has. Bind
+// records the permutation and makes the program the current one of its stage (draw.cpp).
 constexpr int kPermutationCount = 4;
 
 // One log line with the modules made, served from the cache and failed since the last call
@@ -157,8 +197,7 @@ public:
     ~VertexProgramData() override;
     bool PlatformCreate() override;
     void Bind(void* context, int permutation) override;
-    VkShaderModule modules[kPermutationCount] = {};
-    Shaders::ShaderReflection reflection[kPermutationCount];
+    ShaderEntry* shaders[kPermutationCount] = {};
     int boundPermutation = 0;   // the last Bind's choice: the request when built, else 0
 };
 
@@ -168,17 +207,20 @@ public:
     ~PixelProgramData() override;
     bool PlatformCreate() override;
     void Bind(void* context, int permutation) override;
-    VkShaderModule modules[kPermutationCount] = {};
-    Shaders::ShaderReflection reflection[kPermutationCount];
+    ShaderEntry* shaders[kPermutationCount] = {};
     int boundPermutation = 0;
 };
 
 class RenderStateData final : public Video::RenderStateData {
 public:
     explicit RenderStateData(Owner* o) : Video::RenderStateData(o) {}
-    ~RenderStateData() override = default;
+    ~RenderStateData() override;
     bool Create() override;
     void Bind(void* context) override;
+    // P2: the pipeline half (pipelines.h StateBlock) and the two dynamic pieces.
+    StateBlock block;
+    uint8_t stencilReference = 0;
+    bool scissorEnable = false;
 };
 
 class VideoProgramData final : public Video::VideoProgramData {

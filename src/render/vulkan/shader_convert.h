@@ -83,7 +83,8 @@ constexpr uint32_t BindingOfSampler(uint32_t reg) {
 
 // Bumped whenever the layout above, the compile options or the IO passes change: it is part of the
 // cache key, so every SPIR-V module made under the old rules misses and is converted again.
-constexpr uint32_t kMappingVersion = 1;
+// 2 (P2): the reflection records which textures are cubes (textureCubeMask).
+constexpr uint32_t kMappingVersion = 2;
 
 // ---- reflection --------------------------------------------------------------------------------
 // One interpolant, vertex input or render-target output of a program.
@@ -101,6 +102,7 @@ struct ShaderReflection {
     uint32_t constantBufferMask = 0;   // bit r: b<r> is read
     uint32_t textureMask        = 0;   // bit r: t<r> is read
     uint32_t samplerMask        = 0;   // bit r: s<r> is read
+    uint32_t textureCubeMask    = 0;   // bit r: t<r> is declared a cube (TextureCube / array)
     // Vertex: the vertex input semantics (P2's vertex layouts bind by these) and the interpolants it
     // writes. Pixel: the interpolants it reads and the render targets it writes.
     std::vector<IoElement> inputs;

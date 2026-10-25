@@ -238,7 +238,13 @@ void ReflectResources(const ir::Builder& builder, ShaderReflection* refl) {
         const uint32_t count = uint32_t(it->getOperand(3u));
         const uint32_t bits = RegisterBits(first, count);
         if (code == ir::OpCode::eDclCbv) refl->constantBufferMask |= bits;
-        if (code == ir::OpCode::eDclSrv) refl->textureMask |= bits;
+        if (code == ir::OpCode::eDclSrv) {
+            refl->textureMask |= bits;
+            // Operand 4 is the resource kind: a cube needs a cube view, also from a placeholder.
+            const auto kind = ir::ResourceKind(it->getOperand(4u));
+            if (kind == ir::ResourceKind::eImageCube || kind == ir::ResourceKind::eImageCubeArray)
+                refl->textureCubeMask |= bits;
+        }
         if (code == ir::OpCode::eDclSampler) refl->samplerMask |= bits;
     }
 }
@@ -532,6 +538,7 @@ std::vector<uint8_t> EncodeEntry(const std::vector<uint32_t>& spirv, const Shade
     Put32(out, refl.constantBufferMask);
     Put32(out, refl.textureMask);
     Put32(out, refl.samplerMask);
+    Put32(out, refl.textureCubeMask);
     PutElements(out, refl.inputs);
     PutElements(out, refl.outputs);
     Put32(out, static_cast<uint32_t>(spirv.size()));
@@ -550,6 +557,7 @@ bool DecodeEntry(const std::vector<uint8_t>& payload, std::vector<uint32_t>* spi
     out.constantBufferMask = r.U32();
     out.textureMask = r.U32();
     out.samplerMask = r.U32();
+    out.textureCubeMask = r.U32();
     if (!GetElements(r, &out.inputs) || !GetElements(r, &out.outputs)) return false;
     const uint32_t words = r.U32();
     if (!r.ok || payload.size() - r.at != static_cast<size_t>(words) * 4) return false;

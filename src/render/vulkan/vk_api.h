@@ -38,6 +38,7 @@ namespace VideoVulkan {
     X(vkGetPhysicalDeviceFeatures2)                      \
     X(vkGetPhysicalDeviceQueueFamilyProperties)          \
     X(vkGetPhysicalDeviceMemoryProperties)               \
+    X(vkGetPhysicalDeviceMemoryProperties2)              \
     X(vkGetPhysicalDeviceFormatProperties)               \
     X(vkEnumerateDeviceExtensionProperties)              \
     X(vkGetPhysicalDeviceSurfaceSupportKHR)              \
@@ -83,7 +84,61 @@ namespace VideoVulkan {
     X(vkCmdPipelineBarrier2)                             \
     X(vkCmdClearColorImage)                              \
     X(vkCreateShaderModule)                              \
-    X(vkDestroyShaderModule)
+    X(vkDestroyShaderModule)                             \
+    X(vkFreeCommandBuffers)                              \
+    X(vkGetSemaphoreCounterValue)                        \
+    X(vkWaitSemaphores)                                  \
+    X(vkAllocateMemory)                                  \
+    X(vkFreeMemory)                                      \
+    X(vkMapMemory)                                       \
+    X(vkUnmapMemory)                                     \
+    X(vkFlushMappedMemoryRanges)                         \
+    X(vkInvalidateMappedMemoryRanges)                    \
+    X(vkBindBufferMemory)                                \
+    X(vkBindImageMemory)                                 \
+    X(vkBindBufferMemory2)                               \
+    X(vkBindImageMemory2)                                \
+    X(vkGetBufferMemoryRequirements)                     \
+    X(vkGetImageMemoryRequirements)                      \
+    X(vkGetBufferMemoryRequirements2)                    \
+    X(vkGetImageMemoryRequirements2)                     \
+    X(vkGetDeviceBufferMemoryRequirements)               \
+    X(vkGetDeviceImageMemoryRequirements)                \
+    X(vkCreateBuffer)                                    \
+    X(vkDestroyBuffer)                                   \
+    X(vkCreateImage)                                     \
+    X(vkDestroyImage)                                    \
+    X(vkCreateSampler)                                   \
+    X(vkDestroySampler)                                  \
+    X(vkCreateDescriptorSetLayout)                       \
+    X(vkDestroyDescriptorSetLayout)                      \
+    X(vkCreatePipelineLayout)                            \
+    X(vkDestroyPipelineLayout)                           \
+    X(vkCreateDescriptorPool)                            \
+    X(vkDestroyDescriptorPool)                           \
+    X(vkResetDescriptorPool)                             \
+    X(vkAllocateDescriptorSets)                          \
+    X(vkUpdateDescriptorSets)                            \
+    X(vkCreatePipelineCache)                             \
+    X(vkDestroyPipelineCache)                            \
+    X(vkGetPipelineCacheData)                            \
+    X(vkCreateGraphicsPipelines)                         \
+    X(vkDestroyPipeline)                                 \
+    X(vkCmdCopyBuffer)                                   \
+    X(vkCmdCopyBufferToImage)                            \
+    X(vkCmdFillBuffer)                                   \
+    X(vkCmdClearDepthStencilImage)                       \
+    X(vkCmdBeginRendering)                               \
+    X(vkCmdEndRendering)                                 \
+    X(vkCmdBindPipeline)                                 \
+    X(vkCmdBindDescriptorSets)                           \
+    X(vkCmdBindVertexBuffers2)                           \
+    X(vkCmdBindIndexBuffer)                              \
+    X(vkCmdSetViewport)                                  \
+    X(vkCmdSetScissor)                                   \
+    X(vkCmdSetStencilReference)                          \
+    X(vkCmdDraw)                                         \
+    X(vkCmdDrawIndexed)
 
 #define VIDEO_VULKAN_DECLARE(name) extern PFN_##name name;
 VIDEO_VULKAN_GLOBAL_FUNCS(VIDEO_VULKAN_DECLARE)

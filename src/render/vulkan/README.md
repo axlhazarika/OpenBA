@@ -10,11 +10,15 @@ NOT RETAIL. The third backend behind `src/render/common/README.md`'s seam, picke
 | `backend.cmake` | The CMake fragment: sources, the Vulkan-Headers include (`-isystem`), ready flag; the `dxbc_spv` static library (dxbc-spirv + SPIRV-Headers submodules); the unit additions; the `vulkan-shader-check` target. |
 | `shader_convert.h`, `shader_convert.cpp` | DXBC to SPIR-V through dxbc-spirv, the binding layout (set 0 vertex, set 1 pixel; constant buffers, then textures, then samplers), the reflection, the VS -> PS semantic link, the cache key and payload. No Vulkan header. |
 | `shader_cache.cpp` | `LoadOrConvert`: the SPIR-V cache over the per-user derived-data cache (`src/ext/derived_cache`). |
-| `device_objects.h` | The Vulkan objects companions make through the device file (shader modules), tracked and destroyed at Shutdown. |
+| `device_objects.h` | What the other files read from the device file: the live device, queue, properties, `Caps`, the depth and swap-chain formats; shader modules (tracked, destroyed at Shutdown). |
+| `vk_mem.h`, `vma_impl.cpp` | VMA (`third_party/VulkanMemoryAllocator`), configured once (no static or dynamic function fetching, API 1.3); the implementation is compiled in `vma_impl.cpp`. |
+| `resources.h`, `resources.cpp` | GPU memory (VMA buffers and images), submission (one queue, the timeline semaphore), the upload batch, the frame-indexed retire queue, shared samplers, the placeholders. |
+| `pipelines.h`, `pipelines.cpp` | The pipeline layout, the shader registry, vertex layouts, the render-state block, the pipeline key and cache, the persistent `VkPipelineCache` and the warm list with its worker. |
+| `draw.h`, `draw.cpp` | The bound state, the lazily-begun pass, the constant ring, descriptor sets, and the ContextData draw slots (Clear, the Bind* slots, DrawIndexed, the dynamic-vertex slots). |
 | `vk_api.h`, `vk_api.cpp` | The entry points the backend calls, as function pointers resolved at run time from SDL's `vkGetInstanceProcAddr` (nothing links the loader). Three X-lists: global, instance, device. |
 | `VideoVulkanData.h` | The twelve companion subclasses of `src/engine/video/CompanionData.h`. |
-| `device.cpp` | Instance, physical device, logical device, SDL surface, swap chain, the frame loop (`BeginCommands` / `Clear` / `Finish`), the adapter enumeration, the main-target attach slots. |
-| `companions.cpp` | Buffers, images, programs, layouts, states. The programs are real (P1: one shader module per DXBC permutation); the rest are **P0 stubs** that accept and draw nothing, each saying what replaces it. |
+| `device.cpp` | Instance, physical device, logical device, SDL surface, swap chain, the frame loop (`BeginCommands` / `Finish`), the adapter enumeration, the main-target attach slots, the start and stop of the resource files. |
+| `companions.cpp` | Buffers (static device-local, dynamic renamed on DISCARD), images (every retail format, mips, cubes), constant buffers, programs (through the shader registry), vertex layouts, render states. |
 | `integration.cpp` | The backend-neutral seams (`AoBackend::`, `FaaBackend::`, … , `Ext::RenderPipe::`, `Graphics::ExtAoAfterOpaque`): every answer is "not supported" until P4. |
 | `render_backend_vulkan.cpp` | `Render::` entry points and the compatibility-slot placeholder. |
 | `vulkan_entry.h` | What the plain entry file needs from `device.cpp` without a Vulkan header. |
@@ -26,8 +30,13 @@ the validation layer when one is installed.
 P1 (shaders, done): every vertex and pixel program permutation is converted from the user's
 DXBC to SPIR-V with dxbc-spirv and made a shader module; the SPIR-V is kept in the per-user
 derived-data cache (`<Documents>\Banished\Cache`, none under the faithful profile). All 465
-retail permutations convert and pass `spirv-val` (`vulkan-shader-check`, below). No draw reaches
-the GPU yet. Next: P2 resources and draws, P3 render targets (`docs/vulkan/PLAN.md` §5).
+retail permutations convert and pass `spirv-val` (`vulkan-shader-check`, below).
+P2 (resources and draws, done): buffers, textures, samplers, vertex layouts, render states, pipelines
+(persistent cache plus a warm list) and descriptors are real, and the main menu renders into the
+swap-chain image with the backend's depth image. A RenderDoc capture of the menu under
+`/profile:faithful` has the same main-target draws as the DX11 exe's. Render buffers other than the
+main one (shadow map, water reflection, frame copy) are skipped and counted, and `ImageBufferData::Read`
+answers false. Next: P3 render targets (`docs/vulkan/PLAN.md` §5).
 
 ## Checking the shaders
 ```bash
