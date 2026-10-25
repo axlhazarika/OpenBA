@@ -98,6 +98,12 @@ jobs:
       # unit run include tests/unit/vulkan_*_test.cpp. Headers only: no Vulkan runtime is needed.
       - name: Build OpenBA (debug)
         run: CMAKE_EXTRA="$CCACHE_LAUNCHERS" tools/build.sh build debug
+      # The witness that the default configure really is the Vulkan backend (and that it is ready:
+      # every submodule it needs came with the non-recursive checkout above).
+      - name: Default backend is vulkan
+        run: |
+          grep -q '^BANISHED_RENDER_BACKEND:STRING=vulkan$' build/cmake-debug/CMakeCache.txt
+          test -x build/cmake-debug/OpenBA
       - name: Unit tests (debug)
         run: tools/build.sh unit debug
       - name: ccache statistics

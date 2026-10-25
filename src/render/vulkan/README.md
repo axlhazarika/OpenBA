@@ -66,7 +66,9 @@ Windows-only and the D3D11-over-Vulkan route Linux used before is deleted (fetch
 resolvers in `src/platform/posix/gfx_posix.cpp`, its run-script environment and its libraries in the game
 dir and the release package). `tools/linux_run.sh` pins lavapipe on the WSL bed. The Linux build and unit
 run pass in CI; the lavapipe routes have not run yet (the WSL bed was down in P5), and the real-GPU run is
-the owner's, below. Next: P6 (Android).
+the owner's, below. The Linux build and unit witness for P5 is the CI Linux job (a fresh Ubuntu runner,
+non-recursive submodule checkout, default configure); the WSL build and the four lavapipe routes were
+NOT run, because WSL2 does not start while the hypervisor is off; the steps are below. Next: P6 (Android).
 
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan
@@ -107,6 +109,48 @@ deployed at a time. Log lines are tagged `[Vulkan]` in `standalone_error.log`.
 - Nothing outside this directory names `VideoVulkan::`; a feature the backend cannot do answers
   "not supported" through the seam header, never a silent stub.
 - One statement per line (`.claude/rules/style.md`).
+
+## Linux lavapipe routes on the WSL bed (deferred from P5)
+Not run in P5: WSL2 does not start while the hypervisor is off (`hypervisorlaunchtype off`, the uProf
+setup; turning it on is an admin `bcdedit /set hypervisorlaunchtype auto` and a reboot). After that
+reboot, from Git Bash in the checkout, one command per step:
+
+1. The driver and the loader are there (lavapipe must be listed at 1.3 or higher; if `vulkaninfo` is
+   missing: `sudo apt install mesa-vulkan-drivers libvulkan1 vulkan-tools`):
+   ```bash
+   wsl -e bash -c "vulkaninfo --summary 2>&1 | grep -E 'deviceName|apiVersion|driverName'; ls /usr/share/vulkan/icd.d/"
+   ```
+2. Copy the working tree, submodules included, into the WSL home (a build over `/mnt/c` is slow):
+   ```bash
+   wsl -e bash -c "rsync -a --delete --exclude .git --exclude build --exclude runs /mnt/c/code/GIT/untitled_rev_eng_project/ ~/banished-main/"
+   ```
+3. Build and test (the default configure is Vulkan, no flag; the scripts are CRLF in the checkout):
+   ```bash
+   wsl -e bash -c "cd ~/banished-main && bash <(tr -d '\r' < tools/build.sh) build debug --jobs 4 && bash <(tr -d '\r' < tools/build.sh) unit debug --jobs 4"
+   ```
+4. Rebuild the game dir (`OpenBA` + `libSDL3.so.0` + the WinData link, nothing else):
+   ```bash
+   wsl -e bash -c "cd ~/banished-main && bash <(tr -d '\r' < tools/linux_gamedir.sh) build/cmake-debug ~/banished_release '/mnt/c/GOG Games/Banished'"
+   ```
+5. The four routes, lavapipe pinned by the script (`VK_ICD_FILENAMES` / `VK_DRIVER_FILES`); `resave` needs
+   `~/.local/share/Banished/Save/Gate.sav` (`tools/resave_gate/README.md`):
+   ```bash
+   wsl -e bash -c "cd ~/banished-main && bash <(tr -d '\r' < tools/linux_run.sh) menu    ~/banished_release ~/lx_runs/p5_menu    3600"
+   wsl -e bash -c "cd ~/banished-main && bash <(tr -d '\r' < tools/linux_run.sh) newgame ~/banished_release ~/lx_runs/p5_newgame 3600"
+   wsl -e bash -c "cd ~/banished-main && bash <(tr -d '\r' < tools/linux_run.sh) world   ~/banished_release ~/lx_runs/p5_world   3600"
+   wsl -e bash -c "cd ~/banished-main && bash <(tr -d '\r' < tools/linux_run.sh) resave  ~/banished_release ~/lx_runs/p5_resave  3600"
+   ```
+6. What to grep in each `~/lx_runs/p5_<route>/route.txt`:
+   ```bash
+   wsl -e bash -c "grep -h -E '^\[linux_run\] [a-z]+: exit|^\[Vulkan\] (instance|device|swap chain)|validation messages|fps|RESULT=|world:' ~/lx_runs/p5_*/route.txt"
+   ```
+   A pass is `exit 0 crashlog=0 hang=no`; the device line names `llvmpipe` (lavapipe), never `Microsoft
+   Direct3D12` (dzn). `world`: compare `~/lx_runs/p5_world/new.world.txt` with the Windows DX11 exe's for
+   the same seed (`BANISHED_SEED=12345 tools/build.sh run` on the functional game dir, the same two seds
+   as `linux_run.sh`); report byte-identical or the first differing line, never fix silently. `resave`:
+   the `[Roundtrip] RESULT=` line and the resaved md5 against the golden in `tools/resave_gate/`.
+   Lavapipe is slow and WSLg throttles an unfocused window to about 5 fps; the routes count frames, not
+   simulation, so GameAutoPause does not stall them (only `stress` switches it off).
 
 ## Linux real-GPU checklist (the owner's run, an Ubuntu live boot)
 Ubuntu 24.04 or newer with the GPU's own Vulkan 1.3 driver (Mesa RADV / ANV, or NVIDIA's).
