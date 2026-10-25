@@ -28,6 +28,7 @@
 #include "Component/GrowthComponent.h"
 #include "Component/GrowthDescription.h"
 #include "Component/ModelDescription.h"
+#include "Component/NaturalResourceDescription.h"
 #include "system/Filename.h"
 #include "object/External.h"
 #include "Game/exe_bodies.h"
@@ -1103,27 +1104,31 @@ bool CanPlantOn(const MapCell& cell) {
 // Plants are made full size with their life ahead of them: SetProgress takes a fraction of the plant's
 // whole life (growth = fraction * growthScale; the plant dies when its growth passes growthScale,
 // GrowthComponent::Update), and a plant is full size at growth 1.0, so it starts at 1 / growthScale. A
-// growthScale of zero or less never dies. Rocks and ore have no GrowthComponent: worldgen leaves them at
-// the default mesh (starttown.cpp).
+// growthScale of zero or less (a plant that is never harvested or never dies; GrowthComponent::Startup sets
+// it to -1) gives growth 1.0 too, and the sign keeps it from ever passing the end. Rocks and ore have no
+// GrowthComponent and skip that step. The mesh variant is picked under worldgen's own condition (the
+// description's _b48 and a model with mesh groups, starttown.cpp), whether or not there is a GrowthComponent.
 ComponentEntity* PlantAt(Map* map, int cell) {
     GameUpdateLoop* game = GameUpdateLoop::_singleton;
     if (g_palette.empty() || cell < 0 || cell >= map->size * map->size) return nullptr;
     if (!CanPlantOn(map->cells.GetData()[cell])) return nullptr;
     ComponentDescription* desc = g_palette[static_cast<size_t>(g_plantIndex)];
+    const NaturalResourceDescription* nrDesc = desc->FindDescription<NaturalResourceDescription>();
+    if (nrDesc == nullptr || desc->FindDescription<ModelDescription>() == nullptr) return nullptr;
     void* mem = System::MemoryAllocator::MemAlloc(0x48, 8);
     if (mem == nullptr) return nullptr;
     ComponentEntity* entity = ::new (mem) ComponentEntity(desc);
     NaturalResourceComponent* nr = entity->FindComponent<NaturalResourceComponent>();
     GrowthComponent* growth = entity->FindComponent<GrowthComponent>();
     ModelComponent* model = entity->FindComponent<ModelComponent>();
-    if (nr == nullptr || model == nullptr) return nullptr;   // the palette only holds templates with both
+    if (nr == nullptr || model == nullptr) return nullptr;   // unreachable: checked on the description above
     nr->PlaceAtCell(cell);
-    if (growth != nullptr) {
-        const float lifeScale = growth->growthScale;
-        growth->SetProgress(lifeScale > 1.0f ? 1.0f / lifeScale : 0.5f);
+    if (growth != nullptr && growth->growthScale != 0.0f) growth->SetProgress(1.0f / growth->growthScale);
+    if (nrDesc->_b48 && model->MeshGroupCount() > 0) {
         System::Random* random = game->m_random;
         const uint32_t variant = random->Rand(model->MeshGroupCount());
-        const uint32_t sub = random->Rand(model->MeshCount(static_cast<int>(variant)));
+        const int meshes = model->MeshCount(static_cast<int>(variant));
+        const uint32_t sub = meshes > 0 ? random->Rand(static_cast<uint32_t>(meshes)) : 0u;
         model->SelectMesh(static_cast<uint16_t>(variant), static_cast<int16_t>(sub));
     }
     Object::InternalPtr<ComponentEntity> ref = entity;

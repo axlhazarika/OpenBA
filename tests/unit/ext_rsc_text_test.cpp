@@ -324,12 +324,13 @@ UNIT_TEST(ext_rsc_text_parse_terrain_edit_page) {
         && f.Find("buttonTerrainEditSmooth") && f.Find("buttonTerrainEditUndo"));
     CHECK(f.Find("imageTerrainEditRaise") && f.Find("imageTerrainEditUndo"));
     CHECK(f.Find("sliderTerrainEditSize") && f.Find("sliderTerrainEditStrength"));
-    // The six tools are check boxes (the one in use stays lit, with its own lit glyph as the check mark); Undo is
-    // a plain button.
+    // The six tools are check boxes (the one in use stays lit, with its own lit glyph as the check mark);
+    // Undo is a plain button.
     const Object* raise = f.Find("buttonTerrainEditRaise");
     CHECK(raise && raise->type == "CheckDescription" && raise->body.Find("_check") != nullptr);
     const Object* plantButton = f.Find("buttonTerrainEditPlant");
-    CHECK(plantButton && plantButton->type == "CheckDescription" && plantButton->body.Find("_check") != nullptr);
+    CHECK(plantButton && plantButton->type == "CheckDescription");
+    CHECK(plantButton->body.Find("_check") != nullptr);
     CHECK(f.Find("imageTerrainEditLitRaise") && f.Find("imageTerrainEditLitPlant"));
     const Object* undoButton = f.Find("buttonTerrainEditUndo");
     CHECK(undoButton && undoButton->type == "ButtonDescription");

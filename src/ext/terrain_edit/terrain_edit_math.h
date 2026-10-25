@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "ext/terrain_edit/plant_math.h"
+
 namespace Ext {
 namespace TerrainEdit {
 
@@ -102,7 +104,7 @@ struct BrushState {
     float radius   = kDefaultRadius;
     float strength = 1.0f;
     // the resource tool: how full it leaves the disc (plant_math.h, PlantTarget)
-    float density  = 0.5f;
+    float density  = kDefaultDensity;
 };
 
 inline float ClampFloat(float v, float lo, float hi) {

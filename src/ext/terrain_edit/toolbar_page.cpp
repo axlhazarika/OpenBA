@@ -81,11 +81,11 @@ void ShowStatus(UI::Element* page) {
     UI::Element* e = page->FindElement(System::String("textTerrainEditStatus")).Get();
     if (!::Object::IsDerivedFromNullSafe(e, UI::TextElement::TypeId())) return;
     char text[96];
-    if (State().mode == Mode::Plant) {
+    if (UndoRefused()) {
+        std::snprintf(text, sizeof text, "Cannot undo: something was built on this stroke");
+    } else if (State().mode == Mode::Plant) {
         std::snprintf(text, sizeof text, "Plant: %s, density %d%%, %d to undo", PlantName(),
                       static_cast<int>(State().density * 100.0f + 0.5f), static_cast<int>(UndoDepth()));
-    } else if (UndoRefused()) {
-        std::snprintf(text, sizeof text, "Cannot undo: something was built on this stroke");
     } else {
         std::snprintf(text, sizeof text, "%s brush, %d to undo", kModeNames[static_cast<int>(State().mode)],
                       static_cast<int>(UndoDepth()));
@@ -191,7 +191,6 @@ bool PageChanged(UI::Element* page, int32_t id) {
         UndoLast();
     } else if (id == kPlantComboId) {
         ReadSliders();
-
     } else {
         return false;
     }
