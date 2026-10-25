@@ -92,5 +92,9 @@ bool ConsumePumpEvent(const SDL_Event& ev) {
     return ev.type == SDL_EVENT_KEY_DOWN && HandleWindowChord(ev.key);
 }
 
+bool RotateDragReturnsCursor() {
+    return false;
+}
+
 }  // namespace Input
 }  // namespace Platform

@@ -49,5 +49,9 @@ bool ConsumePumpEvent(const SDL_Event& /*event*/) {
     return false;
 }
 
+bool RotateDragReturnsCursor() {
+    return false;
+}
+
 }  // namespace Input
 }  // namespace Platform
