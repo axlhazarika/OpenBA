@@ -221,9 +221,130 @@ None is small or safe. The plan is to leave it.
   - Windows DX11: the same;
   - the S25: EXITED, as before.
 
+## 6. Round 2: the owner's S25 test of the merged tree (`android/p8`, PR #53)
+
+Run on the merged tree with the owner's own `settings.cfg` (backed up first and restored byte for byte after;
+see the phone state below):
+- `VideoShadowScalar=1` (a 1024 sun map);
+- render scale 100, MSAA off, `VideoTextureFilter=16`;
+- the extensions on except AO.
+
+### 6.1 AO did nothing on the S25: FIXED (`5d34a3287`, `3c286f6e5`)
+
+**The cause.**
+- `vkCreateGraphicsPipelines` returned `VK_ERROR_UNKNOWN` for the AO pass's first pipeline. The log line:
+  `[AmbientOcclusion] Vulkan: pipeline PSResolveDepth1x: -13`. logcat had
+  `AdrenoVK-0: Shader compilation failed for shaderType: 0`.
+- The pass then failed at its first step every frame, so the AO rows changed nothing.
+- The validation layer had nothing to say.
+
+**Finding the shader.** The failing stage was the vertex shader, `VSFullscreen`. Compared with every retail
+vertex program (a census over the 465 permutations), it is the only one with `OpBitFieldInsert` (dxbc-spirv's
+form of SM5 `bfi`). Each experiment was a phone run:
+
+| tried | result |
+|---|---|
+| signed image coordinates for the pixel shader's fetch | still `-13`; not kept |
+| `OpBitFieldInsert` rewritten as shifts and masks | the pipeline builds; `first AO frame 2340x1080 x1` logged, no failure |
+
+**The fix.**
+- `spirv_legalize.{h,cpp}` lowers every `OpBitFieldInsert` with a constant offset and count to
+  `((insert << offset) & mask) | (base & ~mask)`. It runs for every converted module.
+- `kMappingVersion` 8. Versions 6 and 7 were test builds on the phone and are skipped, so their cache entries
+  are never read back.
+- Unit test `vulkan_ao_bitfield_insert_lowered`. `vulkan-shader-check`: 465/465 still convert and pass
+  spirv-val.
+
+**"Not supported" instead of a silent stub (`3c286f6e5`).**
+- A pipeline the driver refuses now makes `Assao::Ready()` false, so `AoBackend::Supported` is false.
+- The row then goes inactive, logged.
+- The Enhanced tab disables the AO combo and the strength slider wherever the backend cannot run the pass.
+
+**Verified:**
+- S25 with the final apk: `ASSAO ready`, the AO frame drawn, no pipeline failure, clean exit (`EXITED`).
+- Windows Vulkan, non-faithful profile, MSAA 4x: the AO frame drawn.
+
+**What is left.** On the tiler-MSAA path (`VideoMultisample` > 0 on the phone) AO still does not run. That is
+the known row "AO on the tiler MSAA path" (`docs/known_port_issues.md`). The pass logs it, but the Enhanced
+rows stay enabled on that path. **Ruling:** should they also show disabled when MSAA is on?
+
+### 6.2 Anisotropic filtering does nothing: the setting reaches the samplers (`d38986100`)
+
+**The chain, read and then logged.**
+- `VideoTextureFilter` is read into `Configuration::textureFilter`.
+- `SamplerFor` (`companions.cpp`) gives the anisotropic kind with that level, clamped to the adapter's
+  `maxFilterLevel` (16 on the S25).
+- `GetSampler` sets `anisotropyEnable` / `maxAnisotropy`. The device enables `samplerAnisotropy` when the GPU
+  has it.
+
+**The new log line.** On the S25: `[Vulkan] sampler: anisotropic 16x requested, enabled (device max 16)`. The
+adapter's `maxFilterLevel` is now 0 when the device lacks the feature, so the Options combo never offers a
+level the device cannot honour.
+
+**Why it can look like nothing.**
+- As on DX11 (`imagebufferdata.cpp`), a texture's sampler is made when the texture is created. A change in
+  Options applies at the next start, not live: retail's rule on both backends.
+- Banished's camera looks steeply down, so the S25 screenshots at 16x and 0x (pinned on the town at 3 and 80)
+  show no difference worth quoting. Their weather also differed between runs.
+
+**Ruling:** should the Options row say "applies at the next start"? That would be an `ext.*` UI change, so it
+needs a ruling.
+
+### 6.3 Citizen shadows flicker: NOT FOUND, measured further
+
+What was measured on the owner's settings:
+
+1. **Frame-to-frame differences.** A pinned camera at distances 7, 12 and 18, and the free autostart camera,
+   recorded at 120 fps (`screenrecord` up to 40 Mbit/s). The frame-to-frame difference of a 400x250 crop
+   around walking citizens shows:
+   - their silhouettes;
+   - their shadows moving in sun-map texel steps as they walk (the shadow follows its caster);
+   - nothing on standing citizens or static shadows.
+
+   On a still camera nothing flickers.
+2. **The sun camera's fit, logged per call** (a temporary log, not committed).
+   - It runs twice a frame with identical results.
+   - The texel snap (`sun_camera.cpp`, retail's `fmod` onto the texel grid) holds: texel 0.0837 world units
+     at 1024 (dim, radius 56.3, skew 0.761), constant while the camera is still.
+   - The texel size changes only while the camera zooms or tilts (radius and skew change). Retail's shadows
+     crawl during that too.
+   - The fit is engine code, the same on DX11 and Vulkan.
+3. **Input.** `adb shell input keyevent` and `swipe` did not move the camera in a way that could be measured
+   (the swipe dragged a window). An unattended moving-camera recording was not possible.
+4. **RenderDoc on Android.** Not done: it needs the qrenderdoc GUI driven by hand (`PERF_P7.md`).
+
+Ruled out on the backend side (round 1, §1): sync hazards (synchronisation validation), the comparison
+sampler, depth bias and slope, the sun map's format, store op and resolve (not msrtss). The combined-sampler
+conversion is ruled out too: the pair census shows t5+s5 (the sun map's slot) combined like every texture.
+
+**Candidates that are NOT backend code, for the owner to toggle** (Options > Extensions, live):
+- **`ext.render_culling`** (class A, on by default).
+  - Its `animCull` / `geomCull` skip the pose update and `SetTransform` of a citizen off-screen of the VIEW
+    camera.
+  - Such a citizen still casts its shadow INTO the view (the sun map covers more than the view).
+  - Its shadow can then freeze and jump as it crosses the view's edge. The phone's 19.5:9 view puts more
+    citizens near that edge.
+- **`ext.render_pipe`** (class A, on): the render thread draws the frame the main thread handed over.
+  `RENDERPIPE0.md` §6's hash names any writer between the gather and the emit.
+
+**What to ask the owner to record:**
+1. The same spot twice, one minute each: once with `ext.render_culling` on, once off. Settings as played,
+   camera moving as in play.
+2. A screen recording on the S25 of the flicker as seen. Use the phone's own screen recorder, or
+   `adb shell screenrecord --bit-rate 40000000 --time-limit 30 /sdcard/flick.mp4`.
+3. Whether the same scene on the PC flickers:
+   - DX11, the same shadow quality (Options > Video);
+   - the same extensions;
+   - camera moved the same way.
+4. The time of day and weather (the sun direction changes the snap grid's orientation through the day).
+
 ## Phone state at the end
 
-- Installed: the DEBUG apk of `bb82f4506` (this branch; `adb install -r -d` over versionCode 10001).
-- Validation off: the settings deleted, the layer removed.
+- Installed: the DEBUG apk of `d38986100` (this branch, round 2; `adb install -r -d`).
+- Validation off.
 - The app stopped.
-- `settings.cfg` untouched: the phone defaults, with `VideoShadowScalar=2`, render scale 50 and MSAA 0.
+- `settings.cfg`: the owner's own file, restored byte for byte from the copy taken before round 2 (`cmp`
+  clean). The copy is still at `/sdcard/p8_settings_backup.cfg`.
+- One round-2 run read no settings (`ReadSettings: 0 entries ... defaults`) after an in-place `sed -i` over adb,
+  and wrote a defaults file at its exit. Restored the same way.
+- The test videos and screenshots under `/sdcard` are deleted.
