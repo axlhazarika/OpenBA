@@ -401,3 +401,25 @@ backend's `ContextData::BeginCommands` runs the device-lost recovery when a swap
 fails on a removed device (retail recovers only from Present, which such a reset never reaches;
 seam `BootDeviceLostBackend::SetFixFlag`, `src/render/common/boot_device_lost/`). Off under
 `/profile:faithful`: retail's spin in the reset, or the crash above.
+
+## 11. A crop field whose every slot ends "done" while planting stays in the planting state
+
+**Symptom.** A crop field that is still planting (state 9) when every one of its slots reads
+done (state 2: no crop left growing on any of them) stays in state 9. It never moves on to
+tending or to the re-clear, so it does not plant again. Not observed in play: it needs every
+planted crop of the field to be lost before planting finishes.
+
+**Retail mechanism.**
+- `CropFieldComponent` state 9 per-frame (`0x14011a1e0`) requests 0x15 (21, the re-clear) on its
+  "all slots done" branch, and 10 when every slot is growing or done.
+- The crop-field populator (`0x14011b1a6`) registers state 9 with the transitions {3, 10} only.
+  States 10 and 11 list 0x15; state 9 does not. The node's transition lookup misses, so the
+  request is dropped.
+
+**Proof it is retail.** The populator read in Ghidra (PR #33 review), and the per-frame body in the
+Steam build's disassembly (`MOV dword [RSP+0x30],0x15` on the all-done branch). The port
+(`CropFieldComponent::State9PerFrame`, `src/game/Component/cropfieldcomponent_states.cpp`) makes the
+same request against the same table and drops it the same way.
+
+**Lever.** Add 0x15 to state 9's transitions, so the all-done branch reaches the re-clear (ClearArea
+state 0x15) as states 10 and 11 do.
