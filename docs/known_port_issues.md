@@ -1020,12 +1020,26 @@ purpose or not yet closed, as of P6 (2026-10-25).
   `src/render/vulkan/README.md`).
 - **Android: full-resolution rendering (P6) — FIXED in P7.** `VideoRenderScale` (phone first run 50)
   sizes the back buffer at half the window (1170x540 on the S25); the SDL layer scales the window size
-  and pixel density by it so the mouse agrees, and the present pass scales the frame up (linear). Not an
-  Options control yet: the key is read once at window creation (`Platform::Window::RenderScale`).
-- **Android: no in-game frame cap (P7).** `BANISHED_FPS_CAP=60` did not pace the phone's game: its one
-  `FrameLimiter::Tick` call is in `MenuDialogLoopT::Draw`, and the limiter stands aside while vsync holds
-  the rate at or below refresh; the game ran at the panel's 120 Hz. The
-  60 fps phone default is unruled (data in `docs/android/P7_FIRST_PASS.md`).
+  and pixel density by it so the mouse agrees, and the present pass scales the frame up (linear). Since
+  P8 it is the Options > Enhanced row "Render scale" (Full / Half / Quarter), changed live
+  (`docs/android/P8_INPUT_OPTIONS.md`).
+- **Android: the UI grows with a smaller render scale (P8).** The UI is laid out in engine pixels and
+  the render scale shrinks the engine's back buffer, so at User interface scale 100 the UI covers twice
+  the screen share at Half (the phone's default since P7) and four times at Quarter: on the S25 at
+  Quarter the Options dialog no longer fits (its tab row is above the screen; the Enhanced rows, Apply
+  and Ok stay reachable, so Quarter can be undone). The player can lower User interface scale
+  (`ext.phone_menu` lets it go to 25 %). Not changed: whether the UI scale should follow the render
+  scale is a ruling.
+- **Android: no in-game frame cap (P7) — FIXED in P8.** The game loop is now paced too
+  (`FrameLimiter::TickInGame` from `GameUpdateLoop::Draw` and `ext.render_pipe`'s main half), to the
+  settings cap `ext.fps_cap` (Options > Enhanced "Frame rate cap"; the phone's first run sets it on at
+  60, ruled 2026-10-25) or `BANISHED_FPS_CAP`. Verified on the S25: 60.0 fps in game (was 120), live
+  changes to 30 and Off.
+- **Android: a captured mouse lost its buttons (P8, FIXED).** SDL's Java glue (pinned SDL 3.4.x) drops a
+  captured pointer's `ACTION_MOVE` / `ACTION_BUTTON_PRESS` / `ACTION_BUTTON_RELEASE`: after a
+  middle-button press put the window in relative mode (the camera-rotate drag), the release never reached
+  SDL and the rotate stuck on. `OpenBASurface.java` passes them on; `docs/reference/android_mouse.md`.
+  Unverified: a real mouse over the owner's KVM (the fix was checked with a uinput mouse).
 - **Android: no shadows-off (P6).** Retail's shadow setting has three sizes and no off; the phone's
   first-run `settings.cfg` picks the smallest (`VideoShadowScalar=2`). A true off would be an extension.
 - **Android: save on low memory or termination (P6; narrowed in P7).** Since P7 `SDL_EVENT_LOW_MEMORY`
