@@ -3,7 +3,7 @@
 #
 #   tools/android.sh build [debug|release] [--jobs N]  # android/app/build/outputs/apk/<type>/app-<type>.apk
 #   tools/android.sh install [debug|release]           # adb install -r of that apk
-#   tools/android.sh push-data                         # the install's WinData/*.pkg -> the phone's data folder
+#   tools/android.sh push-data                         # the install's WinData/*.pkg + the FrancophilSans files -> the data folder
 #   tools/android.sh run [KEY=VALUE ...]               # force-stop, then launch with BANISHED_* flags
 #   tools/android.sh stop                              # force-stop the app
 #   tools/android.sh pull DIR                          # the standalone_* logs and the boot state -> DIR
@@ -130,6 +130,13 @@ push-data)
         "$ADB" push "$pkg" "$DATA/WinData/"
     done
     "$ADB" shell ls -l "$DATA/WinData"
+    # The typeface ext.sharp_ui rasterises (src/platform/android/font_raster_android.cpp): the files
+    # the desktop release packages put beside the exe, with their notice, into the game directory.
+    for f in FrancophilSans.ttf FrancophilSans-Bold.ttf FrancophilSans_README.txt; do
+        font="$ROOT/tools/release/fonts/$f"
+        if command -v cygpath >/dev/null 2>&1; then font="$(cygpath -m "$font")"; fi
+        "$ADB" push "$font" "$DATA/"
+    done
     ;;
 run)
     "$ADB" shell am force-stop "$PKG"

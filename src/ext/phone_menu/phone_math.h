@@ -126,6 +126,29 @@ bool VersionAside(int32_t width, int32_t height, int32_t versionTop, int32_t ver
 // as the line, so its bottom-centre alignment puts it in the bottom-left corner.
 Rect VersionAsideLayout(int32_t width, int32_t height, int32_t versionWidth);
 
+// ---- every other dialog (the in-game HUD, its panels, the front end's other dialogs) ----
+
+// The rectangle DialogInstance::ComputeLayout (retail 0x180113d90) is handed for a dialog that is
+// not one of the menus above, so that what retail anchors to an edge or a corner (the toolbar and
+// the event notices bottom-right, the autosave notice top-left, a panel opened at its default
+// upper-left (0, 0)) sits inside the safe area. ComputeLayout places a dialog at
+// `_upperLeftX + x1` (left / top alignment) or against `x2` less the dialog's width (right /
+// bottom), centres it between the two, and pulls one that would cross `x2` back to `x2`. So:
+//   * the far edges are the safe area's (x2 = width - m, y2 = height - m): right / bottom anchors
+//     move in, centred dialogs do not move, and nothing is pushed past the safe edge;
+//   * the near edges are a FLOOR, not an offset: x1 = max(0, m - upperLeftX), so the dialog's
+//     left is max(upperLeftX, m). A dialog put at a screen point (a tooltip at the cursor, a combo
+//     box's drop-down under its box, a panel dragged by the player) stays exactly where retail
+//     puts it unless that point is inside the margin; a panel at its default (0, 0) opens at the
+//     safe corner. (Dragging a panel out of the corner then moves it once the cursor has gone
+//     past the margin: the dead zone retail itself has at the right and bottom edges.)
+//   * an axis on which the dialog (last frame's laid-out `lastWidth` / `lastHeight`; <= 0 when
+//     not laid out yet) is wider than the safe area keeps retail's whole extent (0 .. width): the
+//     margin is not worth cutting a dialog off for;
+//   * a screen too small for the margin keeps retail's rectangle (InsetLayout's rule).
+Rect SafeArea(int32_t width, int32_t height, int32_t upperLeftX, int32_t upperLeftY, int32_t lastWidth,
+              int32_t lastHeight);
+
 // ---- the Options slider -----------------------------------------------------
 
 // The slider minimum with the row on: the lower of the platform's answer

@@ -3,7 +3,8 @@
 // ============================================================================
 // The rules are in phone_menu.h; the arithmetic is phone_math.cpp. The one engine seam is
 // UI::UserInterface::_extDialogPlace (layout on the main thread, the backdrop on whichever thread
-// draws the UI): both read the row and the recorded descriptions, nothing else.
+// draws the UI): both read the row and the recorded descriptions, nothing else. A dialog that is
+// not a recorded menu is laid out in phone_math.h's SafeArea.
 // ============================================================================
 
 #include "ext/phone_menu/phone_menu.h"
@@ -78,8 +79,19 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
     if (!Ext().phone_menu || dialog == nullptr) return;
     const bool menu = In(g_menus, dialog->_dialog);
     const bool version = !menu && In(g_buildIds, dialog->_dialog);
-    if (!menu && !version) return;
     const UI::Element* const root = dialog->_root.Get();
+    if (!menu && !version) {
+        // Every other dialog: the in-game HUD, its panels, tooltips, drop-downs and the front
+        // end's other dialogs (phone_math.h SafeArea). Its backdrop keeps retail's fit.
+        if (point != UI::UserInterface::kExtPlaceLayout || root == nullptr) return;
+        // A root sized to the back buffer (ComputeLayout's 0x10 / 0x20 flags) is meant to cover
+        // the screen: retail's rectangle.
+        if ((root->_flags & 0x30) != 0) return;
+        Store(SafeArea(width, height, dialog->_upperLeftX, dialog->_upperLeftY,
+                       root->_layoutRight - root->_layoutLeft, root->_layoutBottom - root->_layoutTop),
+              rect);
+        return;
+    }
 
     if (point == UI::UserInterface::kExtPlaceBackdrop) {
         if (!menu) return;
