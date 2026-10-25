@@ -736,6 +736,11 @@ bool PipelinesStartup(std::string* why) {
     return true;
 }
 
+void PipelinesPersist() {
+    SaveWarmList();
+    SaveCacheBlob();
+}
+
 void PipelinesShutdown() {
     {
         std::lock_guard<std::mutex> guard(g_warmLock);

@@ -178,6 +178,9 @@ bool LifecycleWatch(void*, SDL_Event* event) {
         imageAcquired = false;
         swapchainDirty = true;
         std::fprintf(stderr, "[Vulkan] background: swap chain and surface destroyed\n");
+        // P7: Android may kill a background process without a quit, so the pipeline cache and the
+        // warm list are written now too (the shutdown writes them again on a clean quit).
+        if (resourcesUp) PipelinesPersist();
     } else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
         if (backgrounded.exchange(false)) {
             std::fprintf(stderr, "[Vulkan] foreground: the surface is remade at the next frame\n");

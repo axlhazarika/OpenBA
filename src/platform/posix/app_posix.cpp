@@ -24,5 +24,9 @@ void PostSdlInit() {
 void Shutdown() {
 }
 
+bool TakeSaveRequest() {
+    return false;
+}
+
 }  // namespace App
 }  // namespace Platform

@@ -1023,20 +1023,29 @@ purpose or not yet closed, as of P6 (2026-10-25).
   is the render-scale setting of P7. The other ruled defaults are in (`docs/android/README.md`).
 - **Android: no shadows-off (P6).** Retail's shadow setting has three sizes and no off; the phone's
   first-run `settings.cfg` picks the smallest (`VideoShadowScalar=2`). A true off would be an extension.
-- **Android: no save on low memory or termination (P6).** `SDL_EVENT_LOW_MEMORY` and
-  `SDL_EVENT_TERMINATING` are not mapped to the pause menu's save; a process Android kills in the
-  background loses the unsaved game (the autosave stands). P7.
-- **Android: the watchdog counts the background as a hang (P6).** While the app is in the background
-  SDL blocks the main thread, so the boot state's `stale` grows; past 20 s it reads HUNG, and on an
-  unattended (autostart) run the watchdog then ends the process with exit 4. An attended run only
-  reports it. Harness runs must stay in the foreground.
+- **Android: save on low memory or termination (P6; narrowed in P7).** Since P7 `SDL_EVENT_LOW_MEMORY`
+  and `SDL_EVENT_TERMINATING` ask for a save (`app_android.cpp` lifecycle watch,
+  `Platform::App::TakeSaveRequest`), which the next game update starts through the game's own autosave
+  body (`AutoSaveDialog::Autosave`, with retail's refusals; retried every 120 frames, ten times).
+  Verified on the S25: `am send-trim-memory org.openba.game RUNNING_CRITICAL` in a running town wrote
+  `Auto.sav` the same second. What it does NOT cover: a LOW_MEMORY in the background (SDL sends one for
+  every `onTrimMemory`, including the UI_HIDDEN of every trip home) is dropped, because the main thread
+  is blocked there and nothing can save; a process Android kills in the background still loses what
+  the last autosave did not hold. TERMINATING comes after SDL has queued the quit, so the quit usually
+  wins. After a trip to the background the game's own pause dialog is up and the autosave body refuses
+  (`UI PausesGame`), as retail's autosave timer does.
+- **Android: the watchdog and the background (P6) — FIXED in P7.** The Android watchdog's hang budget
+  is paused between WILL_ENTER_BACKGROUND and DID_ENTER_FOREGROUND (`boot_state_background.h`; the state
+  file says `detail=background`). Verified on the S25: 40 s at the home screen read
+  `RUNNING ... stale=0 detail=background`, and the frames ran on after the relaunch.
 - **Android: run-time font rasteriser absent (P6).** `font_raster_posix.cpp` looks for the TTF beside
   `/proc/self/exe` (the system's `app_process64` on Android) and in the home and system font folders;
   none has it, so `ext.sharp_ui` keeps its retail fallback there.
-- **Android: the pipeline cache persists on a clean quit only.** `vulkan_pipelines.bin` is written
-  when the device shuts down (as on every platform); a process killed from the recents list or by
-  `am force-stop` keeps the previous file. Android kills background apps without a quit, so P7 writes
-  it at WILL_ENTER_BACKGROUND too.
+- **Android: the pipeline cache persists on a clean quit only — FIXED in P7.** `vulkan_pipelines.bin`
+  and the warm list are also written at WILL_ENTER_BACKGROUND (`PipelinesPersist`, from the mobile
+  lifecycle watch in `device.cpp`). Verified on the S25: the file's mtime is the second of the HOME
+  key press (`[Vulkan] pipeline cache: 355893 bytes written`). A kill while in the foreground (recents
+  swipe of the running app, `am force-stop`) still keeps the file of the last background or quit.
 
 ## 15. `ResourceLimitUI` accepted a config's resource index only below 11 — FIXED
 

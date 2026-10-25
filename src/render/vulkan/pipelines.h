@@ -47,6 +47,10 @@ bool PipelinesStartup(std::string* why);
 // The device is idle: stops the worker, writes the cache and the warm list, destroys every pipeline,
 // linked module and layout.
 void PipelinesShutdown();
+// P7: writes the warm list and the VkPipelineCache now, as the shutdown does (the device stays up).
+// The mobile lifecycle calls it when the app goes to the background: Android may kill a background
+// process without a quit (device.cpp, THE MOBILE LIFECYCLE).
+void PipelinesPersist();
 
 // ---- the binding model ------------------------------------------------------------------------------
 VkPipelineLayout GamePipelineLayout();

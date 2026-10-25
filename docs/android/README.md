@@ -131,7 +131,18 @@ installs an SDL event watch (`src/render/vulkan/device.cpp`, THE MOBILE LIFECYCL
 `SDL_EVENT_WILL_ENTER_BACKGROUND` it waits for a frame still being presented, idles the device and
 destroys the swap chain and the surface; SDL then blocks the main thread until the app returns. On
 `SDL_EVENT_DID_ENTER_FOREGROUND` the next frame makes the surface and the swap chain again. Nothing calls
-`exit()`. `SDL_EVENT_LOW_MEMORY` and `SDL_EVENT_TERMINATING` are not mapped to a save yet (P7).
+`exit()`. Since P7 the same watch writes the pipeline cache and the warm list when the app goes to the
+background (Android may kill it there without a quit).
+
+A second watch, the platform's (`src/platform/android/app_android.cpp`, THE LIFECYCLE WATCH), pauses
+the boot-state watchdog's hang budget while the app is in the background (the state file says
+`detail=background`; `src/diag/android/boot_state_background.h`) and turns `SDL_EVENT_LOW_MEMORY` (in the
+foreground) and `SDL_EVENT_TERMINATING` into a save request: the next game update starts the game's own
+autosave (`Platform::App::TakeSaveRequest`, `GameUpdateLoop::Update`). Every `onTrimMemory` reaches SDL as
+LOW_MEMORY, including the one each trip home brings; in the background the main thread is blocked and
+such a request is dropped. To check by hand: `adb shell input keyevent KEYCODE_HOME`, then
+`adb shell am start -n org.openba.game/org.openba.game.OpenBAActivity` brings the running game back;
+`adb shell am send-trim-memory org.openba.game RUNNING_CRITICAL` in a running town writes `Save/Auto.sav`.
 
 ## Pre-rotation
 

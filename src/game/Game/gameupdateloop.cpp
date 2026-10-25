@@ -119,6 +119,7 @@ extern "C" void BuildingGoal_Probe(const char* templateName);  // src/game/Goal/
 #include "Dialog/exe_bodies.h"           // ApplyKeyMapToUI_Impl, Toolbar_ShowGroup_Impl
 #include "Dialog/ToolbarDialog.h"        // ToolbarDialog
 #include "Dialog/AutoSaveDialog.h"       // AutoSaveDialog (a UI::DialogInstance)
+#include "platform/common/platform_app.h"   // Platform::App::TakeSaveRequest (P7, Android lifecycle)
 #include "Dialog/EventNotifyDialog.h"    // EventNotifyDialog (a UI::DialogInstance)
 #include "Entity/CitizenBehavior.h"      // m_citizenList's class: CitizenBehavior::Update
 #include "graphics/Animation.h"          // RtGraphics_AnimationManager_Dtor
@@ -355,6 +356,49 @@ static int s_frameNum = 0;
 // Renderer::Render), independent of how many houses share the emit or how many sim
 // sub-iterations the speed multiplier runs.
 extern "C" int GameUpdateLoop_CurrentFrame() { return s_frameNum; }
+
+// NOT RETAIL, a platform fit (docs/vulkan/PLAN.md §4.6; Platform::App::TakeSaveRequest, which only
+// Android answers): a save the platform asked for (SDL_EVENT_LOW_MEMORY / TERMINATING) runs the
+// game's own autosave body, AutoSaveDialog::Autosave (0x14005dec0), with its own refusals (the UI
+// pauses the game, the world is blocked, an operation runs). A refused request is retried every 120
+// frames, up to ten times.
+static void HonourPlatformSaveRequest(UI::UserInterface* ui) {
+    static int s_pending = 0;   // tries left
+    static int s_wait = 0;      // frames to the next try
+    if (Platform::App::TakeSaveRequest()) {
+        s_pending = 10;
+        s_wait = 0;
+    }
+    if (s_pending == 0) return;
+    if (s_wait > 0) {
+        --s_wait;
+        return;
+    }
+    const Save::SaveLoad* saveLoad = ::Save::SaveLoad::_singleton;
+    AutoSaveDialog* autoSave = nullptr;
+    const uint32_t autoSaveTid = AutoSaveDialog::TypeId();
+    for (auto it = ui->_dialogs.GetFirst(); it; ++it) {
+        UI::DialogInstance* dialog = it.node->element;
+        if (dialog && ::Object::IsDerivedFromNullSafe(dialog, autoSaveTid)) {
+            autoSave = static_cast<AutoSaveDialog*>(dialog);   // the dialog IS the AutoSaveDialog
+            break;
+        }
+    }
+    --s_pending;
+    if (autoSave != nullptr && saveLoad != nullptr) {
+        autoSave->Autosave();
+        if (saveLoad->GetOperation() == Save::SaveLoad::kOpSave) {
+            fprintf(stderr, "[Lifecycle] the platform's save request started the autosave (frame %d)\n", s_frameNum);
+            fflush(stderr);
+            s_pending = 0;
+            return;
+        }
+    }
+    fprintf(stderr, "[Lifecycle] the platform's save request was refused (%s); %d tries left\n",
+            autoSave == nullptr ? "no AutoSaveDialog" : "see [AutoSave]", s_pending);
+    fflush(stderr);
+    s_wait = 120;
+}
 // Debug trace — disabled for performance, enable when debugging
 #define TRACE(...) do { } while(0)
 
@@ -652,6 +696,7 @@ bool GameUpdateLoop::Update(const System::Time& timeRef) {
     // progress + the resulting .sav. No-op unless BANISHED_SAVE_TEST is set
     // (src/diag/saveload_harness.cpp).
     SaveLoadHarness_Tick(this, s_frameNum);
+    HonourPlatformSaveRequest(m_userInterface);   // NOT RETAIL (P7): the Android lifecycle's save
 
     // Fire / citizen-disease / crop-infestation / tornado on demand. Every disaster
     // rolls its own dice inside its own component tick, and those chances are

@@ -15,10 +15,14 @@
 //    handler's walk, src/diag/android/crash_handler_android.cpp).
 //  * The [BootState] lines reach logcat through the logcat copy of standalone_error.log
 //    (src/platform/android/app_android.cpp).
+//  * P7: the background does not count (boot_state_background.h). Between
+//    WILL_ENTER_BACKGROUND and DID_ENTER_FOREGROUND the stale clock is held at zero and the
+//    state file says detail=background.
 // Everything else (BLOCKED_DIALOG never published, the per-thread signal walk over
 // /proc/self/task, _exit(4) on an unattended HUNG) is the POSIX twin's; its banner holds.
 
 #include "boot_state_watchdog.h"
+#include "boot_state_background.h"
 
 #include "options.h"
 #include "platform/common/cpu/topology.h"   // CPULIMIT: the [Cpu] facts on the RUNNING line
@@ -49,6 +53,7 @@ std::atomic<int>      g_startupComplete{0};
 std::atomic<int>      g_quitting{0};
 std::atomic<uint32_t> g_frames{0};
 std::atomic<int>      g_stop{0};
+std::atomic<int>      g_background{0};   // P7: between WILL_ENTER_BACKGROUND and DID_ENTER_FOREGROUND
 pthread_t             g_thread;
 bool                  g_threadStarted = false;
 uint64_t              g_startMs       = 0;
@@ -235,7 +240,8 @@ void* WatchdogThread(void*) {
         const uint32_t frame    = g_frames.load();
         const bool     quitting = g_quitting.load() != 0;
 
-        if (frame != lastFrame) {
+        const bool background = g_background.load() != 0;
+        if (frame != lastFrame || background) {
             lastFrame    = frame;
             lastMoveMs   = now;
             hungReported = false;
@@ -253,7 +259,7 @@ void* WatchdogThread(void*) {
         const bool hung = staleSec >= budget;
         const char* state = hung ? "HUNG" : phase;
 
-        WriteStateFile(state, uptimeSec, frame, staleSec, hung ? phase : "-");
+        WriteStateFile(state, uptimeSec, frame, staleSec, hung ? phase : (background ? "background" : "-"));
 
         if (hung && !hungReported) {
             hungReported = true;
@@ -328,6 +334,21 @@ void Start() {
 void MarkStartupComplete() {
     g_startupComplete.store(1);
 }
+
+namespace Android {
+
+void EnterBackground() {
+    g_background.store(1);
+    std::fprintf(stderr, "[BootState] background: the hang budget is paused\n");
+}
+
+void EnterForeground() {
+    // The watchdog's next tick sees the flag clear with lastMoveMs = that tick: the budget restarts.
+    g_background.store(0);
+    std::fprintf(stderr, "[BootState] foreground: the hang budget runs again\n");
+}
+
+}  // namespace Android
 
 void Stop() {
     g_stop.store(1);

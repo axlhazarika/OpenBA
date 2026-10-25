@@ -9,6 +9,8 @@
 //                      them; the per-user Documents/ subfolder is made.
 //   PreSdlInitHints    landscape only (the manifest locks it too); the logcat copy of
 //                      standalone_error.log starts (the logs are open by now).
+//   PostSdlInit        P7: the lifecycle watch (below): the boot-state watchdog's background
+//                      bracket, and the save request of SDL_EVENT_LOW_MEMORY / TERMINATING.
 //   Shutdown           stop the boot-state watchdog (EXITED, as on macOS), drain the logcat
 //                      copy.
 // The harness flags reach OptionsInit through the process environment, which the app's
@@ -20,7 +22,9 @@
 #include "android_paths.h"
 
 #include "boot_state_watchdog.h"
+#include "android/boot_state_background.h"   // src/diag/android: the watchdog's background bracket
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_system.h>
 
@@ -124,6 +128,53 @@ void SeedPhoneSettings(const std::string& userDir) {
     __android_log_print(ANDROID_LOG_INFO, kLogTag, "first run: phone defaults written to %s", path.c_str());
 }
 
+// THE LIFECYCLE WATCH (P7, docs/android/README.md "Lifecycle"). SDL delivers the Android lifecycle
+// events synchronously to event watches on the thread that pumps events, which is the game's main
+// thread (SDL_androidevents.c: the lifecycle queue is drained inside SDL_PumpEvents); after
+// WILL_ENTER_BACKGROUND that thread runs one more pump and then blocks in it until the app is back.
+//  * WILL_ENTER_BACKGROUND / DID_ENTER_FOREGROUND bracket the watchdog's hang budget.
+//  * LOW_MEMORY and TERMINATING ask for a save. The save is the game's own autosave body, a state
+//    machine that runs over several frames of the update loop, so the watch only sets a flag and
+//    GameUpdateLoop::Update starts the save at its next tick (TakeSaveRequest): in the foreground,
+//    the next frame. SDL sends LOW_MEMORY for EVERY onTrimMemory, including the TRIM_MEMORY_UI_HIDDEN
+//    each trip to the background brings; one that arrives in the background is logged and dropped
+//    (the main thread is blocked there: nothing can save, and a save on the way back would only
+//    write the town as it was). TERMINATING comes after SDL has queued SDL_EVENT_QUIT, so the quit
+//    usually wins; it is logged.
+// The Vulkan backend's own watch (src/render/vulkan/device.cpp, THE MOBILE LIFECYCLE) tears the
+// surface down and writes the pipeline cache on the same event.
+std::atomic<bool> g_saveRequested{false};
+bool g_lifecycleWatch = false;
+bool g_inBackground = false;   // main thread only (the watch)
+
+bool LifecycleWatch(void*, SDL_Event* event) {
+    switch (event->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        g_inBackground = true;
+        BootState::Android::EnterBackground();
+        break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        g_inBackground = false;
+        BootState::Android::EnterForeground();
+        break;
+    case SDL_EVENT_LOW_MEMORY:
+        if (g_inBackground) {
+            std::fprintf(stderr, "[Lifecycle] SDL_EVENT_LOW_MEMORY in the background: no save (the game is blocked)\n");
+            break;
+        }
+        g_saveRequested.store(true);
+        std::fprintf(stderr, "[Lifecycle] SDL_EVENT_LOW_MEMORY: a save is requested\n");
+        break;
+    case SDL_EVENT_TERMINATING:
+        g_saveRequested.store(true);
+        std::fprintf(stderr, "[Lifecycle] SDL_EVENT_TERMINATING: a save is requested (the quit is queued first)\n");
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
 }  // namespace
 
 namespace App {
@@ -163,6 +214,11 @@ void PreSdlInitHints() {
 }
 
 void PostSdlInit() {
+    if (!g_lifecycleWatch) g_lifecycleWatch = SDL_AddEventWatch(&LifecycleWatch, nullptr);
+}
+
+bool TakeSaveRequest() {
+    return g_saveRequested.exchange(false);
 }
 
 void Shutdown() {
