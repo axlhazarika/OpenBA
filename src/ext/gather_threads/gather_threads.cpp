@@ -109,7 +109,12 @@ void HelperPool::HelperLoop(int32_t worker) {
                 continue;
             }
             if (now - idleSince < spinTicks) continue;
+            // A Publish that landed after the failed Claim has tasks left: claim them, do not sleep.
             const uint64_t ticket = _ticket.load(std::memory_order_acquire);
+            if (TicketNext(ticket) < TicketCount(ticket)) {
+                idle = 0;
+                continue;
+            }
             std::unique_lock<std::mutex> lk(_m);
             _sleepers.fetch_add(1, std::memory_order_seq_cst);
             _cv.wait(lk, [&] {
@@ -118,6 +123,10 @@ void HelperPool::HelperLoop(int32_t worker) {
             });
             _sleepers.fetch_sub(1, std::memory_order_relaxed);
             if (_quit) return;
+            // Park does not notify, so a helper can sleep here through a Park and wake on the next
+            // Wake's epoch: that is a new frame, taken from here. `seen` follows it, or every later
+            // wait would return at once on the stale epoch and the helper would spin on the lock.
+            seen = _epoch;
             idle = 0;
         }
     }
