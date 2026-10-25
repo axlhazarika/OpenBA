@@ -1900,6 +1900,20 @@ bool DrawAoBegin(AoTargets* out) {
     if (!g_frame.active || !g_main.depth.image || !g_main.readable || !g_main.depthSampled) return false;
     FlushPendingClear();
     EndPass();
+    if (g_main.msrtss) {
+        // The tiler's MSAA: the depth the AO pass samples is written by the pass's implicit resolve
+        // (sample 0), a resolve write made in the colour-output stage, which the layout transition's
+        // depth-test source stages do not cover.
+        auto resolved = Make<VkMemoryBarrier2>(VK_STRUCTURE_TYPE_MEMORY_BARRIER_2);
+        resolved.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        resolved.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        resolved.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        resolved.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        auto dep = Make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &resolved;
+        vkCmdPipelineBarrier2(g_frame.target.cb, &dep);
+    }
     TransitionImage(g_main.depthState, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
     FlushBarriers(g_frame.target.cb, &g_barriers);
     out->cb = g_frame.target.cb;
