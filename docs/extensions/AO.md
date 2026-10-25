@@ -176,7 +176,11 @@ Evidence for every line: `handins/AOSPIKE.md` (2026-10-14).
   `OptionsDialog::OnOpened`, its button + page in a new `.rsc` under new object names (loose files
   never override packaged names: `IO::FileSystem::OpenFile` checks the packfile index first). The
   `lastOption > 3 -> 0` clamp (`optionsdialog.cpp:710`) must learn the fifth tab (retail's or the
-  port's: check first).
+  port's: check first). The page is a `ContainerDescription` deriving from `Options.rsc:gameOptions`
+  (the Game tab's size, clip region and scroll bar) around the rows' table, so the fifth tab takes
+  the retail tabs' room: the tab strip is not widened and the scroll bar sits at the pane edge as on
+  the retail tabs. A row that needs more room wraps or moves its extra text into the control column
+  (the derived-data cache's size sits there, its button on the row under it).
 - 6.4 blob tool: `tools/ao_shaders.py` (fxc, `python -I`): `VSMain` vs_5_0 + 21 ps_5_0 entries, one
   define set (`SSAO_MAX_TAPS=32`, `SSAO_MAX_REF_TAPS=512`, `SSAO_ADAPTIVE_TAP_BASE_COUNT=5`,
   `SSAO_ADAPTIVE_TAP_FLEXIBLE_COUNT=(32-5)`, `SSAO_DEPTH_MIP_LEVELS=4`,

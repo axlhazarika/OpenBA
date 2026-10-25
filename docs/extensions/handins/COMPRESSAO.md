@@ -52,7 +52,7 @@ own install and is never shipped (DESIGN.md section 3 rule 7). Later work (lazy 
 | Writes | one writer thread; `Put` queues (at most 256 MB, then waits); the loader never writes |
 | Reads | `derived.dat` memory-mapped at Open; released at the end of the load that read it (the mapped pages counted +0.86 GB in the working set otherwise); later reads through the handle |
 | Cap | `ext.derived_cache_mb` (256..65536, default 4096). Past it nothing is stored (one line). At the next Open an over-cap cache is rewritten keeping only what the previous run used, in order, up to the cap |
-| Clear | Options dialog, Enhanced tab, "Data cache on disk: N MB" + **Clear cache**: the store stops at once, the files are deleted at the next start (they are held open) |
+| Clear | Options dialog, Enhanced tab, "Data cache on disk" with the size beside it ("N MB", "Cleared (next start)" once cleared) and **Clear cache** under it: the store stops at once, the files are deleted at the next start (they are held open) |
 | Faithful | never opened: the row is off, and `OpenShared` refuses under the faithful profile |
 
 Platform seam added: `Platform::FileOpenExclusive` / `FileTruncate` (`src/platform/win/file_rw_win.cpp`,

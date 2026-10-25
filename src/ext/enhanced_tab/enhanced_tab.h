@@ -2,8 +2,11 @@
 //
 // NOT RETAIL. A fifth tab added at run time to retail's OptionsDialog by UI::TabElement::AddTab
 // (docs/extensions/AO.md §6.3, handins/AOSPIKE.md S6 (a)). The tab's button and page are NEW
-// objects in Dialog/EnhancedOptions.rsc (loose .crs, tools/ext_resources.sh). The page is a table
-// of rows; each extension contributes its own rows through a Contribution:
+// objects in Dialog/EnhancedOptions.rsc (loose .crs, tools/ext_resources.sh). The page is the Game
+// tab's own scrolling container (Options.rsc:gameOptions) holding a table of rows, so the tab takes
+// the retail tabs' room and never widens the dialog: every row must fit the container's viewport
+// (labels 200, controls 180, as the retail tabs). Each extension contributes its own rows through a
+// Contribution:
 //   ambient_occlusion/enhanced_entry.cpp   combo "Ambient occlusion" + slider "AO strength"
 //   better_trees/enhanced_entry.cpp        combo "Better trees"
 //   max_shadow_res/enhanced_entry.cpp      combo "Max shadow resolution"

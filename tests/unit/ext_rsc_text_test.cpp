@@ -156,8 +156,13 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
         const Field* pos = label->body.Find("_labelPosition");
         CHECK(pos && pos->tokens[0].text == "TextBottom");
     }
-    const Object* table = e.Find("enhancedOptions");
-    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 14);   // seven rows x two columns (COMPRESSAO: the cache row; TEXQUALITY: texture quality)
+    // The page is the Game tab's container (it takes the retail tabs' width) around the rows' table.
+    const Object* page = e.Find("enhancedOptions");
+    CHECK(page && page->type == "ContainerDescription" && page->base == "Options.rsc:gameOptions");
+    CHECK(page && page->body.Find("_content") &&
+          page->body.Find("_content")->tokens[0].text == "enhancedOptionsTable");
+    const Object* table = e.Find("enhancedOptionsTable");
+    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 15);   // seven labels, eight controls (COMPRESSAO: the cache size and, under it, its button; TEXQUALITY: texture quality)
     // TEXQUALITY: the Texture quality combo offers Full / Half only (Quarter removed by the user's ruling).
     const Object* tqItems = e.Find("textureQualityItems");
     CHECK(tqItems && tqItems->body.Find("_strings") && tqItems->body.Find("_strings")->blocks.size() == 2);
