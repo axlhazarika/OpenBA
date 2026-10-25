@@ -22,7 +22,8 @@
 // scissor, stencil reference and the vertex strides are dynamic state (strides: core 1.3
 // VERTEX_INPUT_BINDING_STRIDE), so none of them is in the key. Vertex-input dynamic state
 // (VK_EXT_vertex_input_dynamic_state) is NOT used in P2: in this game a vertex shader implies its
-// layout, so dropping the layout from the key saves almost no pipelines; it stays a P7 measurement.
+// layout, so dropping the layout from the key saves almost no pipelines; P7 stopped enabling the
+// extension (Qualcomm's Adreno guidance: avoid it).
 // A pair whose interpolants do not link by register (Shaders::StagesCompatible false) gets a pixel
 // module converted again with the vertex stage's outputs (ConvertOptions::previousStage), cached per
 // pair. The VkPipelineCache persists in the user's derived-data folder (vulkan_pipelines.bin in

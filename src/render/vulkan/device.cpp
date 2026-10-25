@@ -510,9 +510,10 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
         std::fprintf(stderr, "[Vulkan] %s\n", presentWhy.c_str());
     }
     std::fprintf(stderr,
-                 "[Vulkan] swap chain %ux%u, %u images, format %d, present mode %d, transform 0x%x (current 0x%x, "
-                 "currentExtent %ux%u)%s\n",
-                 swapExtent.width, swapExtent.height, count, static_cast<int>(swapFormat),
+                 "[Vulkan] swap chain %ux%u, %u images (asked %u, surface min %u), format %d, present mode %d, "
+                 "transform 0x%x (current 0x%x, currentExtent %ux%u)%s\n",
+                 swapExtent.width, swapExtent.height, count, imageCount, surfaceCaps.minImageCount,
+                 static_cast<int>(swapFormat),
                  static_cast<int>(presentMode), static_cast<unsigned>(ci.preTransform), static_cast<unsigned>(current),
                  surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height,
                  PresentRotates() ? ", pre-rotated: the landscape frame is turned by the present pass" : "");
@@ -993,7 +994,8 @@ bool DeviceData::CreateDevice() {
     qi.pQueuePriorities = &priority;
     std::vector<const char*> extensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     if (caps.pushDescriptor) extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-    if (caps.vertexInputDynamicState) extensions.push_back(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+    // P7: VK_EXT_vertex_input_dynamic_state is probed (the log line) but not enabled: no pipeline uses its
+    // state, and Qualcomm's Adreno guidance is to leave it off (docs/android/PERF_P7.md §2 row 11).
     if (caps.extendedDynamicState2) extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
     if (caps.msrtss) extensions.push_back(VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME);
     auto want13 = Make<VkPhysicalDeviceVulkan13Features>(
@@ -1015,9 +1017,6 @@ bool DeviceData::CreateDevice() {
     want12.vulkanMemoryModel = have12.vulkanMemoryModel;
     want12.vulkanMemoryModelDeviceScope = have12.vulkanMemoryModelDeviceScope;
     want13.pNext = &want12;
-    auto wantVids = Make<VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT);
-    wantVids.vertexInputDynamicState = VK_TRUE;
     auto wantEds2 = Make<VkPhysicalDeviceExtendedDynamicState2FeaturesEXT>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT);
     wantEds2.extendedDynamicState2 = VK_TRUE;
@@ -1026,10 +1025,6 @@ bool DeviceData::CreateDevice() {
     wantMsrtss.multisampledRenderToSingleSampled = VK_TRUE;
     want12.pNext = &want11;
     void** tail = &want11.pNext;
-    if (caps.vertexInputDynamicState) {
-        *tail = &wantVids;
-        tail = &wantVids.pNext;
-    }
     if (caps.extendedDynamicState2) {
         *tail = &wantEds2;
         tail = &wantEds2.pNext;
@@ -1096,7 +1091,7 @@ bool DeviceData::CreateDevice() {
 
     std::fprintf(stderr,
                  "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d (max %u) "
-                 "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d "
+                 "vertex_input_dynamic=%d (not enabled) eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d "
                  "ao=%d/%d/%d; multisample %ux\n",
                  deviceProperties.deviceName, DeviceTypeName(deviceProperties.deviceType),
                  VK_API_VERSION_MAJOR(caps.apiVersion), VK_API_VERSION_MINOR(caps.apiVersion),
