@@ -40,6 +40,9 @@ Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CM
   before the menu (a retail bug, `docs/retail_bugs.md` section 10). Off under `/profile:faithful`.
 - Remove Roads works again: finished road tiles are marked and a laborer removes them, as in retail. The
   removal marker used to finish the moment it was placed, because nothing stands on a road cell.
+- Crop fields are replanted after their first harvest. A field planted once and then stayed idle for good,
+  because the field's re-clear state (ClearArea state 0x15) was registered with null handlers. A save with
+  fields stuck that way recovers on load.
 
 ## v1.0.1 (2026-10-23)
 
