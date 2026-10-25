@@ -44,6 +44,12 @@ Headings are `## vX.Y.Z (YYYY-MM-DD)`; the version is the CMake `VERSION` in `CM
   because the field's re-clear state (ClearArea state 0x15) was registered with null handlers. A save with
   fields stuck that way recovers on load.
 
+**Android**
+- The release carries a signed Android apk, `OpenBA-v<version>-android-arm64.apk` (arm64, Vulkan 1.3; the
+  game data comes from the player's own install, `docs/android/README.md`). Its version follows the game's.
+- Shadows can be switched off on a weak device with the game's own Options > Video > Shadow Quality = None:
+  no shadow map is drawn at all.
+
 ## v1.0.1 (2026-10-23)
 
 Second release of OpenBA, five days after v1.0.0: Linux and macOS packages for the first time,

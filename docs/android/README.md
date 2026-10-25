@@ -44,7 +44,8 @@ tools/android.sh build debug --jobs 8      # android/app/build/outputs/apk/debug
 The script sets `ANDROID_HOME` (default `%LOCALAPPDATA%/Android/Sdk`) and `JAVA_HOME` (default Android
 Studio's `jbr`) when they are unset, and passes the job count to the native build. A clean debug build
 takes about 4.5 minutes with 2 jobs; a one-file change rebuilds in well under a minute. Release builds
-(`build release`, the perf flavour) are unsigned until P7.
+(`build release`, the perf flavour) come out unsigned (`apk/release/app-release-unsigned.apk`); `tools/android.sh
+sign` aligns and signs them (see Release below).
 
 The NDK configures the root `CMakeLists.txt` with `ANDROID` set. That branch takes `src/platform/posix`
 plus `src/platform/sdl` and `common`, with every `src/platform/android/<name>_android.cpp` replacing its
@@ -93,7 +94,8 @@ SDL ends the game's process state once `main` returns and refuses a second start
 
 **Phone defaults** (PLAN.md §1). The first start (no `settings.cfg` yet) writes a `settings.cfg` holding
 only `GameEdgeScroll=false` (P7: a touch held at the edge is a parked cursor), `VideoRenderScale=50`,
-`VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
+`VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low Shadow Resolution; shadows stay on: retail's own
+off is Options > Shadow Quality = None, `VideoShaderDetail=0`, `P8_SHADOWS_RELEASE.md`), and
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
 `ext.max_shadow_res` off, and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
 main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
@@ -154,6 +156,38 @@ LOW_MEMORY, including the one each trip home brings; in the background the main 
 such a request is dropped. To check by hand: `adb shell input keyevent KEYCODE_HOME`, then
 `adb shell am start -n org.openba.game/org.openba.game.OpenBAActivity` brings the running game back;
 `adb shell am send-trim-memory org.openba.game RUNNING_CRITICAL` in a running town writes `Save/Auto.sav`.
+
+## Release
+
+`.github/workflows/release.yml`, job `android`, builds and signs the apk next to the three desktop packages:
+`OpenBA-v<version>-android-arm64.apk` (+ `.sha256`) is a release asset on a `v*` tag and the run artifact
+`package-android` on a manual dispatch. The version is the root `CMakeLists.txt`'s `project(... VERSION x.y.z)`:
+`android/app/build.gradle` reads it (versionName `x.y.z`, versionCode `x*10000 + y*100 + z`), so the release bump
+stays the one CMake edit. The job installs the pinned SDK packages (`ndk;30.0.16248370`, `cmake;3.31.6`,
+`platforms;android-35`, `build-tools;36.0.0`) into the runner's SDK, runs Gradle on JDK 21 (Temurin), builds with
+`tools/android.sh build release --ccache` and signs with `tools/android.sh sign`:
+
+1. `zipalign -f -P 16 4` (16 KB pages for the uncompressed native libraries), then
+2. `apksigner sign` (v2 / v3 by minSdk 29; no v1), the passwords read from the environment (`--ks-pass
+   env:...`), then `zipalign -c -P 16 4` and `apksigner verify --verbose --print-certs`.
+
+The key: the repository's Actions secrets `ANDROID_KEYSTORE_BASE64` (the PKCS12 keystore, base64),
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The keystore is decoded into the
+runner's temp folder (outside the workspace, mode 600, removed when the step ends) and reaches only the signing
+step; Gradle, the native build and the caches never see it. Signing in a step of its own rather than a Gradle
+`signingConfig`: the build is the same command as on a developer's machine, and the secrets stay out of the
+Gradle daemon and every build script. The release keystore itself (alias `openba`, RSA 4096) is kept off-tree by
+the owner; nothing of it is in the repository.
+
+A local check of the same commands with the debug key (`adb install` replaces a debug install: same key):
+```bash
+tools/android.sh build release --jobs 8
+OPENBA_KEYSTORE=~/.android/debug.keystore OPENBA_KEY_ALIAS=androiddebugkey \
+OPENBA_KEYSTORE_PASSWORD=android OPENBA_KEY_PASSWORD=android tools/android.sh sign
+tools/android.sh install release          # apk/release/app-release.apk
+```
+`ci.yml` builds the debug apk on every PR (job `Android (arm64, debug apk)`); it is not one of the four
+required checks.
 
 ## Pre-rotation
 

@@ -259,12 +259,13 @@ of samples each.
 
 ## Left (not done in this pass)
 
-- **Shadows off:** retail has no off. It would be an `ext.*` row, out of scope.
+- **Shadows off:** (corrected in P8) retail has one, Options > Shadow Quality = None (`VideoShaderDetail=0`);
+  the line here looked at Shadow Resolution only. `P8_SHADOWS_RELEASE.md`.
 - **Combined image samplers:** the converter's separate texture / sampler bindings stay.
 - **Frame-copy pass split redesign:** the frame copy splits the main target, which is why 2 of 3
   depth passes still store (the discard counter shows it).
 - **Release signing:** the perf apk is signed with the debug key; no release key, and no apk in
-  `release.yml`.
+  `release.yml`. (Done in P8: `release.yml` job `android`, `tools/android.sh sign`.)
 - **In-game fps cap:** see above.
 - **HWASan and a thermal soak** longer than 5 minutes.
 - **The depth discard after a pass-count change:** a session whose frame structure changes after the

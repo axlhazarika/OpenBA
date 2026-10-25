@@ -212,10 +212,13 @@ New, seen by the owner on the S25:
   only; the cap is a settings key, never an env flag).
 
 Verdicts on the P7 "Left" list: depth-discard re-arm rule: **fix**. Frame-copy pass split (2 of 3 depth passes still
-store): **investigate**. Shadows: **retail's three settings stay, plus an Off** for very limited devices (a class A `ext.*` row, off by default). Combined image samplers in the
-converter: **implement**. Release: a **signed Android apk in `release.yml`** like the three desktop packages. The release keystore exists (made 2026-10-25, PKCS12, alias `openba`, RSA 4096, kept off-tree in the owner's `~/.android/`) and the repo's Actions secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` are set; the job decodes the keystore to a temp file and signs with apksigner (or Gradle's signingConfig fed from the environment); nothing of it enters the tree. HWASan and the 30-minute soak: **skip**. Font rasteriser on Android (the TTF from the data folder):
+store): **investigate**. Shadows: ~~retail's three settings stay, plus an Off (a class A `ext.*` row)~~ **retail's Shadow Quality = None is
+the Off** (`VideoShaderDetail=0`: no shadow pass, no casters, the unshadowed pixel variant; verified 2026-10-25 on
+DX11 and the S25, `docs/android/P8_SHADOWS_RELEASE.md`); no ext row (ruled 2026-10-25); the phone seed keeps shadows on. Combined image samplers in the
+converter: **implement**. Release: a **signed Android apk in `release.yml`** like the three desktop packages (done in P8:
+job `android` + `tools/android.sh sign`; the first real run is the next tag or a dispatch). The release keystore exists (made 2026-10-25, PKCS12, alias `openba`, RSA 4096, kept off-tree in the owner's `~/.android/`) and the repo's Actions secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` are set; the job decodes the keystore to a temp file and signs with apksigner (or Gradle's signingConfig fed from the environment); nothing of it enters the tree. HWASan and the 30-minute soak: **skip**. Font rasteriser on Android (the TTF from the data folder):
 **add**. Still unverified from P7: ext.phone_menu on the phone itself, the oversized push-descriptor pair path, the
-in-game trim-memory save after the latch fix, rotation / display change at render scale 50, the Windows Vulkan boot
+in-game trim-memory save after the latch fix (verified in P8: `Auto.sav` the same second, and it loads), rotation / display change at render scale 50, the Windows Vulkan boot
 state left RUNNING after a clean exit.
 
 ## 3. Rules that hold (do not relax)

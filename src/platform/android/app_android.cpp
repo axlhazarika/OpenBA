@@ -106,8 +106,10 @@ void MirrorThread() {
 // slider down to 25 %; docs/extensions/handins/PHONEMENU.md). A first run on the phone (no settings.cfg in the user folder yet)
 // starts from a settings.cfg holding only those keys; everything else takes the game's own defaults,
 // and the player's later choices in Options are kept as on any platform (the file is never written
-// again here). Retail has no "shadows off": ShadowScalar 2 is its Low (the smallest sun map); a true
-// off is an extension question. P7 (ruled 2026-10-25): edge scrolling off, because a touch held at
+// again here). ShadowScalar 2 is retail's Low Shadow Resolution (the smallest sun map). Retail's own
+// shadows-off is Options > Shadow Quality = None (VideoShaderDetail=0: no shadow pass, no casters, the
+// unshadowed pixel variant; P8, docs/android/P8_SHADOWS_RELEASE.md); the seed leaves shadows on (ruled
+// 2026-10-25). P7 (ruled 2026-10-25): edge scrolling off, because a touch held at
 // the screen's edge is a cursor parked there (an unattended game scrolled to the map's corner); the
 // render scale at half the screen (ruled 2026-10-24; window_android.cpp RenderScale reads it).
 const char kPhoneSettings[] =
