@@ -64,11 +64,15 @@ P5 (Linux cutover): this backend is the Linux renderer. CMake picks it by defaul
 so `tools/build.sh build` on Linux needs no flag (Windows keeps dx11, macOS metal); the dx11 backend is
 Windows-only and the D3D11-over-Vulkan route Linux used before is deleted (fetch script, the dlopen
 resolvers in `src/platform/posix/gfx_posix.cpp`, its run-script environment and its libraries in the game
-dir and the release package). `tools/linux_run.sh` pins lavapipe on the WSL bed. The Linux build and unit
-run pass in CI; the lavapipe routes have not run yet (the WSL bed was down in P5), and the real-GPU run is
-the owner's, below. The Linux build and unit witness for P5 is the CI Linux job (a fresh Ubuntu runner,
-non-recursive submodule checkout, default configure); the WSL build and the four lavapipe routes were
-NOT run, because WSL2 does not start while the hypervisor is off; the steps are below. Next: P6 (Android).
+dir and the release package). `tools/linux_run.sh` pins lavapipe on the WSL bed and passes
+`/profile:faithful`, as every Windows route does. The Linux build and unit run pass in CI and on the WSL
+bed. The four lavapipe routes ran and passed on 2026-10-25 (WSL2 Ubuntu 24.04, Mesa 26.2.4, tree
+`7c06b5184`, debug, faithful profile): `menu`, `newgame`, `world` and `resave` each exit 0 with crash log 0
+and no hang, on `[Vulkan] device llvmpipe (LLVM 21.1.8, 256 bits) (cpu) api 1.4.354`, at 7 to 12 fps.
+No validation layer is installed on the bed, so the validation count is 0 by absence, not a clean
+layer run. `world.txt` for `BANISHED_SEED=12345` is byte-identical to the Windows DX11 debug exe's (46
+lines, md5 `585781c8`); `resave` writes the golden image (md5 `971aaec2cf95`, 23,453,453 bytes). The
+real-GPU run is the owner's, below. Next: P6 (Android).
 
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan
@@ -110,10 +114,10 @@ deployed at a time. Log lines are tagged `[Vulkan]` in `standalone_error.log`.
   "not supported" through the seam header, never a silent stub.
 - One statement per line (`.claude/rules/style.md`).
 
-## Linux lavapipe routes on the WSL bed (deferred from P5)
-Not run in P5: WSL2 does not start while the hypervisor is off (`hypervisorlaunchtype off`, the uProf
-setup; turning it on is an admin `bcdedit /set hypervisorlaunchtype auto` and a reboot). After that
-reboot, from Git Bash in the checkout, one command per step:
+## Linux lavapipe routes on the WSL bed
+Run and passed on 2026-10-25 (the P5 paragraph above has the results). WSL2 needs the hypervisor on: with
+`hypervisorlaunchtype off` (the uProf setup) it does not start, and turning it on is an admin
+`bcdedit /set hypervisorlaunchtype auto` and a reboot. From Git Bash in the checkout, one command per step:
 
 1. The driver and the loader are there (lavapipe must be listed at 1.3 or higher; if `vulkaninfo` is
    missing: `sudo apt install mesa-vulkan-drivers libvulkan1 vulkan-tools`):
@@ -146,9 +150,12 @@ reboot, from Git Bash in the checkout, one command per step:
    ```
    A pass is `exit 0 crashlog=0 hang=no`; the device line names `llvmpipe` (lavapipe), never `Microsoft
    Direct3D12` (dzn). `world`: compare `~/lx_runs/p5_world/new.world.txt` with the Windows DX11 exe's for
-   the same seed (`BANISHED_SEED=12345 tools/build.sh run` on the functional game dir, the same two seds
-   as `linux_run.sh`); report byte-identical or the first differing line, never fix silently. `resave`:
-   the `[Roundtrip] RESULT=` line and the resaved md5 against the golden in `tools/resave_gate/`.
+   the same seed (`BANISHED_SEED=12345 BANISHED_PAUSEMENU=600 BANISHED_PAUSEMENU_QUIT=120 tools/build.sh run`
+   on the functional game dir, the `world` route's environment; then the same greps and seds as
+   `linux_run.sh` over its `standalone_error.log` and `standalone_debug.log`); report byte-identical or the
+   first differing line, never fix silently. `resave`: the `[Roundtrip] RESULT=` line (DIFF against the
+   loaded image is normal; the verdict is against the golden) and the resaved md5 against
+   `docs/runtime_port/resave_gate/golden/Gate.resaved.md5` (`tools/resave_gate/README.md`).
    Lavapipe is slow and WSLg throttles an unfocused window to about 5 fps; the routes count frames, not
    simulation, so GameAutoPause does not stall them (only `stress` switches it off).
 
