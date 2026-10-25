@@ -47,13 +47,15 @@ void PlantSet(int index);
 size_t UndoDepth();
 // The strokes that a Redo would paint again.
 size_t RedoDepth();
-// True after an Undo that was refused because something was built on the stroke since (a building, a road, a
-// field, or a cell that no longer holds the type the stroke gave it): the Terrain page says so until the
-// next stroke or a successful Undo.
+// True while the next Undo would be refused because something was built on the stroke since (a building, a
+// road, a field, or a cell that no longer holds the type the stroke gave it): an Undo that was refused sets it,
+// and so does the page's recount of the strokes (twice a second at most, without a press); the recount also
+// clears it when the building is gone. The Terrain page says so after its mode text.
 bool UndoRefused();
-// True after the redo list was dropped because something was built since the Undo. Cleared by the next stroke
-// or Undo, or by another world.
-bool RedoRefused();
+// Why the next Redo cannot go, or "" when it can: something was built on its ground (the recount raises and
+// clears this too), its resource is not in the list, or the last Redo changed nothing. Cleared by the next
+// stroke, Undo or Redo, or by another world.
+const char* RedoNote();
 
 // Called whenever the number of undo steps may have changed (a stroke ended, an undo ran): the Terrain page
 // refreshes its status line from it. Null clears it.

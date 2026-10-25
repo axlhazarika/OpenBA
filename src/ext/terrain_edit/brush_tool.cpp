@@ -57,6 +57,7 @@
 #include "system/MemoryAllocator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <utility>
 #include <cmath>
@@ -122,7 +123,8 @@ const void* g_undoHeights = nullptr;
 int g_undoStride = 0;
 uint32_t g_undoEpoch = 0;
 bool g_undoRefused = false;   // the last Undo was refused (UndoRefused)
-bool g_redoRefused = false;   // the redo list was dropped because something was built (RedoRefused)
+bool g_redoBuilt = false;     // the next Redo's ground has something built on it
+const char* g_redoNote = "";  // why else the last Redo did nothing (RedoNote); a string literal, or empty
 bool g_toolRunning = false;    // the brush is the player's tool now (BrushRunning)
 bool g_replaying = false;      // a Redo is painting a stroke again (it keeps the rest of the redo list)
 uint32_t g_paintSeed = 1u;     // the stroke's noise seed (mountain)
@@ -144,7 +146,8 @@ void ForgetWorld() {
     g_waterQuads.clear();
     g_waterQuadsValid = false;
     g_undoRefused = false;   // a refusal belongs to the stroke it refused, which is gone
-    g_redoRefused = false;
+    g_redoBuilt = false;
+    g_redoNote = "";
 }
 
 void AdoptWorld(const void* map, const void* heights, int stride) {
@@ -1172,7 +1175,8 @@ void PlantStroke(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
     if (strokeStart || !g_undo.Open()) {
         if (!SameWorld(map, heights, stride)) AdoptWorld(map, heights, stride);
         g_undoRefused = false;
-        g_redoRefused = false;
+        g_redoBuilt = false;
+        g_redoNote = "";
         g_undo.BeginStroke(g_replaying);
         g_undo.RecordTool(static_cast<int>(g_state.mode), g_plantName);
         g_plantSeed = static_cast<uint32_t>(cell) * 2654435761u + 0x1234567u;
@@ -1292,7 +1296,8 @@ public:
                 AdoptWorld(map, heights, stride);   // another world: the old strokes do not belong to it
             }
             g_undoRefused = false;
-            g_redoRefused = false;
+            g_redoBuilt = false;
+            g_redoNote = "";
             g_undo.BeginStroke(g_replaying);
             g_undo.RecordTool(static_cast<int>(g_state.mode), g_plantName);
             g_box = StrokeBox();
@@ -1404,41 +1409,60 @@ void StartBrush() {
     if (game->m_worldGeometry != nullptr) LogWaterMesh(game->m_worldGeometry);
 }
 
-size_t UndoDepth() {
-    // The strokes were painted on one world; after a new game or a load there are none to undo. The number
-    // that can be undone is counted from the top down to the first stroke with something built on it: the
-    // strokes are undone in order, so the ones under it cannot be reached. The strokes are read when one is
-    // added or taken off and then about twice a second.
-    static uint32_t countedVersion = 0;
-    static size_t undoable = 0;
-    static int calls = 0;
+// How many strokes of a list an Undo or a Redo can reach: from the next one down to the first with something
+// built on its ground (they go in order, so the ones under it cannot be reached). One state per list, and the
+// strokes are read again when the list changes and then at most twice a second: `skips(i, ...)` is the
+// list's own test of stroke i, `blocked` is the list's "the next one cannot go" flag.
+struct Recount {
+    uint32_t version = 0;
+    size_t   reachable = 0;
+    bool     valid = false;
+    std::chrono::steady_clock::time_point at;
+};
+
+template <class Skips>
+size_t CountReachable(Recount& r, size_t depth, uint32_t version, Skips skips, bool& blocked) {
     GameUpdateLoop* game = GameUpdateLoop::_singleton;
-    if (g_undo.Depth() == 0) {
-        undoable = 0;
-        countedVersion = g_undo.Version();
+    if (depth == 0) {
+        r.reachable = 0;
+        r.version = version;
+        r.valid = true;
+        blocked = false;
         return 0;
     }
-    if (g_undo.Open()) return undoable;
+    if (g_undo.Open()) return r.reachable;
+    // The strokes were painted on one world; after a new game or a load there are none.
     const bool here = game != nullptr && game->m_game != nullptr && game->m_worldGeometry != nullptr &&
                       SameWorld(game->m_game, game->m_worldGeometry->_heights.data,
                                 game->m_worldGeometry->_fieldD0);
     if (!here) {
         ForgetWorld();
-        undoable = 0;
+        r.reachable = 0;
         return 0;
     }
-    if (countedVersion != g_undo.Version() || (calls++ % 30) == 0) {
-        countedVersion = g_undo.Version();
+    const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    const bool due = !r.valid || r.version != version || now - r.at >= std::chrono::milliseconds(500);
+    if (due) {
+        r.at = now;
+        r.version = version;
+        r.valid = true;
         const int stride = game->m_worldGeometry->_fieldD0;
         const int offset = game->m_game->size >> 1;
-        undoable = 0;
-        while (undoable < g_undo.Depth() &&
-               !UndoWouldSkip(game->m_game, *g_undo.FromTop(undoable), stride, offset, undoable == 0)) {
-            ++undoable;
-        }
-        g_undoRefused = undoable == 0;   // the top stroke has something built on it
+        r.reachable = 0;
+        while (r.reachable < depth && !skips(r.reachable, game->m_game, stride, offset)) ++r.reachable;
+        blocked = r.reachable == 0;   // the next stroke has something built on its ground
     }
-    return undoable;
+    return r.reachable;
+}
+
+size_t UndoDepth() {
+    static Recount recount;
+    return CountReachable(
+        recount, g_undo.Depth(), g_undo.Version(),
+        [](size_t i, Map* map, int stride, int offset) {
+            return UndoWouldSkip(map, *g_undo.FromTop(i), stride, offset, i == 0);
+        },
+        g_undoRefused);
 }
 
 void SetUndoChangedHook(void (*hook)()) {
@@ -1493,7 +1517,8 @@ bool UndoLast() {
         return false;
     }
     g_undoRefused = false;
-    g_redoRefused = false;
+    g_redoBuilt = false;
+    g_redoNote = "";
     Stroke stroke;
     if (!g_undo.Pop(stroke)) return false;
     std::unordered_set<int> cells;   // the cells whose trees and rocks follow the ground
@@ -1578,42 +1603,31 @@ bool UndoLast() {
 }
 
 size_t RedoDepth() {
-    // How many strokes a Redo can reach: from the next one down to the first with something built on its
-    // ground (they are redone in order). Read when the list changes and then about twice a second.
-    static uint32_t countedVersion = 0;
-    static size_t redoable = 0;
-    static int calls = 0;
-    GameUpdateLoop* game = GameUpdateLoop::_singleton;
-    if (g_undo.RedoDepth() == 0) {
-        redoable = 0;
-        countedVersion = g_undo.RedoVersion();
-        return 0;
-    }
-    if (g_undo.Open()) return redoable;
-    const bool here = game != nullptr && game->m_game != nullptr && game->m_worldGeometry != nullptr &&
-                      SameWorld(game->m_game, game->m_worldGeometry->_heights.data,
-                                game->m_worldGeometry->_fieldD0);
-    if (!here) {
-        ForgetWorld();
-        redoable = 0;
-        return 0;
-    }
-    if (countedVersion != g_undo.RedoVersion() || (calls++ % 30) == 0) {
-        countedVersion = g_undo.RedoVersion();
-        const int stride = game->m_worldGeometry->_fieldD0;
-        const int offset = game->m_game->size >> 1;
-        redoable = 0;
-        while (redoable < g_undo.RedoDepth() &&
-               !RedoWouldSkip(game->m_game, *g_undo.RedoFromTop(redoable), stride, offset)) {
-            ++redoable;
-        }
-        g_redoRefused = redoable == 0;   // the next stroke has something built on its ground
-    }
-    return redoable;
+    static Recount recount;
+    return CountReachable(
+        recount, g_undo.RedoDepth(), g_undo.RedoVersion(),
+        [](size_t i, Map* map, int stride, int offset) {
+            return RedoWouldSkip(map, *g_undo.RedoFromTop(i), stride, offset);
+        },
+        g_redoBuilt);
 }
 
-bool RedoRefused() {
-    return g_redoRefused;
+const char* RedoNote() {
+    // The next Redo's ground has something built on it, or why the last Redo did nothing.
+    if (g_redoBuilt) return "Cannot redo: something was built on this stroke";
+    return g_redoNote;
+}
+
+// Selects the resource of the name, as BuildPalette keeps the choice across worlds; false when not listed.
+static bool SelectPlantByName(const std::string& name) {
+    for (size_t i = 0; i < g_paletteNames.size(); ++i) {
+        if (g_paletteNames[i] == name) {
+            g_plantIndex = static_cast<int>(i);
+            g_plantName = name;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool RedoLast() {
@@ -1630,51 +1644,61 @@ bool RedoLast() {
         return false;
     }
     if (g_undo.RedoDepth() == 0) return false;
+    g_redoNote = "";
     const Replay* next = g_undo.RedoFromTop(0);
     if (next != nullptr && RedoWouldSkip(map, *next, stride, map->size >> 1)) {   // built on since the undo
-        g_redoRefused = true;
+        g_redoBuilt = true;
         std::fprintf(stderr, "[TerrainEdit] redo refused: something was built on this stroke\n");
+        NotifyUndoChanged();
+        return false;
+    }
+    // A planting needs its resource in the list. Looked at before the stroke is taken off the list, as the
+    // built-on test is, so a refusal leaves the list as it was.
+    EnsurePalette();
+    const bool planting = next != nullptr && static_cast<Mode>(next->mode) == Mode::Plant;
+    bool listed = false;
+    if (planting) {
+        for (const std::string& name : g_paletteNames) {
+            if (name == next->plant) listed = true;
+        }
+    }
+    if (planting && !listed) {
+        g_redoNote = "Cannot redo: that resource is not on the map any more";
+        std::fprintf(stderr, "[TerrainEdit] redo refused: %s is not in the resource list\n",
+                     next->plant.c_str());
         NotifyUndoChanged();
         return false;
     }
     Replay replay;
     if (!g_undo.PopRedo(replay)) return false;
-    EnsurePalette();
     const BrushState savedState = g_state;
     const std::string savedPlant = g_plantName;
-    const int savedPlantIndex = g_plantIndex;
-    bool ok = true;
-    if (static_cast<Mode>(replay.mode) == Mode::Plant) {
-        ok = false;   // the picked resource must still be in the list
-        for (size_t i = 0; i < g_paletteNames.size(); ++i) {
-            if (g_paletteNames[i] == replay.plant) {
-                g_plantIndex = static_cast<int>(i);
-                g_plantName = replay.plant;
-                ok = true;
-            }
-        }
-    }
+    if (planting) SelectPlantByName(replay.plant);
+    const uint32_t versionBefore = g_undo.Version();
     size_t painted = 0;
-    if (ok) {
-        g_replaying = true;
-        for (const ReplayFrame& frame : replay.frames) {
-            g_state.mode = static_cast<Mode>(replay.mode);
-            g_state.radius = frame.radius;
-            g_state.strength = frame.strength;
-            g_state.density = frame.density;
-            TerrainBrushTool::Paint(map, terrain, frame.cell, painted == 0);
-            ++painted;
-        }
-        FinishStroke();
-        g_replaying = false;
+    g_replaying = true;
+    for (const ReplayFrame& frame : replay.frames) {
+        g_state.mode = static_cast<Mode>(replay.mode);
+        g_state.radius = frame.radius;
+        g_state.strength = frame.strength;
+        g_state.density = frame.density;
+        TerrainBrushTool::Paint(map, terrain, frame.cell, painted == 0);
+        ++painted;
     }
+    FinishStroke();
+    g_replaying = false;
     g_state = savedState;
-    g_plantName = savedPlant;
-    g_plantIndex = savedPlantIndex;
+    // the palette may have been scanned again (a stroke's start does), so the choice comes back by name
+    SelectPlantByName(savedPlant);
     g_undoRefused = false;
+    if (g_undo.Version() == versionBefore) {
+        // the frames changed nothing (a planting whose disc has grown back to its density): the stroke is gone
+        // from the redo list and was not committed, so the player is told
+        g_redoNote = "Redo changed nothing: the ground already has what that stroke made";
+    }
     std::fprintf(stderr, "[TerrainEdit] redo: %zu frame(s) painted again\n", painted);
     NotifyUndoChanged();
-    return ok;
+    return true;
 }
 
 bool BrushRunning() {

@@ -54,15 +54,17 @@ constexpr float kStrengthSliderMax = kMaxStrength / kStrengthStep;
 
 const char* const kModeNames[kModeCount] = { "Raise", "Lower", "Flatten", "Mountain", "Smooth", "Plant" };
 
-// The page, kept while it is open so the brush can refresh it (the host has no per-frame call for a page).
-// Forgotten in PageClose.
+// The page, kept while it is open so the brush can refresh it (the host also calls the page every frame while
+// it shows: PageTick). Forgotten in PageClose.
 Object::InternalPtr<UI::Element> g_page;
 UI::SliderElement* g_size = nullptr;
 UI::SliderElement* g_strength = nullptr;
 UI::SliderElement* g_density = nullptr;
 UI::CheckElement* g_toolChecks[kModeCount] = {};   // the six tools' buttons, in Mode order
 UI::ComboElement* g_plantCombo = nullptr;   // the resource the Plant tool places
-char g_shown[96] = "";   // the caption as last set, so the text is only touched when it changes
+// the longest caption: the mode text with a long resource name, both counts and both notes
+constexpr size_t kCaptionSize = 256;
+char g_shown[kCaptionSize] = "";   // the caption as last set, so the text is only touched when it changes
 
 // The button of the tool in use stays lit, as the game's own toolbar does: a check box is lit while it is
 // checked, so exactly the one of the running brush's mode is checked (a click toggled the clicked one; this
@@ -76,25 +78,34 @@ void ShowTools() {
     }
 }
 
-// "Mountain brush, 3 to undo, 1 to redo" into the caption (the redo count only while there is one).
+// "Mountain brush, 3 to undo, 1 to redo" into the caption (the redo count only while there is one), then the
+// notes that say why an Undo or a Redo cannot go ("Cannot undo: something was built on this stroke"), after
+// the mode text, so the line still says which tool is in use.
 void ShowStatus(UI::Element* page) {
     ShowTools();
     UI::Element* e = page->FindElement(System::String("textTerrainEditStatus")).Get();
     if (!::Object::IsDerivedFromNullSafe(e, UI::TextElement::TypeId())) return;
-    char text[128];
-    char redo[24] = "";
+    // The counts first, every time: reading them is what raises and clears the "cannot" flags.
+    const int undoDepth = static_cast<int>(UndoDepth());
     const int redoDepth = static_cast<int>(RedoDepth());
+    char text[kCaptionSize];
+    char redo[24] = "";
     if (redoDepth > 0) std::snprintf(redo, sizeof redo, ", %d to redo", redoDepth);
-    if (UndoRefused()) {
-        std::snprintf(text, sizeof text, "Cannot undo: something was built on this stroke");
-    } else if (RedoRefused()) {
-        std::snprintf(text, sizeof text, "Cannot redo: something was built on this stroke");
-    } else if (State().mode == Mode::Plant) {
-        std::snprintf(text, sizeof text, "Plant: %s, density %d%%, %d to undo%s", PlantName(),
-                      static_cast<int>(State().density * 100.0f + 0.5f), static_cast<int>(UndoDepth()), redo);
+    int length = 0;
+    if (State().mode == Mode::Plant) {
+        length = std::snprintf(text, sizeof text, "Plant: %s, density %d%%, %d to undo%s", PlantName(),
+                               static_cast<int>(State().density * 100.0f + 0.5f), undoDepth, redo);
     } else {
-        std::snprintf(text, sizeof text, "%s brush, %d to undo%s", kModeNames[static_cast<int>(State().mode)],
-                      static_cast<int>(UndoDepth()), redo);
+        length = std::snprintf(text, sizeof text, "%s brush, %d to undo%s",
+                               kModeNames[static_cast<int>(State().mode)], undoDepth, redo);
+    }
+    const char* notes[2] = {
+        UndoRefused() ? "Cannot undo: something was built on this stroke" : "",
+        RedoNote(),
+    };
+    for (const char* note : notes) {
+        if (note[0] == '\0' || length < 0 || static_cast<size_t>(length) >= sizeof text) continue;
+        length += std::snprintf(text + length, sizeof text - static_cast<size_t>(length), ". %s", note);
     }
     if (std::strcmp(text, g_shown) == 0) return;
     std::snprintf(g_shown, sizeof g_shown, "%s", text);
@@ -227,7 +238,8 @@ bool PageChanged(UI::Element* page, int32_t id) {
 // Every frame the page is showing: the counts and the "Cannot ..." lines stay true while the player is busy
 // with another tool (placing a house ends what can be undone or redone).
 void PageTick() {
-    if (g_page.Get() != nullptr) ShowStatus(g_page.Get());
+    // while the brush runs, its own frame hook refreshes the page (RefreshPage)
+    if (g_page.Get() != nullptr && !BrushRunning()) ShowStatus(g_page.Get());
 }
 
 void PageClose() {
