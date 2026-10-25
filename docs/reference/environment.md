@@ -23,9 +23,12 @@ Then `tools/build.sh unit` (no game needed beyond item 3's skips) and `tools/bui
   route were deleted the same day (history: `docs/history/`, the STATUS log).
 - MSYS2 packages are outdated (stale signatures): avoid `pacman -S` for new installs
 - Linux (WSL2 Ubuntu 24.04, g++ 13.3, cmake 3.28, ninja): the same CMakeLists builds `OpenBA` and
-  `unit` in every flavour; `tools/linux_gamedir.sh` + `tools/linux_run.sh` run it over dxvk-native
-  (`tools/fetch_dxvk_native.sh`) and lavapipe; the source copy lives in the WSL home (`~/banished-main`,
-  rsync of the working tree) because a build over `/mnt/c` is slow; ccache makes a re-copy's build near-free
+  `unit` in every flavour, with the Vulkan backend as the default renderer there (no flag; Vulkan P5);
+  `tools/linux_gamedir.sh` + `tools/linux_run.sh` run it on lavapipe (Mesa's CPU Vulkan, apt
+  `mesa-vulkan-drivers` + `libvulkan1`; `vulkan-tools` for `vulkaninfo`); the source copy lives in the
+  WSL home (`~/banished-main`, rsync of the working tree with its submodules) because a build over
+  `/mnt/c` is slow; ccache makes a re-copy's build near-free. WSL2 needs the hypervisor: with
+  `hypervisorlaunchtype off` (the uProf IBS setup) `wsl` refuses to start
 - Python 3.9.10 system-wide; 3.10.11 in the project venv `tools/ghidra_mcp/.venv/`
 - `uv` v0.9.24; Node.js + npx (for the vscode MCP server)
 - JAVA_HOME `C:\Program Files\Java\jdk-24` (for Ghidra)

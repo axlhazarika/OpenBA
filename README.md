@@ -32,7 +32,8 @@ With AO and MSAA enabled on 10x, OpenBA  (left) performs 100fps better than reta
 
 - **Functionality:** OpenBA boots, loads retail saves, and has a working 1:1 simulation of the base game.
 - **Verification:** OpenBA has a full unit test suite verified against the retail games behavior.
-- **Platforms:** Windows x64 10/11 and Linux x64 using cmake and GCC13.1. DX11 render with DXVK support.
+- **Platforms:** Windows x64 10/11 (DirectX 11), Linux x64 (Vulkan 1.3) and macOS arm64 (Metal), built
+  with CMake and GCC 13.
 
 ## Versioning
 

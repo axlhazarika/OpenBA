@@ -1,7 +1,7 @@
 # src/render/vulkan/ — the Vulkan renderer backend
 
 NOT RETAIL. The third backend behind `src/render/common/README.md`'s seam, picked with
-`BANISHED_RENDER_BACKEND=vulkan`. Targets: Linux (replacing the dxvk-native route) and Android
+`BANISHED_RENDER_BACKEND=vulkan`. Targets: Linux (the default renderer there since P5) and Android
 (Adreno 8xx); Windows is the development bed. The design and the phase plan are
 `docs/vulkan/PLAN.md`; this file is the map of the directory.
 
@@ -60,6 +60,14 @@ splits it into `PresentFrame` and `RecoverLostDevice`, and `fix.boot_device_lost
 rebuild that fails on a lost device into the same recovery. `BANISHED_FORCE_DEVICE_LOST` injects the loss
 on this backend too. Next: P5 (Linux).
 
+P5 (Linux cutover): this backend is the Linux renderer. CMake picks it by default off Windows and Apple,
+so `tools/build.sh build` on Linux needs no flag (Windows keeps dx11, macOS metal); the dx11 backend is
+Windows-only and the D3D11-over-Vulkan route Linux used before is deleted (fetch script, the dlopen
+resolvers in `src/platform/posix/gfx_posix.cpp`, its run-script environment and its libraries in the game
+dir and the release package). `tools/linux_run.sh` pins lavapipe on the WSL bed. The Linux build and unit
+run pass in CI; the lavapipe routes have not run yet (the WSL bed was down in P5), and the real-GPU run is
+the owner's, below. Next: P6 (Android).
+
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan
 SDK installed, its layer is registered with the loader and used as is (no `VK_ADD_LAYER_PATH`; the
@@ -99,3 +107,42 @@ deployed at a time. Log lines are tagged `[Vulkan]` in `standalone_error.log`.
 - Nothing outside this directory names `VideoVulkan::`; a feature the backend cannot do answers
   "not supported" through the seam header, never a silent stub.
 - One statement per line (`.claude/rules/style.md`).
+
+## Linux real-GPU checklist (the owner's run, an Ubuntu live boot)
+Ubuntu 24.04 or newer with the GPU's own Vulkan 1.3 driver (Mesa RADV / ANV, or NVIDIA's).
+
+1. Packages:
+   ```bash
+   sudo apt install git build-essential cmake ninja-build ccache python3 vulkan-tools libvulkan1 \
+     mesa-vulkan-drivers libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+     libxtst-dev libxfixes-dev libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev \
+     libasound2-dev libpulse-dev
+   vulkaninfo --summary          # the GPU must be listed with apiVersion 1.3 or higher
+   ```
+   (`vulkan-validationlayers` adds the validation layer the debug flavour turns on when it is listed.)
+2. Build (the checkout with its submodules; a non-recursive `git submodule update --init` is enough):
+   ```bash
+   tools/build.sh build debug && tools/build.sh unit debug     # build/cmake-debug/OpenBA, unit
+   bash tools/linux_gamedir.sh build/cmake-debug ~/banished_linux "/path/to/Banished"
+   ```
+   The last argument is a Banished install holding `WinData` (a mounted Windows partition works; it
+   is only read). `resave` also needs `Gate.sav` in `~/.local/share/Banished/Save/`
+   (`tools/resave_gate/README.md`).
+3. One command per route, with the system's driver instead of lavapipe:
+   ```bash
+   LINUX_VK_ICD=system bash tools/linux_run.sh menu    ~/banished_linux ~/lx_runs/menu
+   LINUX_VK_ICD=system bash tools/linux_run.sh newgame ~/banished_linux ~/lx_runs/newgame
+   LINUX_VK_ICD=system bash tools/linux_run.sh world   ~/banished_linux ~/lx_runs/world
+   LINUX_VK_ICD=system bash tools/linux_run.sh resave  ~/banished_linux ~/lx_runs/resave
+   ```
+4. What to look for, in each `route.txt` (copied from `standalone_error.log`):
+   - the result line `[linux_run] <route>: exit 0 crashlog=0 hang=no`;
+   - `[Vulkan] instance: loader 1.x.y, N adapter(s), validation on` (`validation on` only in the debug
+     flavour with the layer installed);
+   - `[Vulkan] device <the GPU's name> (discrete|integrated) api 1.x.y ... validation=0|1; multisample Nx`:
+     the GPU, not `llvmpipe` (lavapipe) and not `Microsoft Direct3D12` (dzn);
+   - `[Vulkan] swap chain WxH, 3 images, format F, present mode P` at the window's size;
+   - `[Vulkan] validation messages: N`; the known residue is in `docs/known_port_issues.md` ("Vulkan
+     backend": the byte-4 vertex attribute and the depth-only pass's unbound colour output);
+   - `world`: `new.world.txt` compared with the Windows DX11 exe's for `BANISHED_SEED=12345`;
+     `resave`: `[Roundtrip] RESULT=` and the resaved md5 against the golden in `tools/resave_gate/`.

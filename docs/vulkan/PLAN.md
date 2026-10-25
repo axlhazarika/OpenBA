@@ -16,7 +16,7 @@ Status: RULED 2026-10-24, no code yet. Owner rulings in §1 (the §6 questions a
 - **Dependencies**: pinned submodules with permissive licences (Vulkan-Headers, VMA, dxbc-spirv,
   SPIRV-Headers), built into the exe. Ruled 2026-10-24.
 - **Linux endgame**: once the Vulkan backend is the Linux renderer, dxvk-native goes (fetch script,
-  WSI code, docs). Ruled 2026-10-24.
+  WSI code, docs). Ruled 2026-10-24. Done in P5 (2026-10-25).
 - **Android identity**: none exists yet; to be made in P6. Proposal to ratify then: package
   `org.openba.game`, app name "OpenBA", saves under `Android/data/<pkg>/files/Documents/Banished`.
 - **Phone defaults** (P6/P7 starting point, tuned after the soak): MSAA off, render at **half the
@@ -39,9 +39,9 @@ Status: RULED 2026-10-24, no code yet. Owner rulings in §1 (the §6 questions a
   for in-flight resources, a shader cache keyed on DXBC hash + converter fingerprint + OS version).
   The Metal layout is the template for Vulkan; the DX11 files are the semantic reference for what
   each slot must do.
-- **Linux today = the DX11 code over dxvk-native 3.1.1** (headers only; the .so files are dlopened
-  by `src/platform/posix/gfx_posix.cpp`). A Vulkan backend replaces that route on Linux; it is not
-  a first port.
+- **Linux before P5 = the DX11 code over dxvk-native 3.1.1** (headers only; the .so files were
+  dlopened by `src/platform/posix/gfx_posix.cpp`). The Vulkan backend replaced that route on Linux in
+  P5 (2026-10-25); it was not a first port.
 - **Shaders.** Retail requires feature level 10_0, so every shipped program is **SM4 DXBC** (the
   better_trees rewrites already parse SM4 tokens in `src/render/common/better_trees/dxbc.{h,cpp}`).
   Metal converts DXBC at load through DXMT's airconv, dlopened (LGPL kept out of the exe) and
@@ -227,7 +227,7 @@ companion interface; each would sit under it as a fourth layer. See §4.1.
   Absent on the S25 and therefore never relied on: graphics pipeline library, shader object,
   EDS3, memory budget, descriptor buffer.
 - **Linux moves onto this backend**; dxvk-native stays only as the bring-up oracle (same D3D11
-  code, same frames) and is removed once parity is gated. One backend per platform.
+  code, same frames) and is removed once parity is gated. One backend per platform. (Removed in P5.)
 - **Windows is the dev bed**; Vulkan never ships on Windows unless asked. `BANISHED_RENDER_BACKEND`
   is a configure-time choice, so it is a second exe, not a launcher option.
 
@@ -308,7 +308,7 @@ companion interface; each would sit under it as a fourth layer. See §4.1.
 - Windows: `tools/build.sh run` on the Vulkan configure, RenderDoc captures compared with the
   DX11 exe, `tools/trace_oracle/` (never pixel diffs), validation layers on in the debug flavour.
 - Linux: `tools/linux_run.sh` routes on lavapipe (CI-shaped smoke) and on a real GPU when one is
-  reachable; dxvk-native as the oracle until parity.
+  reachable; dxvk-native was the oracle until parity (removed in P5).
 - Android: boot state over logcat / `adb pull`, RenderDoc remote, validation layers pushed with
   `run-as`, HWASan `wrap.sh` run once per phase, Snapdragon Profiler for the perf pass.
 

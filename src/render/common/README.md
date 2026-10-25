@@ -41,6 +41,6 @@ two DXGI swap-chain probes in `src/app/main.cpp`, went behind `Render::DumpSwapC
 `Render::BootedExclusiveFullscreen` when the Vulkan backend arrived; their DX11 bodies are
 `src/render/dx11/swap_probe_dx11.cpp`.)
 
-The backends: `dx11/` (Windows; Linux over dxvk-native until the Vulkan cutover), `metal/` (macOS),
-`vulkan/` (Linux and Android, Windows as the dev bed; `docs/vulkan/PLAN.md`). `tools/build.sh` picks a
+The backends: `dx11/` (Windows only, its default), `metal/` (macOS), `vulkan/` (the default on Linux
+since Vulkan P5, Android, and Windows as the dev bed; `docs/vulkan/PLAN.md`). `tools/build.sh` picks a
 non-default one from `BANISHED_RENDER_BACKEND` into its own build directory.
