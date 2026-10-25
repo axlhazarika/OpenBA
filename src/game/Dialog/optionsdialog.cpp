@@ -639,6 +639,10 @@ void OptionsDialog::OnOpened() {
         this->checkSoftwareMouse = FindElementAs<UI::CheckElement>(this, "checkSoftwareMouse");
         if (inputCfg) SetCheckState(this->checkSoftwareMouse, inputCfg->_mouseDisplay);
     }
+    // EXT SEAM (NOT RETAIL, docs/android/P8_INPUT_OPTIONS.md): ext.phone_menu on a fixed surface
+    // (Android) disables the Video rows that change nothing there and keeps VSync on; retail elsewhere.
+    Ext::PhoneMenu::FitVideoRows(this->comboResolution, this->comboRefresh, this->checkFullscreen,
+                                 this->checkVSync);
 
     // --- Input bind list (prime suspect for the per-frame KeyMap::Pressed crash) ---
     if (s_enableInputList) {

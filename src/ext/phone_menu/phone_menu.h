@@ -28,6 +28,8 @@
 #include <cstdint>
 
 namespace UI {
+class CheckElement;
+class ComboElement;
 class Dialog;
 }
 
@@ -46,6 +48,24 @@ void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId);
 // OptionsDialog::OnOpened, after Platform::Display::UiScaleSliderRange: the slider's minimum
 // (percent), lowered to 25 while the row is on; `platformMinPercent` unchanged otherwise.
 float UiScaleSliderMinimum(float platformMinPercent);
+
+// P8, retail's Video rows on a fixed surface (video_rows.cpp, docs/android/P8_INPUT_OPTIONS.md
+// round 2). True while the row is on and Platform::Window::FixedDisplaySurface (Android): the
+// surface is the screen at its own size and refresh, so retail's Resolution, Refresh rate and
+// Fullscreen rows change nothing there, and VSync is kept on (the swap chain presents FIFO at the
+// panel's rate; the frame rate below it is the Enhanced tab's Frame rate cap, ext.fps_cap, alone).
+bool FixedVideoRows();
+
+// Boot (registry_boot.cpp, after Sync): with FixedVideoRows, a VSync=false left in settings.cfg is
+// turned on (Video::Configuration::vsync, then Video::Device::settingsChanged rebuilds the swap chain
+// at the first frame), so a MAILBOX swap chain never renders frames the panel never shows.
+void KeepVSyncOnFixedSurface();
+
+// OptionsDialog::OnOpened, after retail filled the Video tab: with FixedVideoRows, the Resolution and
+// Refresh rate combos and the Fullscreen and VSync checks are disabled, VSync shown ticked (Apply then
+// reads values that change nothing, VSync on). Any argument may be null. Retail's rows elsewhere.
+void FitVideoRows(UI::ComboElement* resolution, UI::ComboElement* refresh, UI::CheckElement* fullscreen,
+                  UI::CheckElement* vsync);
 
 }  // namespace PhoneMenu
 }  // namespace Ext

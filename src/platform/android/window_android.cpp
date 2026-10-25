@@ -71,6 +71,10 @@ bool RenderScaleAdjustable() {
     return true;
 }
 
+bool FixedDisplaySurface() {
+    return true;
+}
+
 void SetRenderScale(int percent) {
     if (percent < 25 || percent > 100) return;
     RenderScale();   // the boot value is read first, so a late first read cannot overwrite this one

@@ -79,5 +79,12 @@ bool RenderScaleAdjustable();
 // (`VideoRenderScale`) so the next start opens at it. A no-op where not RenderScaleAdjustable.
 void SetRenderScale(int percent);
 
+// P8: true where the game's surface is the whole screen at its own size and refresh, whatever the
+// engine's Video configuration says: Android (an activity's window; the Vulkan backend republishes the
+// window's size as the back buffer and never sets a display mode). There retail's Options rows
+// Resolution, Refresh rate and Fullscreen change nothing; ext.phone_menu disables them and keeps VSync
+// on (src/ext/phone_menu/video_rows.cpp). False on Windows, Linux and macOS.
+bool FixedDisplaySurface();
+
 }  // namespace Window
 }  // namespace Platform

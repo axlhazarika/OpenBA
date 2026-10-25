@@ -63,5 +63,9 @@ void SetRenderScale(int percent) {
     (void)percent;
 }
 
+bool FixedDisplaySurface() {
+    return false;
+}
+
 }  // namespace Window
 }  // namespace Platform

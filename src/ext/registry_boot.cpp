@@ -166,6 +166,8 @@ void InitFromSettings() {
     Ext::RenderPipe::Sync();
     // ext.phone_menu (class A, live): the UI::UserInterface::_extDialogPlace seam.
     Ext::PhoneMenu::Sync();
+    // ext.phone_menu on a fixed surface (Android): VSync kept on (video_rows.cpp).
+    Ext::PhoneMenu::KeepVSyncOnFixedSurface();
     // ext.fps_cap (class A, live): the frame limiter's settings cap (src/app/frame_limiter.h).
     Ext::FpsCap::Sync();
     // ext.ambient_occlusion (class A, live): the main depth's format + the per-frame arm.

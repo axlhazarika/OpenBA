@@ -111,13 +111,24 @@ float WheelSinceLastPump() {
 // also hides the cursor and confines it to the window for the drag, and on release puts it
 // back where SDL's own pointer moved to: retail's cursor stayed visible and free during a
 // rotate. Outside the drag x / y stay the cursor-position difference.
+// P8: where the system shows the pointer where the drag began once relative mode ends
+// (RotateDragReturnsCursor: Android's pointer capture), SDL's position is put back there too,
+// and the warp's own motion is drained, so neither the cursor nor the next poll's x / y jump.
 bool g_rotateDrag = false;
+float g_dragStartX = 0.0f;
+float g_dragStartY = 0.0f;
 
 void SetRotateDrag(bool on) {
     if (on == g_rotateDrag) return;
     SDL_Window* w = Window::Sdl::GameWindow();
     if (w == nullptr) return;
-    if (SDL_SetWindowRelativeMouseMode(w, on)) g_rotateDrag = on;
+    if (on) SDL_GetMouseState(&g_dragStartX, &g_dragStartY);
+    if (!SDL_SetWindowRelativeMouseMode(w, on)) return;
+    g_rotateDrag = on;
+    if (!on && RotateDragReturnsCursor()) {
+        SDL_WarpMouseInWindow(w, g_dragStartX, g_dragStartY);
+        SDL_GetRelativeMouseState(nullptr, nullptr);
+    }
 }
 
 // The live, LOGICAL buttons (SDL_GetGlobalMouseState: GetAsyncKeyState with

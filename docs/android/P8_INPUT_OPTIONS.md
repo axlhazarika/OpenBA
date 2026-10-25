@@ -106,3 +106,74 @@ The manifest is `sensorLandscape`, so portrait (0 / 2) is never offered. Setting
 - `Documents/Banished/settings.cfg` restored to the file found at the start (pushed back over adb).
 - Rotation settings as found (`user_rotation 0`, `accelerometer_rotation 1`).
 - `/data/local/tmp/mouse_mid.json`, `mouse_rot.json` and screenshots left in `/data/local/tmp`.
+
+## Round 2 (after the owner's S25 test of PR #53)
+
+### Middle-mouse rotate: the jump and the slow speed
+
+**(a) The jump.** Measured with a uinput mouse and a temporary log of SDL's position (not committed):
+Android ends a pointer capture with the pointer where the capture began, while SDL's position had moved
+with the drag (802.5 -> 1002.5 for 200 counts); SDL re-sends that moved position when relative mode ends,
+and the first hover motion afterwards snapped the cursor back by 170 px. Fix: `SetRotateDrag`
+(src/platform/sdl/input_sdl.cpp) records SDL's position when the drag starts and, where the new hook
+`Platform::Input::RotateDragReturnsCursor()` says so (true on Android: `src/platform/android/input_android.cpp`,
+a new twin of `input_posix.cpp`; false on Windows, Linux, macOS, unchanged there), warps SDL back there at
+the release and drains the warp's motion. After: the next motion continues from 802.5 (+30.6 for two
+moves), no snap. Our `OpenBASurface` sends no absolute position (its button calls carry a relative 0, 0).
+Not reproduced: a jump to the screen's CENTRE. A new input device starts its pointer at the centre (each
+uinput test device does); a KVM that re-announces the mouse on a switch would do the same. That needs the
+owner's KVM to confirm.
+
+**(b) The slow rotate.** A captured `ACTION_MOVE` carries the frame's earlier samples as history (1, 8, 7, 0
+historical samples for 20 events 1 ms apart); `OpenBASurface` read only the last sample. Now it sums the
+history and the last (20 x 10 counts -> 200 in the engine's poll, was about a fifth of that for a fast mouse).
+Units: a captured delta is the device's raw count (10 counts -> 10.0), which is what SDL's relative motion
+gives on Windows (raw input, system scale off), so no further scale is applied: per count the camera
+turns as on the desktop. Verified with uinput; the same feel with the owner's mouse (its polling rate
+sets how much history there is) needs the owner.
+
+### Retail's Video rows on the phone
+
+What each row does on Android today (the Vulkan backend):
+
+| Row | Effect on the phone |
+|---|---|
+| Resolution | none: the list is `BuildResolutionList`'s standard sizes, unfiltered (3840x2160 was picked on the owner's phone); `ApplyChangedSettings` copies it into the back buffer and `ApplyEngineSettingsChange` replaces it with the window's size times the render scale |
+| Refresh Rate | none: one entry, 60, for every size; no display mode is set and the panel stays at 120 Hz |
+| Fullscreen | none: the activity's window is always the whole screen |
+| VSync | live: on = FIFO (the panel's 120 Hz paces), off = MAILBOX (frames rendered as fast as the GPU goes, most never shown) |
+| Renderer, Adapter | one entry each (Vulkan, Adreno 830) |
+
+Ruling taken: **drop** (the cleaner of the two). With `ext.phone_menu` on and
+`Platform::Window::FixedDisplaySurface()` (true on Android only), `OptionsDialog::OnOpened` disables
+Resolution, Refresh Rate, Fullscreen and VSync, VSync shown on (`src/ext/phone_menu/video_rows.cpp`); at
+boot a `VSync=false` left in settings.cfg is turned on and recorded (`KeepVSyncOnFixedSurface`). So FIFO
+holds the panel's rate and the Frame rate cap is the only frame-rate control below it: the two can never
+both be choices. Render scale is the Enhanced tab's. Desktops (hook false) and a phone with
+`ext.phone_menu` off keep retail's rows.
+
+Verified on the S25 (settings.cfg with `VSync=false` and no fps keys pushed): boot log `[PhoneMenu] VSync
+was off on a fixed surface: turned on`, swap chain `present mode 1` (MAILBOX) at creation then `present
+mode 2` (FIFO) at the first frame; Options > Video shows Resolution and Refresh Rate greyed, taps on VSync
+and Fullscreen change nothing (retail's check sprite has no disabled look); Ok writes `VideoVSync=true`.
+
+### The seed for an existing settings.cfg
+
+The owner's P7-era file never received `ext.fps_cap`. Implemented (small, never overwrites):
+`SeedPhoneSettings` now also runs on an existing file and appends only the phone defaults whose key the
+file lacks (`src/platform/android/phone_seed.h`, `tests/unit/phone_seed_test.cpp`). A key the file has
+keeps its value (a player's `ext.fps_cap=0` stays 0). Verified: a file without the fps keys got
+`ext.fps_cap=1` appended (logcat `phone defaults added to ...`) and the menu ran at the 60 cap.
+Side effect to know: any other phone default absent from an old file (for example
+`VideoRenderScale` in a pre-P7 file) is added the same way, which is the phone default it should have had.
+
+### Round 2 checks
+
+Windows DX11 debug build, unit 1486 / 0 (1 skipped), acceptance 0 off target; Android debug build and
+the S25 runs above. No Windows game run this round (the Windows input path changed only by a
+`SDL_GetMouseState` call at a drag's start; the hook is false there).
+
+### Phone state after round 2
+
+This branch's debug apk installed, app stopped; `settings.cfg` restored to the file found at the start of
+the round (pushed back over adb); rotation as found (0 / 1).

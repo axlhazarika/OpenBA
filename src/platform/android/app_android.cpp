@@ -20,6 +20,7 @@
 
 #include "platform_app.h"
 #include "android_paths.h"
+#include "phone_seed.h"   // MissingSeedLines (P8)
 
 #include "boot_state_watchdog.h"
 #include "android/boot_state_background.h"   // src/diag/android: the watchdog's background bracket
@@ -105,8 +106,9 @@ void MirrorThread() {
 // the graphics extensions off, ext.phone_menu on (the menu fitted to a landscape phone, the UI scale
 // slider down to 25 %; docs/extensions/handins/PHONEMENU.md). A first run on the phone (no settings.cfg in the user folder yet)
 // starts from a settings.cfg holding only those keys; everything else takes the game's own defaults,
-// and the player's later choices in Options are kept as on any platform (the file is never written
-// again here). ShadowScalar 2 is retail's Low Shadow Resolution (the smallest sun map). Retail's own
+// and the player's later choices in Options are kept as on any platform. P8: a later start adds only
+// the lines of defaults whose key the file lacks (phone_seed.h), never changing a key it has.
+// ShadowScalar 2 is retail's Low Shadow Resolution (the smallest sun map). Retail's own
 // shadows-off is Options > Shadow Quality = None (VideoShaderDetail=0: no shadow pass, no casters, the
 // unshadowed pixel variant; P8, docs/android/P8_SHADOWS_RELEASE.md); the seed leaves shadows on (ruled
 // 2026-10-25). P7 (ruled 2026-10-25): edge scrolling off, because a touch held at
@@ -133,7 +135,27 @@ void SeedPhoneSettings(const std::string& userDir) {
     mkdir(userDir.c_str(), 0770);
     const std::string path = userDir + "/settings.cfg";
     struct stat st;
-    if (stat(path.c_str(), &st) == 0) return;
+    if (stat(path.c_str(), &st) == 0) {
+        // P8: a file from before a default existed gets that default's line, appended; a key the
+        // file has is never touched (phone_seed.h). The owner's P7 phone never saw ext.fps_cap.
+        std::string existing;
+        if (FILE* in = std::fopen(path.c_str(), "r")) {
+            char buf[4096];
+            size_t n = 0;
+            while ((n = std::fread(buf, 1, sizeof(buf), in)) > 0) existing.append(buf, n);
+            std::fclose(in);
+        }
+        const std::string missing = Platform::Android::MissingSeedLines(existing, kPhoneSettings);
+        if (missing.empty()) return;
+        FILE* out = std::fopen(path.c_str(), "a");
+        if (out == nullptr) return;
+        if (!existing.empty() && existing.back() != '\n') std::fputc('\n', out);
+        std::fputs(missing.c_str(), out);
+        std::fclose(out);
+        __android_log_print(ANDROID_LOG_INFO, kLogTag, "phone defaults added to %s: %s", path.c_str(),
+                            missing.c_str());
+        return;
+    }
     FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) return;
     std::fputs(kPhoneSettings, f);

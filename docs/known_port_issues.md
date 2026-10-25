@@ -1040,7 +1040,10 @@ purpose or not yet closed, as of P6 (2026-10-25).
   captured pointer's `ACTION_MOVE` / `ACTION_BUTTON_PRESS` / `ACTION_BUTTON_RELEASE`: after a
   middle-button press put the window in relative mode (the camera-rotate drag), the release never reached
   SDL and the rotate stuck on. `OpenBASurface.java` passes them on; `docs/reference/android_mouse.md`.
-  Unverified: a real mouse over the owner's KVM (the fix was checked with a uinput mouse).
+  Unverified: a real mouse over the owner's KVM (the fix was checked with a uinput mouse). Round 2
+  (owner's test): the slow rotate (only the last of a frame's batched samples was read) and the cursor
+  snap after the release (Android shows the pointer where the capture began) FIXED; a jump to the screen's
+  centre was not reproduced (a re-announced input device starts there): the owner's KVM to confirm.
 - **Android: no shadows-off (P6).** Retail's shadow setting has three sizes and no off; the phone's
   first-run `settings.cfg` picks the smallest (`VideoShadowScalar=2`). A true off would be an extension.
 - **Android: save on low memory or termination (P6; narrowed in P7).** Since P7 `SDL_EVENT_LOW_MEMORY`
