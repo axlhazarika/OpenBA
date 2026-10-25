@@ -109,7 +109,7 @@ UNIT_TEST(ext_phone_menu_backdrop_logo_top) {
 }
 
 UNIT_TEST(ext_phone_menu_button_row) {
-    // The squares are as large as the largest padded label ("Achievements", 109 + 16).
+    // The labels need the largest padded label ("Achievements", 109 + 16).
     const int32_t widths[] = {65, 67, 92, 125, 85, 71, 104, 60};
     const int32_t heights[] = {30, 30, 30, 30, 30, 30, 30, 30};
     CHECK(Ext::PhoneMenu::SquareSide(widths, heights, 8) == 125);
@@ -135,6 +135,25 @@ UNIT_TEST(ext_phone_menu_button_row) {
     CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 145, 340));
     // Not sized.
     CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 0, 0, -1, -1));
+}
+
+UNIT_TEST(ext_phone_menu_row_square_side) {
+    // The S25 at UI 100, render scale 50 (1170x540 units, safe width 1122): eight squares with
+    // 62 units of padding and gaps around them fill the row at 132 ...
+    CHECK(Ext::PhoneMenu::FitSide(1170, 540, 62, 8) == 132);
+    // ... capped at 0.22 of the safe height (492): 108, more than the labels' 95.
+    CHECK(Ext::PhoneMenu::RowSide(95, 132, 540) == 108);
+    // The owner's UI 35 at render scale 100 (819x378 units, safe width 785, safe height 344):
+    // 90 across; the labels in their own font need 107 (no row), in the small font 71.
+    CHECK(Ext::PhoneMenu::FitSide(819, 378, 62, 8) == 90);
+    CHECK(Ext::PhoneMenu::RowSide(107, 90, 378) == 0);
+    CHECK(Ext::PhoneMenu::RowSide(71, 90, 378) == 75);   // the cap: 0.22 * 344
+    CHECK(Ext::PhoneMenu::RowSide(80, 90, 378) == 80);   // never smaller than the labels
+    CHECK(Ext::PhoneMenu::RowSide(90, 90, 378) == 90);
+    // Nothing fits / nothing to fit.
+    CHECK(Ext::PhoneMenu::FitSide(100, 378, 200, 8) == 0);
+    CHECK(Ext::PhoneMenu::FitSide(1170, 540, 62, 0) == 0);
+    CHECK(Ext::PhoneMenu::RowSide(0, 90, 378) == 0);
 }
 
 UNIT_TEST(ext_phone_menu_menu_band) {

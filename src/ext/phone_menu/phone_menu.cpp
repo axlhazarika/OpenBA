@@ -10,9 +10,11 @@
 // THE BUTTON ROW. On a screen wider than the main menu's backdrop the menu's button list
 // (MainMenu.rsc `buttonList`, a RibbonElement laid out top-to-bottom) is turned into one
 // horizontal row of square buttons: the ribbon's `_vertical` cleared, every button's minimum
-// size set to one square side, its label centred. The values are the menu INSTANCE's (the
-// description is untouched); the hook keeps retail's values and puts them back whenever the row
-// does not apply (the row switched off, a screen it does not fit). Main thread only.
+// size set to one square side (as large as fits across the safe area, phone_math.h RowSide), its
+// label centred with the icon above the text, in the small font (Font/FontSmall.rsc) when the
+// labels' own does not fit. The values are the menu INSTANCE's (the description is untouched);
+// the hook keeps retail's values and puts them back whenever the row does not apply (the row
+// switched off, a screen it does not fit). Main thread only.
 // ============================================================================
 
 #include "ext/phone_menu/phone_menu.h"
@@ -23,7 +25,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include "object/External.h"
+#include "system/Filename.h"
 #include "ui/DialogInstance.h"
+#include "ui/Font.h"
 #include "ui/LabelElement.h"
 #include "ui/RibbonElement.h"
 #include "ui/SpriteSheet.h"
@@ -87,10 +92,14 @@ struct RowState {
     uint8_t vertical = 1;                         // retail's values, as captured
     int32_t count = 0;
     UI::Element* buttons[kMaxButtons] = {};
-    UI::Element* labels[kMaxButtons] = {};
+    UI::LabelElement* labels[kMaxButtons] = {};
     int32_t minWidth[kMaxButtons] = {};
     int32_t minHeight[kMaxButtons] = {};
-    int32_t labelAlign[kMaxButtons] = {};
+    int32_t alignment[kMaxButtons] = {};          // the label's place in its button
+    int32_t inner[kMaxButtons] = {};              // the icon / text pair's alignment (_align)
+    uint32_t mode[kMaxButtons] = {};              // the icon's side of the text (_mode)
+    UI::Font* font[kMaxButtons] = {};
+    UI::Font* smallFont = nullptr;                // Font/FontSmall.rsc, when the row needs it
     bool applied = false;
 };
 RowState g_row;
@@ -105,12 +114,20 @@ UI::Element* FindNamed(UI::Element* e, const char* name, int depth) {
     return nullptr;
 }
 
-UI::Element* LabelOf(UI::Element* button) {
+UI::LabelElement* LabelOf(UI::Element* button) {
     for (int32_t i = 0; i < button->_children._size; ++i) {
         UI::Element* child = button->_children._data[i];
-        if (::Object::IsDerivedFromNullSafe(child, UI::LabelElement::TypeId())) return child;
+        if (::Object::IsDerivedFromNullSafe(child, UI::LabelElement::TypeId()))
+            return static_cast<UI::LabelElement*>(child);
     }
     return nullptr;
+}
+
+UI::Font* LoadSmallFont() {
+    Object::ExternalFactory* const factory = Object::ExternalFactory::_singleton;
+    if (factory == nullptr) return nullptr;
+    UI::Font* font = factory->FindOrLoadAs<UI::Font>(System::Filename("Font/FontSmall.rsc"));
+    return ::Object::IsDerivedFromNullSafe(font, UI::Font::TypeId()) ? font : nullptr;
 }
 
 // The first layout of a menu instance: keep its retail values.
@@ -123,14 +140,17 @@ void Capture(const UI::DialogInstance* dialog, UI::Element* root) {
     for (int32_t i = 0; i < ribbon->_children._size && g_row.count < kMaxButtons; ++i) {
         UI::Element* button = ribbon->_children._data[i];
         if (button == nullptr) continue;
-        UI::Element* label = LabelOf(button);
+        UI::LabelElement* label = LabelOf(button);
         if (label == nullptr) continue;
         const int32_t n = g_row.count++;
         g_row.buttons[n] = button;
         g_row.labels[n] = label;
         g_row.minWidth[n] = button->_minWidth;
         g_row.minHeight[n] = button->_minHeight;
-        g_row.labelAlign[n] = label->_alignment;
+        g_row.alignment[n] = label->_alignment;
+        g_row.inner[n] = label->_align;
+        g_row.mode[n] = label->_mode;
+        g_row.font[n] = label->_font;
     }
     g_row.ribbon = ribbon;
     g_row.vertical = ribbon->_vertical;
@@ -140,39 +160,78 @@ void Restore() {
     if (!g_row.applied || g_row.ribbon == nullptr) return;
     g_row.ribbon->_vertical = g_row.vertical;
     for (int32_t i = 0; i < g_row.count; ++i) {
+        UI::LabelElement* label = g_row.labels[i];
         g_row.buttons[i]->_minWidth = g_row.minWidth[i];
         g_row.buttons[i]->_minHeight = g_row.minHeight[i];
-        g_row.labels[i]->_alignment = g_row.labelAlign[i];
-        g_row.buttons[i]->SetNeedsSizeCalc();
+        label->_alignment = g_row.alignment[i];
+        label->_align = g_row.inner[i];
+        label->_mode = g_row.mode[i];
+        label->_font = g_row.font[i];
+        label->SetNeedsSizeCalc();
     }
     g_row.ribbon->SetNeedsSizeCalc();
     g_row.applied = false;
 }
 
-// One horizontal row of squares, each as large as the largest label (with its padding).
-void Apply() {
-    if (g_row.ribbon == nullptr || g_row.count == 0) return;
-    int32_t widths[kMaxButtons];
-    int32_t heights[kMaxButtons];
-    int32_t n = 0;
-    for (int32_t i = 0; i < g_row.count; ++i) {
-        UI::Element* label = g_row.labels[i];
-        if ((g_row.buttons[i]->_flags & UI::kElementFlagHidden) != 0) continue;
-        label->ComputeSize();
-        widths[n] = label->_layoutWidth + label->_leftPad + label->_rightPad;
-        heights[n] = label->_layoutHeight + label->_topPad + label->_bottomPad;
-        ++n;
-    }
-    const int32_t side = SquareSide(widths, heights, n);
+// The row's shape: the ribbon across, every label centred in its button with its icon above
+// its text (in `font`, or each label's own when null), every button `side` square.
+void Shape(UI::Font* font, int32_t side) {
     g_row.ribbon->_vertical = 0;
     for (int32_t i = 0; i < g_row.count; ++i) {
+        UI::LabelElement* label = g_row.labels[i];
         g_row.buttons[i]->_minWidth = side;
         g_row.buttons[i]->_minHeight = side;
-        g_row.labels[i]->_alignment = 4;   // MidCenter: the label in the middle of its square
-        g_row.buttons[i]->SetNeedsSizeCalc();
+        label->_alignment = 4;   // MidCenter: the label in the middle of its square
+        label->_align = 4;       //   and the icon / text pair centred inside the label
+        label->_mode = 3;        //   with the icon above the text
+        label->_font = font != nullptr ? font : g_row.font[i];
+        label->SetNeedsSizeCalc();
     }
     g_row.ribbon->SetNeedsSizeCalc();
     g_row.applied = true;
+}
+
+// The visible buttons' labels, sized in their row shape: the square side they need.
+int32_t ContentSide(int32_t& visible) {
+    int32_t widths[kMaxButtons];
+    int32_t heights[kMaxButtons];
+    visible = 0;
+    for (int32_t i = 0; i < g_row.count; ++i) {
+        UI::LabelElement* label = g_row.labels[i];
+        if ((g_row.buttons[i]->_flags & UI::kElementFlagHidden) != 0) continue;
+        label->ComputeSize();
+        widths[visible] = label->_layoutWidth + label->_leftPad + label->_rightPad;
+        heights[visible] = label->_layoutHeight + label->_topPad + label->_bottomPad;
+        ++visible;
+    }
+    return SquareSide(widths, heights, visible);
+}
+
+void PaddedSize(UI::Element* root, int32_t& w, int32_t& h);
+
+// The row in one font: the squares as large as fits across the safe area (RowSide). False when
+// the labels do not fit in a square that small.
+bool ShapeRow(UI::Element* root, UI::Font* font, int32_t width, int32_t height) {
+    Shape(font, 0);
+    int32_t visible = 0;
+    const int32_t content = ContentSide(visible);
+    if (visible == 0 || content <= 0) return false;
+    Shape(font, content);
+    int32_t w = 0;
+    int32_t h = 0;
+    PaddedSize(root, w, h);
+    const int32_t side = RowSide(content, FitSide(width, height, w - visible * content, visible), height);
+    if (side <= 0) return false;
+    Shape(font, side);
+    return true;
+}
+
+// The row: in the labels' own font, else in the small font; false when neither fits.
+bool ApplyRow(UI::Element* root, int32_t width, int32_t height) {
+    if (g_row.ribbon == nullptr || g_row.count == 0) return false;
+    if (ShapeRow(root, nullptr, width, height)) return true;
+    if (g_row.smallFont == nullptr) g_row.smallFont = LoadSmallFont();
+    return g_row.smallFont != nullptr && ShapeRow(root, g_row.smallFont, width, height);
 }
 
 // The padded size the dialog's root will be laid out at (DialogInstance::ComputeLayout's
@@ -225,12 +284,11 @@ void PlaceMenu(const UI::DialogInstance* dialog, bool pause, int32_t width, int3
 
     // The row on a screen wider than the backdrop, when it fits; retail's column otherwise.
     g_rowActive = false;
-    if (wide) {
-        Apply();
+    if (wide && ApplyRow(root, width, height)) {
         int32_t w = 0;
         int32_t h = 0;
         PaddedSize(root, w, h);
-        g_rowActive = g_row.applied && RowFits(width, height, w, h, logoBottom, versionTop);
+        g_rowActive = RowFits(width, height, w, h, logoBottom, versionTop);
     }
     if (!g_rowActive) Restore();
 

@@ -53,6 +53,23 @@ int32_t SquareSide(const int32_t* labelWidths, const int32_t* labelHeights, int3
     return side;
 }
 
+int32_t FitSide(int32_t width, int32_t height, int32_t fixedWidth, int32_t count) {
+    if (count <= 0) return 0;
+    const Rect safe = InsetLayout(width, height);
+    const int32_t room = (safe.x2 - safe.x1) - fixedWidth;
+    return room > 0 ? room / count : 0;
+}
+
+int32_t RowSide(int32_t contentSide, int32_t fitSide, int32_t height) {
+    if (contentSide <= 0 || contentSide > fitSide) return 0;
+    const int32_t m = SafeMargin(height);
+    const int32_t safeHeight = 2 * m < height ? height - 2 * m : height;
+    const int32_t cap = static_cast<int32_t>(static_cast<float>(safeHeight) * kRowSideFraction);
+    int32_t side = fitSide < cap ? fitSide : cap;
+    if (side < contentSide) side = contentSide;
+    return side;
+}
+
 bool RowFits(int32_t width, int32_t height, int32_t rowWidth, int32_t rowHeight, int32_t logoBottom,
              int32_t versionTop) {
     const Rect safe = InsetLayout(width, height);

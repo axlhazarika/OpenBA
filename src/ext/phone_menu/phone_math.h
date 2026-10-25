@@ -16,8 +16,8 @@
 //     fit cuts the logo's top off. There the overlay is drawn with its top on
 //     the screen's top (LogoTop: the logo whole, centred at the top) and, when
 //     it fits, the menu's buttons become ONE HORIZONTAL ROW OF SQUARE BUTTONS
-//     across the middle of the safe area (RowFits), the version line centred at
-//     the bottom.
+//     across the middle of the safe area (FitSide, RowSide, RowFits), the
+//     version line centred at the bottom.
 //   * Otherwise (a desktop's 16:9 or 16:10, or a row too wide for the screen)
 //     the overlay keeps retail's fit on a desktop and the column stays centred,
 //     kept inside the safe area and clear of the logo and the version line
@@ -92,9 +92,25 @@ int32_t LogoBottom(int32_t backdropHeight);
 
 // ---- the button row (a screen wider than the backdrop) ----------------------
 
-// The side of the square buttons: the largest of the labels' padded widths and heights
-// (`count` of each), so every label fits inside its square. 0 when there is none.
+// The side the labels need: the largest of their padded widths and heights (`count` of each),
+// so every label fits inside its square. 0 when there is none.
 int32_t SquareSide(const int32_t* labelWidths, const int32_t* labelHeights, int32_t count);
+
+// The largest square side the row reaches as a fraction of the safe area's height: the squares
+// fill the row across the safe area up to this, so on a large screen they stay buttons, not
+// tiles. On the S25 it is about 216 device pixels (13 mm) at its seeded UI.
+constexpr float kRowSideFraction = 0.22f;
+
+// The square side that makes `count` squares fill the safe area's width, the row's other extent
+// (`fixedWidth`: the padding and gaps around and between the squares, padded as laid out) aside;
+// 0 when nothing fits.
+int32_t FitSide(int32_t width, int32_t height, int32_t fixedWidth, int32_t count);
+
+// The row's square side: as large as fits across (`fitSide`), but no larger than
+// kRowSideFraction of the safe area's height and never smaller than the labels need
+// (`contentSide`); 0 when the labels need more than fits (the caller tries a smaller font, then
+// the column).
+int32_t RowSide(int32_t contentSide, int32_t fitSide, int32_t height);
 
 // The row's dialog (rowWidth x rowHeight, padded, as laid out) is centred in the safe area
 // (its root is MidCenter-aligned and handed InsetLayout); true when it fits there across, and
