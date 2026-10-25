@@ -543,12 +543,10 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     ri.pColorAttachmentFormats = &color;
     ri.depthAttachmentFormat = depth;
     ri.stencilAttachmentFormat = HasStencil(depth) ? depth : VK_FORMAT_UNDEFINED;
-    // P3: the tiler's MSAA on single-sampled attachments (VK_EXT_multisampled_render_to_single_sampled).
-    auto msrtss = Make<VkMultisampledRenderToSingleSampledInfoEXT>(
-        VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
-    msrtss.multisampledRenderToSingleSampledEnable = VK_TRUE;
-    msrtss.rasterizationSamples = static_cast<VkSampleCountFlagBits>(key.samples);
-    if (key.msrtss) ri.pNext = &msrtss;
+    // P3: the tiler's MSAA on single-sampled attachments (VK_EXT_multisampled_render_to_single_sampled)
+    // is the pass's (draw.cpp BeginPass); the pipeline only rasterizes at key.samples. P7: the
+    // VkMultisampledRenderToSingleSampledInfoEXT chained here before is not a pipeline structure (the
+    // validation layer's "unexpected VkStructureType"); key.msrtss keeps those pipelines apart.
 
     auto pi = Make<VkGraphicsPipelineCreateInfo>(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
     pi.pNext = &ri;

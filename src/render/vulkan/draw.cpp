@@ -182,6 +182,8 @@ struct Frame {
     uint32_t passes = 0;
     uint32_t setsAllocated = 0;
     uint32_t pushes = 0;
+    uint32_t depthPasses = 0;     // P7: passes with the main depth attached (THE DEPTH DISCARD)
+    uint32_t depthDiscards = 0;
     uint32_t targetPasses = 0;    // passes on render buffers other than the main one
     uint32_t resolves = 0;
     uint32_t reads = 0;
@@ -205,6 +207,9 @@ PendingClear g_clear;
 struct MainTargets {
     uint32_t samples = 0;
     bool msrtss = false;
+    // P7: tiler MSAA on a pre-rotated frame: the present pass's source image is the main colour (it is
+    // made with the MSRTSS flag, present.cpp), so there is no colour image of our own and no end copy.
+    bool onSource = false;
     bool readable = false;        // P4: the depth is SAMPLED too, `depthSampled` its depth-aspect view
     VkExtent2D extent{};
     GpuImage depth;               // attachment-only: `view` covers depth and stencil
@@ -225,6 +230,18 @@ std::vector<ImageState*> g_touched;
 std::vector<VkImageMemoryBarrier2> g_barriers;
 // Texture slots of the draw being issued that sample an attachment of the bound render buffer.
 uint32_t g_hazardSlots = 0;
+// P7, THE DEPTH DISCARD (tilers: docs/android/PERF_P7.md §2 row 2). Nothing reads the main depth after
+// the frame's last pass on it (the AO pass is the one reader, and it asks for a readable depth first),
+// so that pass may end with STORE_OP_DONT_CARE and the tile's depth is never written out. The store op
+// is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED: the
+// pass whose index equals the previous frame's count of main-depth passes, less one. A wrong
+// prediction is caught where it matters: a main-depth pass that LOADs while the contents are discarded
+// clears instead (the far plane, stencil 0), is logged once, and the prediction pauses for 60 frames.
+// The game clears the depth at the start of every frame, so in a steady frame this never fires.
+uint32_t g_lastFrameDepthPasses = 0;
+bool g_depthLost = false;         // the main depth's contents were discarded and not cleared since
+uint32_t g_discardHold = 0;       // frames left with the prediction paused
+uint32_t g_depthMispredicts = 0;  // since the start (the frame line)
 // A one-shot command pool for a read-back outside a frame (under the device lock).
 VkCommandPool g_readPool = VK_NULL_HANDLE;
 
@@ -331,16 +348,18 @@ bool EnsureMainTargets() {
     const VkExtent2D extent = g_frame.target.extent;
     const uint32_t samples = MainSampleCount();
     const bool msrtss = samples > 1 && LiveCaps().msrtss;
+    const bool onSource = msrtss && g_frame.target.presentImage != VK_NULL_HANDLE;
     const bool readable = g_readableRequested.load();
     if (g_main.depth.image && !g_targetsChanged && g_main.extent.width == extent.width &&
         g_main.extent.height == extent.height && g_main.samples == samples && g_main.msrtss == msrtss &&
-        g_main.readable == readable) {
+        g_main.onSource == onSource && g_main.readable == readable) {
         return true;
     }
     g_targetsChanged = false;
     DestroyMainTargets();
     g_main.samples = samples;
     g_main.msrtss = msrtss;
+    g_main.onSource = onSource;
     g_main.extent = extent;
     const VkImageUsageFlags depthUsage =
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (readable ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
@@ -351,7 +370,7 @@ bool EnsureMainTargets() {
         g_main.readable = true;
         g_depthReadable.store(true);
     }
-    if (samples > 1) {
+    if (samples > 1 && !onSource) {
         const VkImageUsageFlags usage =
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (msrtss ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
         if (!MakeMainImage(SwapchainFormat(), usage, samples, msrtss, extent, &g_main.color, &g_main.colorState)) {
@@ -359,14 +378,17 @@ bool EnsureMainTargets() {
         }
     }
     std::fprintf(stderr, "[Vulkan] main targets %ux%u, multisample %ux (%s), depth %s\n", extent.width, extent.height,
-                 samples, samples == 1 ? "swap-chain image" : (msrtss ? "tiler msrtss" : "resolve attachments"),
+                 samples,
+                 samples == 1 ? "swap-chain image"
+                              : (onSource ? "tiler msrtss on the present source"
+                                          : (msrtss ? "tiler msrtss" : "resolve attachments")),
                  g_main.readable ? "readable (sampled view for the AO pass)" : "attachment only");
     return true;
 }
 
 // The main colour as a Resolve / read source: where the frame so far is single-sampled.
 ImageState* MainColorSource() {
-    if (g_main.samples > 1 && g_main.msrtss) return &g_main.colorState;
+    if (g_main.samples > 1 && g_main.msrtss && !g_main.onSource) return &g_main.colorState;
     return &g_swap;
 }
 
@@ -378,6 +400,10 @@ void MainColorInto(Target* t) {
     if (g_main.samples == 1) {
         t->color = &g_swap;
         t->colorView = g_frame.target.view;
+    } else if (g_main.onSource) {
+        t->color = &g_swap;
+        t->colorView = g_frame.target.view;
+        t->msrtss = true;
     } else if (g_main.msrtss) {
         t->color = &g_main.colorState;
         t->colorView = g_main.color.view;
@@ -510,6 +536,37 @@ bool BeginPass(const Target& t) {
     VkRenderingAttachmentInfo stencil = depth;
     stencil.loadOp = (g_clear.stencil || depthFresh) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     const bool hasStencil = t.depth && (t.depth->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+    if (t.msrtss) {
+        // P7 (a validation error since P3): a single-sampled attachment of a tiler-MSAA pass that is
+        // stored names how its implicit resolve is made, with no resolve image: colour averaged, depth
+        // and stencil from sample 0.
+        if (t.color) color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        depth.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        stencil.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    }
+    if (t.depth == &g_main.depthState) {
+        // P7, THE DEPTH DISCARD (above).
+        const uint32_t index = g_frame.depthPasses++;
+        const bool loads = depth.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD ||
+                           (hasStencil && stencil.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
+        if (g_depthLost && loads) {
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.clearValue.depthStencil.depth = 1.0f;
+            stencil.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            stencil.clearValue.depthStencil.stencil = 0;
+            g_discardHold = 60;
+            ++g_depthMispredicts;
+            LogOnce(32, "the main depth was discarded by a pass predicted last, then loaded: cleared instead, "
+                        "the prediction paused for 60 frames (THE DEPTH DISCARD)");
+        }
+        g_depthLost = false;
+        if (g_discardHold == 0 && !g_readableRequested.load() && index + 1 == g_lastFrameDepthPasses) {
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            g_depthLost = true;
+            ++g_frame.depthDiscards;
+        }
+    }
 
     auto msrtss = Make<VkMultisampledRenderToSingleSampledInfoEXT>(
         VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
@@ -1310,6 +1367,8 @@ void DrawEndFrame() {
     if (!g_frame.active) return;
     FlushPendingClear();
     EndPass();
+    g_lastFrameDepthPasses = g_frame.depthPasses;
+    if (g_discardHold > 0) --g_discardHold;
     VkCommandBuffer cb = g_frame.target.cb;
     // A frame that drew nothing on the main colour still presents a defined image: black.
     if (!g_frame.mainDrawn && EnsureMainTargets()) {
@@ -1360,11 +1419,12 @@ void DrawLogFrame(uint64_t frame, const Video::Context* context) {
     TakeUploadStats(&uploadBytes, &batches);
     std::fprintf(stderr,
                  "[Vulkan] frame=%llu draws=%d triangles=%d vertices=%d objects=%d | passes=%u (other targets %u) "
-                 "resolves=%u reads=%u sets=%u pushes=%u ring=%lluB failed=%u | pipelines +%u built +%u warmed "
-                 "%u failed | uploads %llu KB in %u batch(es)\n",
+                 "resolves=%u reads=%u sets=%u pushes=%u depth %u/%u discarded (%u mispredicted) ring=%lluB failed=%u | "
+                 "pipelines +%u built +%u warmed %u failed | uploads %llu KB in %u batch(es)\n",
                  static_cast<unsigned long long>(frame), context->_drawsSubmitted, context->_trianglesSubmitted,
                  context->_verticesSubmitted, context->_objectsSubmitted, g_frame.passes, g_frame.targetPasses,
                  g_frame.resolves, g_frame.reads, g_frame.setsAllocated, g_frame.pushes,
+                 g_frame.depthDiscards, g_frame.depthPasses, g_depthMispredicts,
                  static_cast<unsigned long long>(g_frame.ringBytes), g_frame.failedDraws, built, warmed, failed, static_cast<unsigned long long>(uploadBytes >> 10),
                  batches);
 }

@@ -238,6 +238,10 @@ bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, 
         d.height = renderExtent.height;
         d.format = format;
         d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;   // + SAMPLED / TRANSFER (resources.h ImageDesc)
+        // P7: with the tiler's MSAA (VK_EXT_multisampled_render_to_single_sampled) the source is also
+        // the main colour of a multisampled frame (draw.cpp MainColorInto): the frame resolves into it
+        // on the tile and this pass samples it, with no full-screen copy at the frame's end.
+        if (LiveCaps().msrtss) d.flags = VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
         if (!CreateImage(d, &g_source, why)) {
             *why = "present pass: source image: " + *why;
             return false;
