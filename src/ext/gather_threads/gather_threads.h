@@ -17,6 +17,10 @@
 //   awake     the helpers SPIN on the task ticket with a pause instruction, never a
 //             syscall, through every gather pass of the frame (pass 1 of
 //             Renderer::Draw): a hand-off costs ~1 us instead of an event's 5-30 us.
+//             P7: a spin that finds no task for kSpinMicros (50 us) sleeps on the
+//             condition variable until the next Publish (or Wake / quit); Publish
+//             notifies only when a helper sleeps. On the S25 the unbounded spin was
+//             10% of all the process's CPU samples (docs/android/PERF_P7.md §3.3).
 //   Park()    at the end of pass 1 (Scene::_extDrawPass1End, set by draw_gather.cpp):
 //             the spin is bounded by the frame.
 //
@@ -87,6 +91,7 @@ private:
     alignas(64) std::atomic<uint64_t> _ticket{0};
     alignas(64) std::atomic<int32_t>  _done{0};      // tasks finished by helpers this pass
     alignas(64) std::atomic<bool>     _awake{false};
+    alignas(64) std::atomic<int32_t>  _sleepers{0};  // P7: helpers asleep inside an awake frame
     TaskFn   _fn  = nullptr;
     void*    _ctx = nullptr;
     int32_t  _count = 0;
