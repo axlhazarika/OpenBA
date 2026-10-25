@@ -18,3 +18,7 @@
 	path = third_party/SPIRV-Headers
 	url = https://github.com/KhronosGroup/SPIRV-Headers
 	shallow = true
+[submodule "third_party/VulkanMemoryAllocator"]
+	path = third_party/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+	shallow = true

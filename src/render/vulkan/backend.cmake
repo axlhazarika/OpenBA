@@ -22,11 +22,24 @@ if(NOT EXISTS ${BANISHED_VULKAN_HEADERS}/vulkan/vulkan.h)
   return()
 endif()
 
+# VMA (docs/vulkan/PLAN.md §4.4): the pinned header-only submodule third_party/VulkanMemoryAllocator
+# (GPUOpen, MIT; THIRD_PARTY_NOTICES.md), -isystem like the Vulkan headers; its implementation is
+# compiled once, in vma_impl.cpp (with -w: upstream's warnings are not ours), configured by vk_mem.h.
+set(BANISHED_VMA_INCLUDE ${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator/include)
+if(NOT EXISTS ${BANISHED_VMA_INCLUDE}/vk_mem_alloc.h)
+  set(RENDER_SRCS)
+  set(RENDER_BACKEND_INCLUDES)
+  set(RENDER_BACKEND_READY OFF)
+  message(STATUS "OpenBA not configured: BANISHED_RENDER_BACKEND=vulkan needs the third_party/VulkanMemoryAllocator submodule (git submodule update --init third_party/VulkanMemoryAllocator)")
+  return()
+endif()
+
 file(GLOB_RECURSE RENDER_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/render/vulkan/*.cpp)
 set(RENDER_BACKEND_INCLUDES ${CMAKE_SOURCE_DIR}/src/render/vulkan)
 set(RENDER_BACKEND_READY ON)
 set_source_files_properties(${RENDER_SRCS} PROPERTIES
-                            COMPILE_OPTIONS "-isystem;${BANISHED_VULKAN_HEADERS}")
+                            COMPILE_OPTIONS "-isystem;${BANISHED_VULKAN_HEADERS};-isystem;${BANISHED_VMA_INCLUDE}")
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/render/vulkan/vma_impl.cpp APPEND PROPERTY COMPILE_OPTIONS -w)
 
 # ---- dxbc-spirv: the DXBC -> SPIR-V compiler (docs/vulkan/PLAN.md §4.2) ---------------------
 # The pinned submodule third_party/dxbc-spirv (doitsujin, MIT; THIRD_PARTY_NOTICES.md), built here
