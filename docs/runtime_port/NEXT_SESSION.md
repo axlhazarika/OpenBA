@@ -195,6 +195,30 @@ rows; acceptance 08 at 0 against them); row 1230 (the element-loop template's re
 menu loop's `_loadBit = -1`, RULED kept with its reason); the comment debt of `docs/history/endgame_b/b9_session/handins/RT2.md`
 (banners naming deleted helpers). None of these changes behaviour; each has its row or line.
 
+### 2.7 Android P8 (ruled 2026-10-25, after PR #50): several opus agents in parallel, one phone
+
+P7 (`docs/android/P7_FIRST_PASS.md`, PR #50) left these; the owner ruled each on 2026-10-25. The phone (S25) is one
+device: device runs are serialised between agents, builds at jobs = 8 / agents building.
+
+New, seen by the owner on the S25:
+- **In-game buttons under the edge mask.** The in-game toolbar / HUD buttons at the screen edge sit under the S25's
+  curved edge; move them further left (ext.phone_menu's safe area covers the front-end dialogs only).
+- **Middle-mouse release lost (real mouse over a KVM):** the button-up never fires, so camera rotate sticks on. Find
+  where it is lost (SDL's Android mouse source, our pump / input hooks, the touch-as-mouse path) and fix it.
+- **Citizen shadows flicker heavily** on the phone (suspects: the 512 sun map, depth precision, the msrtss path;
+  compare the DX11 look).
+- **Options entries:** render scale Full / Half / Quarter (`VideoRenderScale` 100 / 50 / 25, live) and an fps cap
+  with **60 fps as the default (ruled)**; an in-game cap must be built first (`BANISHED_FPS_CAP` paces the menu loop
+  only; the cap is a settings key, never an env flag).
+
+Verdicts on the P7 "Left" list: depth-discard re-arm rule: **fix**. Frame-copy pass split (2 of 3 depth passes still
+store): **investigate**. Shadows: **retail's settings stay** (no shadows-off extension). Combined image samplers in the
+converter: **implement**. Release: a **signed Android apk in `release.yml`** like the three desktop packages (the keystore
+is the owner's). HWASan and the 30-minute soak: **skip**. Font rasteriser on Android (the TTF from the data folder):
+**add**. Still unverified from P7: ext.phone_menu on the phone itself, the oversized push-descriptor pair path, the
+in-game trim-memory save after the latch fix, rotation / display change at render scale 50, the Windows Vulkan boot
+state left RUNNING after a clean exit.
+
 ## 3. Rules that hold (do not relax)
 
 - CLAUDE.md's hard rules: no null guard on a faithful crash (find what handed us the null); no `getenv`, flags through
