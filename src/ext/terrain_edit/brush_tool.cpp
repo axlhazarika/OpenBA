@@ -128,6 +128,7 @@ void ForgetWorld() {
     g_box = StrokeBox();
     g_waterQuads.clear();
     g_waterQuadsValid = false;
+    g_undoRefused = false;   // a refusal belongs to the stroke it refused, which is gone
 }
 
 void AdoptWorld(const void* map, const void* heights, int stride) {
@@ -1321,6 +1322,15 @@ bool UndoLast() {
 }
 
 bool UndoRefused() {
+    // A refusal belongs to a stroke of the world it was painted on: after a new game or a load it is gone,
+    // and nothing else would clear it, because the page asks this before it asks for the undo depth.
+    if (g_undoRefused) {
+        GameUpdateLoop* game = GameUpdateLoop::_singleton;
+        const bool here = game != nullptr && game->m_game != nullptr && game->m_worldGeometry != nullptr &&
+                          SameWorld(game->m_game, game->m_worldGeometry->_heights.data,
+                                    game->m_worldGeometry->_fieldD0);
+        if (!here) g_undoRefused = false;
+    }
     return g_undoRefused;
 }
 

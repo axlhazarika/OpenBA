@@ -267,8 +267,8 @@ UNIT_TEST(ext_terrain_edit_undo_keeps_the_first_value_of_a_stroke) {
     CHECK(!u.Pop(s));
 }
 
-// An undo gives a cell its old type back only while it still holds the type the stroke wrote there: the stroke
-// keeps the first type before and the last type written, and records nothing outside a stroke.
+// An undo gives a cell its old type back only while it still holds the type the stroke wrote there: the
+// stroke keeps the first type before and the last type written, and records nothing outside a stroke.
 UNIT_TEST(ext_terrain_edit_undo_records_the_type_the_stroke_wrote) {
     using namespace Ext::TerrainEdit;
     UndoStack u;
@@ -689,7 +689,8 @@ UNIT_TEST(ext_terrain_edit_the_scatter_noise_is_in_range_and_repeatable) {
         }
     }
     CHECK(hi - lo > 0.3f);   // it varies
-    CHECK(ScatterNoise01(5, 5, 1u) != ScatterNoise01(5, 5, 2u) || ScatterNoise01(9, 3, 1u) != ScatterNoise01(9, 3, 2u));
+    CHECK(ScatterNoise01(5, 5, 1u) != ScatterNoise01(5, 5, 2u) ||
+          ScatterNoise01(9, 3, 1u) != ScatterNoise01(9, 3, 2u));
 }
 
 UNIT_TEST(ext_terrain_edit_undo_keeps_the_texels_a_stroke_repainted) {
