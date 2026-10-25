@@ -268,6 +268,14 @@ int32_t UI::UserInterface::ShowDialog(Object::InternalPtr<DialogInstance>* dialo
         nested->_sounds[i] = _sounds[i];
     }
 
+    // FIX SEAM (fix.ui_scale_layout, NOT RETAIL; docs/retail_bugs.md section 5): retail's nested
+    // UserInterface keeps its ctor's `_uiScale = 1.0f`, so every modal shown through here (the
+    // mods' "restart" notice, the save / load warnings, the Options confirmations) is laid out
+    // and drawn at 100 % whatever the Options UI scale. Fixed: the modal takes the scale of the
+    // UI it is shown from. Off / null = retail's 1.0.
+    if (_extFixScaleLayout != nullptr && *_extFixScaleLayout)
+        nested->_uiScale = _uiScale;
+
     // 3. Hand the dialog to the nested UI and clear its DeleteOnClose.
     DialogInstance* const dlg = dialogArg->Get();
     dlg->_ui = nested;                                                   // +0x10
