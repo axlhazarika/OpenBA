@@ -8,6 +8,7 @@
 // ============================================================================
 
 #include "VideoVulkanData.h"
+#include "depth_discard.h"
 #include "device_objects.h"
 #include "draw.h"
 #include "present.h"
@@ -74,24 +75,34 @@ struct Bound {
 };
 Bound g_bound;
 
+// P8, combined image samplers (shader_convert.h): a stage's image descriptors, indexed i = t for the
+// texture bindings (BindingOfTexture(t)) and i = kTextureSlots + k for the further pairs
+// (BindingOfSampler(k)). Each is a view and the sampler it is combined with.
+constexpr uint32_t kImageBindings = Shaders::kMaxTextures + Shaders::kMaxSamplers;
+static_assert(kTextureSlots == Shaders::kMaxTextures, "texture slots are the texture registers");
+
+uint32_t ImageBinding(uint32_t i) {
+    return i < kTextureSlots ? Shaders::BindingOfTexture(i) : Shaders::BindingOfSampler(i - kTextureSlots);
+}
+
 // The descriptor contents of one stage's set (hashed bytes: no padding).
 struct SetKey {
     uint32_t stage = 0;
     uint32_t cbMask = 0;
-    uint32_t texMask = 0;
-    uint32_t smpMask = 0;
+    uint32_t imageMask = 0;   // bit i: image descriptor i (above)
+    uint32_t pad = 0;
     VkBuffer cb[kCbSlots] = {};
     VkDeviceSize cbOffset[kCbSlots] = {};   // static (non-dynamic) bindings only
-    VkImageView view[kTextureSlots] = {};
-    VkSampler sampler[kTextureSlots] = {};
+    VkImageView view[kImageBindings] = {};
+    VkSampler sampler[kImageBindings] = {};
 };
 
 // P7, the pair-layout path (pipelines.h): the contents of a vertex set (its offsets are dynamic).
 struct VertexSetKey {
     const PairLayout* pair = nullptr;
     VkBuffer cb[kCbSlots] = {};
-    VkImageView view[kTextureSlots] = {};
-    VkSampler sampler[kTextureSlots] = {};
+    VkImageView view[kImageBindings] = {};
+    VkSampler sampler[kImageBindings] = {};
 };
 
 struct SlotResources {
@@ -233,18 +244,22 @@ uint32_t g_hazardSlots = 0;
 // P7, THE DEPTH DISCARD (tilers: docs/android/PERF_P7.md §2 row 2). Nothing reads the main depth after
 // the frame's last pass on it (the AO pass is the one reader, and it asks for a readable depth first),
 // so that pass may end with STORE_OP_DONT_CARE and the tile's depth is never written out. The store op
-// is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED: the
-// pass whose index equals the previous frame's count of main-depth passes, less one, and only once
-// that count has been the same for kDiscardStableFrames frames in a row. A wrong prediction is caught
-// where it matters: a main-depth pass that LOADs while the contents are discarded clears instead (the
-// far plane, stencil 0). That pass's geometry is then drawn against an empty depth for one frame (it
-// shows through the scene), so ONE miss turns the discard off for the rest of the session (logged).
-uint32_t g_lastFrameDepthPasses = 0;
-uint32_t g_depthPassesStable = 0;  // frames in a row with the same count of main-depth passes
-bool g_depthLost = false;          // the main depth's contents were discarded and not cleared since
-bool g_discardOff = false;         // a prediction missed: no discard for the rest of the session
-uint32_t g_depthMispredicts = 0;   // since the start (the frame line)
-constexpr uint32_t kDiscardStableFrames = 600;
+// is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED from
+// the frame's structure signature (depth_discard.h, P8): BeginPass notes every pass, DrawResolve and
+// DrawReadImage note theirs. A wrong prediction is caught where it matters: a main-depth pass that
+// LOADs while the contents are discarded clears instead (the far plane, stencil 0), and the discard is
+// off for the rest of the session (logged).
+DepthDiscardPredictor g_discard;
+
+// A structural event's token for the signature: an image state's address (stable for the image's life)
+// and a kind.
+uint64_t StructureToken(const void* state, uint64_t kind) {
+    return (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(state)) << 8) ^ kind;   // CAST-OK: identity only
+}
+
+uint64_t PassToken(const Target& t) {
+    return StructureToken(t.color, 'C') * 31u + StructureToken(t.depth, t.main ? 'M' : 'D');
+}
 // A one-shot command pool for a read-back outside a frame (under the device lock).
 VkCommandPool g_readPool = VK_NULL_HANDLE;
 
@@ -506,6 +521,20 @@ bool BeginPass(const Target& t) {
     if (t.color) TransitionImage(*t.color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
     if (t.resolve) TransitionImage(*t.resolve, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
     if (t.depth) TransitionImage(*t.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, &g_barriers);
+    if (t.main) {
+        // P8 (the main-target split, docs/android/P8_VULKAN.md §4): the render buffers drawn before a main
+        // pass (the reflection, the sun map) are made to be sampled in it. Moved to SHADER_READ_ONLY here,
+        // between passes; left in their attachment layouts, the first draw sampling one (the water, after
+        // the terrain) ended the main pass (PrepareTextures) and the main target was stored and loaded
+        // once more per frame. One that is rendered again later moves back at its own pass.
+        for (ImageState* s : g_touched) {
+            if (s == t.color || s == t.depth) continue;
+            if (s->layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
+                s->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+                TransitionImage(*s, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+            }
+        }
+    }
     FlushBarriers(cb, &g_barriers);
     if (!t.main) {
         if (t.color) Touch(t.color);
@@ -547,28 +576,27 @@ bool BeginPass(const Target& t) {
         depth.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
         stencil.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
     }
+    // P8: the pass is a structural event of the frame (THE DEPTH DISCARD's signature).
+    g_discard.Note(PassToken(t));
     if (t.depth == &g_main.depthState) {
         // P7, THE DEPTH DISCARD (above).
         const uint32_t index = g_frame.depthPasses++;
         const bool loads = depth.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD ||
                            (hasStencil && stencil.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
-        if (g_depthLost && loads) {
+        bool missed = false;
+        const bool discard = g_discard.MainDepthPass(loads, !g_readableRequested.load(), &missed);
+        if (missed) {
             depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depth.clearValue.depthStencil.depth = 1.0f;
             stencil.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             stencil.clearValue.depthStencil.stencil = 0;
-            g_discardOff = true;
-            ++g_depthMispredicts;
             std::fprintf(stderr, "[Vulkan] the main depth was discarded by a pass predicted last, then loaded "
-                                 "(pass %u, last frame %u): cleared instead; the discard is off for the session "
-                                 "(THE DEPTH DISCARD)\n", index, g_lastFrameDepthPasses);
+                                 "(pass %u): cleared instead; the discard is off for the session "
+                                 "(THE DEPTH DISCARD)\n", index);
         }
-        g_depthLost = false;
-        if (!g_discardOff && g_depthPassesStable >= kDiscardStableFrames && !g_readableRequested.load() &&
-            index + 1 == g_lastFrameDepthPasses) {
+        if (discard) {
             depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            g_depthLost = true;
             ++g_frame.depthDiscards;
         }
     }
@@ -613,7 +641,31 @@ void FlushPendingClear() {
     if (!g_frame.active) return;
     if (!g_clear.color && !g_clear.depth && !g_clear.stencil) return;
     EndPass();
-    if (EnsurePass()) EndPass();
+    Target t;
+    if (!ResolveTarget(g_bound.target, &t)) {
+        g_clear = PendingClear{};
+        return;
+    }
+    // P8: the empty pass attaches only what it clears, as D3D11's ClearRenderTargetView /
+    // ClearDepthStencilView touch only their own view. With the depth attached to a colour-only clear
+    // (the game's first frame clears the main colour alone), the pass loaded and stored the depth for
+    // nothing, and read as a main-depth pass that LOADs (THE DEPTH DISCARD took it for a miss).
+    if (!g_clear.color) {
+        t.color = nullptr;
+        t.colorView = VK_NULL_HANDLE;
+        t.resolve = nullptr;
+        t.resolveView = VK_NULL_HANDLE;
+    }
+    if (!g_clear.depth && !g_clear.stencil) {
+        t.depth = nullptr;
+        t.depthView = VK_NULL_HANDLE;
+    }
+    if (!t.color && !t.depth) {
+        g_clear = PendingClear{};
+        return;
+    }
+    BeginPass(t);
+    EndPass();
 }
 
 // The textures the draw being issued samples are moved to SHADER_READ_ONLY before its pass begins (a
@@ -703,8 +755,8 @@ VkDescriptorPool NewPool() {
     uint32_t count = 0;
     if (dyn) sizes[count++] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kSetsPerPool * dyn };
     if (kCbSlots > dyn) sizes[count++] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSetsPerPool * (kCbSlots - dyn) };
-    sizes[count++] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSetsPerPool * kTextureSlots };
-    sizes[count++] = { VK_DESCRIPTOR_TYPE_SAMPLER, kSetsPerPool * kTextureSlots };
+    // P8: every texture binding (and every further pair in the sampler range) is combined.
+    sizes[count++] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSetsPerPool * kImageBindings };
     auto pi = Make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     pi.maxSets = kSetsPerPool;
     pi.poolSizeCount = count;
@@ -761,6 +813,37 @@ VkSampler TextureSampler(const ImageBufferData* image) {
     return image->sampler;
 }
 
+// P8: the image descriptors a stage's program reads (shader_convert.h COMBINED IMAGE SAMPLERS), into
+// views[i] / samplers[i] (ImageBinding(i)); returns their mask. Each combines texture t's view (the
+// placeholder of the declared type when nothing usable is bound, or for a hazard slot) with the
+// sampler the engine binds at the pair's sampler register: the sampler of the image bound at that
+// slot, as dx11 ImageBufferData::Bind sets both. The vertex stage's slots are never bound by the DX11
+// backend: they read the placeholders.
+uint32_t StageImages(const Shaders::ShaderReflection* refl, bool pixel, VkImageView* views, VkSampler* samplers) {
+    if (!refl) return 0;
+    const auto view = [&](uint32_t t) {
+        const bool cube = (refl->textureCubeMask >> t) & 1;
+        return TextureView(pixel ? g_bound.textures[t] : nullptr, cube, pixel && ((g_hazardSlots >> t) & 1));
+    };
+    const auto sampler = [&](uint32_t s) {
+        return TextureSampler(pixel && s < kTextureSlots ? g_bound.textures[s] : nullptr);
+    };
+    uint32_t mask = 0;
+    for (uint32_t t = 0; t < kTextureSlots; ++t) {
+        if (!((refl->textureMask >> t) & 1)) continue;
+        views[t] = view(t);
+        samplers[t] = sampler(refl->textureSampler[t]);
+        mask |= 1u << t;
+    }
+    for (const Shaders::CombinedPair& p : refl->extraPairs) {
+        const uint32_t i = kTextureSlots + (p.binding - Shaders::BindingOfSampler(0));
+        views[i] = view(p.texture);
+        samplers[i] = sampler(p.sampler);
+        mask |= 1u << i;
+    }
+    return mask;
+}
+
 // Builds (or reuses) the set of `stage` for the bound resources the shader reads, and fills its
 // dynamic offsets.
 VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* refl, uint32_t* dynOffsets) {
@@ -769,8 +852,6 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     SetKey key;
     key.stage = s;
     key.cbMask = refl ? refl->constantBufferMask : 0;
-    key.texMask = refl ? refl->textureMask : 0;
-    key.smpMask = refl ? refl->samplerMask : 0;
     for (uint32_t b = 0; b < kCbSlots; ++b) {
         const bool used = (key.cbMask >> b) & 1;
         dynOffsets[b] = 0;
@@ -788,16 +869,7 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
             key.cbOffset[b] = offset;
         }
     }
-    // The vertex stage's texture slots are never bound by the DX11 backend (ImageBufferData::Bind
-    // binds the pixel stage): they read the placeholder here.
-    const bool pixel = stage == Shaders::Stage::Pixel;
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if ((key.texMask >> t) & 1) {
-            const bool cube = refl && ((refl->textureCubeMask >> t) & 1);
-            key.view[t] = TextureView(pixel ? g_bound.textures[t] : nullptr, cube, pixel && ((g_hazardSlots >> t) & 1));
-        }
-        if ((key.smpMask >> t) & 1) key.sampler[t] = TextureSampler(pixel ? g_bound.textures[t] : nullptr);
-    }
+    key.imageMask = StageImages(refl, stage == Shaders::Stage::Pixel, key.view, key.sampler);
 
     SlotResources& slot = g_slots[g_frame.target.slot];
     const uint64_t hash = HashKey(key);
@@ -808,8 +880,7 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     VkDescriptorSet set = AllocateSet(StageSetLayout(stage));
     if (!set) return VK_NULL_HANDLE;
     VkDescriptorBufferInfo buffers[kCbSlots];
-    VkDescriptorImageInfo images[kTextureSlots];
-    VkDescriptorImageInfo samplers[kTextureSlots];
+    VkDescriptorImageInfo images[kImageBindings];
     VkWriteDescriptorSet writes[Shaders::kBindingsPerSet];
     uint32_t n = 0;
     for (uint32_t b = 0; b < kCbSlots; ++b) {
@@ -823,27 +894,16 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
         writes[n].pBufferInfo = &buffers[b];
         ++n;
     }
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if (key.view[t]) {
-            images[t] = { VK_NULL_HANDLE, key.view[t], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            writes[n] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-            writes[n].dstSet = set;
-            writes[n].dstBinding = Shaders::BindingOfTexture(t);
-            writes[n].descriptorCount = 1;
-            writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            writes[n].pImageInfo = &images[t];
-            ++n;
-        }
-        if (key.sampler[t]) {
-            samplers[t] = { key.sampler[t], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
-            writes[n] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-            writes[n].dstSet = set;
-            writes[n].dstBinding = Shaders::BindingOfSampler(t);
-            writes[n].descriptorCount = 1;
-            writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-            writes[n].pImageInfo = &samplers[t];
-            ++n;
-        }
+    for (uint32_t i = 0; i < kImageBindings; ++i) {
+        if (!((key.imageMask >> i) & 1)) continue;
+        images[i] = { key.sampler[i], key.view[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        writes[n] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+        writes[n].dstSet = set;
+        writes[n].dstBinding = ImageBinding(i);
+        writes[n].descriptorCount = 1;
+        writes[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[n].pImageInfo = &images[i];
+        ++n;
     }
     vkUpdateDescriptorSets(LiveDevice(), n, writes, 0, nullptr);
     bucket.emplace_back(key, set);
@@ -857,8 +917,6 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
 void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::ShaderReflection* refl) {
     const uint32_t s = Shaders::kSetPixel;
     const uint32_t cbMask = refl ? refl->constantBufferMask : 0;
-    const uint32_t texMask = refl ? refl->textureMask : 0;
-    const uint32_t smpMask = refl ? refl->samplerMask : 0;
     PushedValue values[Shaders::kBindingsPerSet];
     VkDescriptorType types[Shaders::kBindingsPerSet];
     uint32_t n = 0;
@@ -873,24 +931,18 @@ void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sha
         types[n] = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         ++n;
     }
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if ((texMask >> t) & 1) {
-            const bool cube = refl && ((refl->textureCubeMask >> t) & 1);
-            const VkImageView view = TextureView(g_bound.textures[t], cube, (g_hazardSlots >> t) & 1);
-            values[n] = PushedValue{};
-            values[n].binding = Shaders::BindingOfTexture(t);
-            values[n].a = reinterpret_cast<uint64_t>(view);   // CAST-OK: a handle compared as bytes
-            types[n] = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            ++n;
-        }
-        if ((smpMask >> t) & 1) {
-            const VkSampler sampler = TextureSampler(g_bound.textures[t]);
-            values[n] = PushedValue{};
-            values[n].binding = Shaders::BindingOfSampler(t);
-            values[n].a = reinterpret_cast<uint64_t>(sampler);   // CAST-OK: a handle compared as bytes
-            types[n] = VK_DESCRIPTOR_TYPE_SAMPLER;
-            ++n;
-        }
+    // P8: one combined image sampler per texture binding and per further pair (StageImages).
+    VkImageView views[kImageBindings];
+    VkSampler samplers[kImageBindings];
+    const uint32_t imageMask = StageImages(refl, true, views, samplers);
+    for (uint32_t i = 0; i < kImageBindings; ++i) {
+        if (!((imageMask >> i) & 1)) continue;
+        values[n] = PushedValue{};
+        values[n].binding = ImageBinding(i);
+        values[n].a = reinterpret_cast<uint64_t>(views[i]);      // CAST-OK: a handle compared as bytes
+        values[n].b = reinterpret_cast<uint64_t>(samplers[i]);   // CAST-OK: as above
+        types[n] = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ++n;
     }
     PushedStage& last = g_frame.pushed;
     if (last.layout == pair.layout && last.count == n &&
@@ -914,15 +966,10 @@ void PushPixelSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sha
             buffers[i].offset = values[i].b;
             buffers[i].range = kConstantBufferRange;
             writes[i].pBufferInfo = &buffers[i];
-        } else if (types[i] == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
-            images[i].sampler = VK_NULL_HANDLE;
+        } else {
+            images[i].sampler = reinterpret_cast<VkSampler>(values[i].b);       // CAST-OK: as above
             images[i].imageView = reinterpret_cast<VkImageView>(values[i].a);   // CAST-OK: as above
             images[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            writes[i].pImageInfo = &images[i];
-        } else {
-            images[i].sampler = reinterpret_cast<VkSampler>(values[i].a);   // CAST-OK: as above
-            images[i].imageView = VK_NULL_HANDLE;
-            images[i].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             writes[i].pImageInfo = &images[i];
         }
     }
@@ -946,10 +993,7 @@ bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sh
         key.cb[b] = c.buffer;
         offsets[n++] = static_cast<uint32_t>(c.offset);
     }
-    for (uint32_t t = 0; t < kTextureSlots; ++t) {
-        if ((refl.textureMask >> t) & 1) key.view[t] = TextureView(nullptr, (refl.textureCubeMask >> t) & 1, false);
-        if ((refl.samplerMask >> t) & 1) key.sampler[t] = TextureSampler(nullptr);
-    }
+    StageImages(&refl, false, key.view, key.sampler);
     VertexSetState& v = g_frame.vertex;
     if (!v.found || std::memcmp(&v.key, &key, sizeof(VertexSetKey)) != 0) {
         SlotResources& slot = g_slots[g_frame.target.slot];
@@ -964,10 +1008,9 @@ bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sh
             set = AllocateSet(pair.vertexSet);
             if (!set) return false;
             VkDescriptorBufferInfo buffers[kCbSlots];
-            VkDescriptorImageInfo images[2 * kTextureSlots];
+            VkDescriptorImageInfo images[kImageBindings];
             VkWriteDescriptorSet writes[Shaders::kBindingsPerSet];
             uint32_t w = 0;
-            uint32_t image = 0;
             for (uint32_t b = 0; b < kCbSlots; ++b) {
                 if (!key.cb[b]) continue;
                 buffers[b].buffer = key.cb[b];
@@ -981,31 +1024,18 @@ bool BindVertexSet(VkCommandBuffer cb, const PairLayout& pair, const Shaders::Sh
                 writes[w].pBufferInfo = &buffers[b];
                 ++w;
             }
-            for (uint32_t t = 0; t < kTextureSlots; ++t) {
-                if (key.view[t]) {
-                    images[image].sampler = VK_NULL_HANDLE;
-                    images[image].imageView = key.view[t];
-                    images[image].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                    writes[w].dstSet = set;
-                    writes[w].dstBinding = Shaders::BindingOfTexture(t);
-                    writes[w].descriptorCount = 1;
-                    writes[w].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    writes[w].pImageInfo = &images[image++];
-                    ++w;
-                }
-                if (key.sampler[t]) {
-                    images[image].sampler = key.sampler[t];
-                    images[image].imageView = VK_NULL_HANDLE;
-                    images[image].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                    writes[w].dstSet = set;
-                    writes[w].dstBinding = Shaders::BindingOfSampler(t);
-                    writes[w].descriptorCount = 1;
-                    writes[w].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                    writes[w].pImageInfo = &images[image++];
-                    ++w;
-                }
+            for (uint32_t i = 0; i < kImageBindings; ++i) {
+                if (!key.view[i]) continue;
+                images[i].sampler = key.sampler[i];
+                images[i].imageView = key.view[i];
+                images[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                writes[w] = Make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                writes[w].dstSet = set;
+                writes[w].dstBinding = ImageBinding(i);
+                writes[w].descriptorCount = 1;
+                writes[w].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[w].pImageInfo = &images[i];
+                ++w;
             }
             if (w != 0) vkUpdateDescriptorSets(LiveDevice(), w, writes, 0, nullptr);
             slot.vertexSets.emplace_back(key, set);
@@ -1283,7 +1313,8 @@ bool DrawStartup(std::string* why) {
     g_loggedTargets.clear();
     g_touched.clear();
     g_logOnce = 0;
-    auto pi = Make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+    g_discard.StructureChanged();
+    auto pi =Make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pi.queueFamilyIndex = LiveGraphicsFamily();
     if (vkCreateCommandPool(LiveDevice(), &pi, nullptr, &g_readPool) != VK_SUCCESS) {
@@ -1343,6 +1374,7 @@ void DrawBeginFrame(const FrameTarget& target) {
     g_frame.lastPair = lastPair;
     g_frame.lastValid = lastValid;
     g_clear = PendingClear{};
+    g_discard.BeginFrame();
     g_swap.image = target.image;
     g_swap.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     // A pre-rotated frame's source was left in SHADER_READ_ONLY by the previous frame's present pass:
@@ -1377,12 +1409,7 @@ void DrawEndFrame() {
     if (!g_frame.active) return;
     FlushPendingClear();
     EndPass();
-    if (g_frame.depthPasses == g_lastFrameDepthPasses) {
-        if (g_depthPassesStable < kDiscardStableFrames) ++g_depthPassesStable;
-    } else {
-        g_depthPassesStable = 0;
-    }
-    g_lastFrameDepthPasses = g_frame.depthPasses;
+    g_discard.EndFrame();
     VkCommandBuffer cb = g_frame.target.cb;
     // A frame that drew nothing on the main colour still presents a defined image: black.
     if (!g_frame.mainDrawn && EnsureMainTargets()) {
@@ -1438,13 +1465,14 @@ void DrawLogFrame(uint64_t frame, const Video::Context* context) {
                  static_cast<unsigned long long>(frame), context->_drawsSubmitted, context->_trianglesSubmitted,
                  context->_verticesSubmitted, context->_objectsSubmitted, g_frame.passes, g_frame.targetPasses,
                  g_frame.resolves, g_frame.reads, g_frame.setsAllocated, g_frame.pushes,
-                 g_frame.depthDiscards, g_frame.depthPasses, g_depthMispredicts,
+                 g_frame.depthDiscards, g_frame.depthPasses, g_discard.Mispredicts(),
                  static_cast<unsigned long long>(g_frame.ringBytes), g_frame.failedDraws, built, warmed, failed, static_cast<unsigned long long>(uploadBytes >> 10),
                  batches);
 }
 
 void DrawTargetsChanged() {
     g_targetsChanged = true;
+    g_discard.StructureChanged();
 }
 
 // ---- the companions' Bind slots ----------------------------------------------------------------------
@@ -1566,6 +1594,13 @@ void DrawResolve(const Video::RenderBuffer* dst, const Video::RenderBuffer* src)
     FlushBarriers(cb, &g_barriers);
     CopyColor(cb, source->image, sourceFormat, sourceExtent, to->image.image, to->image.format,
               { to->image.width, to->image.height });
+    // P8 (the frame-copy split, docs/android/P8_VULKAN.md §4): the copy is made to be sampled, so it is
+    // moved to SHADER_READ_ONLY here, between passes. Left in TRANSFER_DST, the first draw sampling it
+    // ended the main pass that had begun after the copy (PrepareTextures), and the main target was
+    // stored and loaded once more per frame for nothing.
+    TransitionImage(to->state, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+    FlushBarriers(cb, &g_barriers);
+    g_discard.Note(StructureToken(&to->state, 'R'));
     ++g_frame.resolves;
 }
 
@@ -1611,6 +1646,7 @@ bool DrawReadImage(ImageBufferData* image, void* dst, int width, int height) {
         vkCmdPipelineBarrier2(cb, &hostDep);
         g_frame.target.cb = SubmitFrameSoFar();
         ResetCommandState();
+        g_discard.Note(StructureToken(&image->state, 'Q'));
         ++g_frame.reads;
     } else {
         // Between frames (the device lock is held): a command buffer of its own, after the upload batch.

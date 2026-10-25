@@ -38,12 +38,21 @@
 // K = 16: 40 bindings per set), and stay under the D3D10 maxima (14 / 128 / 16): a register past a
 // limit fails the conversion with a message naming it, it is never silently remapped.
 //
+// COMBINED IMAGE SAMPLERS (P8, spirv_combine.h). With ConvertOptions::combineSamplers (every game
+// program) the texture bindings are COMBINED_IMAGE_SAMPLER descriptors and no binding is a separate
+// sampler: texture t's primary pair lives at BindingOfTexture(t), and a texture sampled with a second
+// sampler gets a second combined descriptor in the (now free) sampler range, BindingOfSampler(k). The
+// reflection names the sampler register of each (ShaderReflection::textureSampler / extraPairs); the
+// backend fills each descriptor with texture t's view and the sampler the engine binds at register s
+// (the sampler of the image bound at slot s, as DX11 ImageBufferData::Bind sets it).
+//
 // UAVs (P4). No retail program declares one; ext.ambient_occlusion's ASSAO PSPrepareDepthsAndNormals*
 // (our own SM5 DXBC, src/render/common/ao/shaders/) writes its normals through u4. A UAV register u
 // lands on binding kBindingsPerSet + u of its stage's set (u0..u7 at 40..47), past the game layout's
 // 40, so the game's set layouts never name one; the AO pass (src/render/vulkan/ao/) makes its own set
 // layout that does. A UAV counter still fails the conversion.
 // ============================================================================
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -96,7 +105,8 @@ constexpr uint32_t BindingOfUav(uint32_t reg) {
 // 2 (P2): the reflection records which textures are cubes (textureCubeMask).
 // 3 (P4): UAV registers map to BindingOfUav and the reflection records them (uavMask).
 // 4 (P7): the reflection records each input's numeric type (IoElement::numeric).
-constexpr uint32_t kMappingVersion = 4;
+// 5 (P8): combined image samplers (ConvertOptions::combineSamplers, the reflection's pairs).
+constexpr uint32_t kMappingVersion = 5;
 
 // ---- reflection --------------------------------------------------------------------------------
 // One interpolant, vertex input or render-target output of a program.
@@ -113,6 +123,20 @@ struct IoElement {
     static constexpr uint8_t kUint = 2;
 };
 
+// P8: a further (texture, sampler) pair of a combined module, at its own binding (spirv_combine.h).
+struct CombinedPair {
+    uint8_t binding = 0;   // BindingOfSampler(k)
+    uint8_t texture = 0;   // t register
+    uint8_t sampler = 0;   // s register
+};
+constexpr uint8_t kNoSampler = 0xFF;
+constexpr std::array<uint8_t, kMaxTextures> NoSamplers() {
+    std::array<uint8_t, kMaxTextures> a{};
+    for (uint8_t& v : a)
+        v = kNoSampler;
+    return a;
+}
+
 struct ShaderReflection {
     Stage    stage = Stage::Vertex;
     uint32_t constantBufferMask = 0;   // bit r: b<r> is read
@@ -120,6 +144,13 @@ struct ShaderReflection {
     uint32_t samplerMask        = 0;   // bit r: s<r> is read
     uint32_t textureCubeMask    = 0;   // bit r: t<r> is declared a cube (TextureCube / array)
     uint32_t uavMask            = 0;   // bit r: u<r> is declared (P4: the AO programs only)
+    // P8, combined image samplers (spirv_combine.h; ConvertOptions::combineSamplers). `combined`: the
+    // module's textures are COMBINED_IMAGE_SAMPLER descriptors and it has no separate sampler.
+    // textureSampler[t]: the sampler register of texture t's combined descriptor at
+    // BindingOfTexture(t) (kNoSampler: t is only read without one). extraPairs: the further pairs.
+    bool combined = false;
+    std::array<uint8_t, kMaxTextures> textureSampler = NoSamplers();
+    std::vector<CombinedPair> extraPairs;
     // Vertex: the vertex input semantics (P2's vertex layouts bind by these) and the interpolants it
     // writes. Pixel: the interpolants it reads and the render targets it writes.
     std::vector<IoElement> inputs;
@@ -140,6 +171,10 @@ struct ConvertOptions {
     // Pixel stage only: the vertex program it is linked with. Null = unlinked (the D3D register
     // numbering, which is what every retail pair needs when StagesCompatible holds).
     const ShaderReflection* previousStage = nullptr;
+    // P8: combine each sampled (texture, sampler) pair into one COMBINED_IMAGE_SAMPLER descriptor
+    // (spirv_combine.h). The game's programs (the companions, the ext rewrites, the shader check) set
+    // it; the AO pass keeps its own separate layout and leaves it off. Part of the cache key.
+    bool combineSamplers = false;
 };
 
 // The program type a DXBC container's SHDR / SHEX chunk declares. False (with *why) when the blob is

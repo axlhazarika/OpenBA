@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -368,6 +369,10 @@ int main(int argc, char** argv) {
     uint32_t cbMask = 0;
     uint32_t texMask = 0;
     uint32_t smpMask = 0;
+    // P8: the (texture, sampler) pairs the programs sample with, after the combined-sampler pass.
+    std::map<std::string, unsigned> pairCensus;
+    unsigned permutationsWithExtraPairs = 0;
+    unsigned unsampledTextures = 0;
     unsigned entriesSeen = 0;
     unsigned roundTrips = 0;
 
@@ -408,7 +413,9 @@ int main(int argc, char** argv) {
                 t.permutations++;
                 std::vector<uint32_t> spirv;
                 ShaderReflection refl;
-                if (!ConvertDxbc(blob, c.second, s, &spirv, &refl, &why)) {
+                ConvertOptions options;
+                options.combineSamplers = true;   // P8: the backend's game programs are combined
+                if (!ConvertDxbc(blob, c.second, s, &spirv, &refl, &why, options)) {
                     failures.push_back(where + " (" + StageName(s) + "): " + why);
                     t.failed++;
                     continue;
@@ -417,11 +424,23 @@ int main(int argc, char** argv) {
                 cbMask |= refl.constantBufferMask;
                 texMask |= refl.textureMask;
                 smpMask |= refl.samplerMask;
+                for (uint32_t r = 0; r < kMaxTextures; ++r) {
+                    if (!((refl.textureMask >> r) & 1)) continue;
+                    if (refl.textureSampler[r] == kNoSampler) {
+                        unsampledTextures++;
+                        continue;
+                    }
+                    pairCensus["t" + std::to_string(r) + "+s" + std::to_string(refl.textureSampler[r])]++;
+                }
+                for (const CombinedPair& p : refl.extraPairs)
+                    pairCensus["t" + std::to_string(p.texture) + "+s" + std::to_string(p.sampler) + " (further)"]++;
+                if (!refl.extraPairs.empty()) permutationsWithExtraPairs++;
 
                 std::vector<uint32_t> back;
                 ShaderReflection backRefl;
                 if (DecodeEntry(EncodeEntry(spirv, refl), &back, &backRefl) && back == spirv &&
-                    backRefl.textureMask == refl.textureMask && backRefl.inputs.size() == refl.inputs.size() &&
+                    backRefl.textureMask == refl.textureMask && backRefl.textureSampler == refl.textureSampler &&
+                    backRefl.extraPairs.size() == refl.extraPairs.size() && backRefl.inputs.size() == refl.inputs.size() &&
                     backRefl.outputs.size() == refl.outputs.size()) {
                     roundTrips++;
                 } else {
@@ -475,6 +494,11 @@ int main(int argc, char** argv) {
                 HighestBit(texMask), HighestBit(smpMask), kMaxConstantBuffers - 1, kMaxTextures - 1,
                 kMaxSamplers - 1);
     std::printf("cache entry round trip: %u / %u\n", roundTrips, sum.converted);
+    std::printf("combined (texture+sampler) pairs over the permutations:");
+    for (const auto& p : pairCensus)
+        std::printf(" %s x%u", p.first.c_str(), p.second);
+    std::printf("\ntextures read without a sampler: %u; permutations with a further pair: %u\n", unsampledTextures,
+                permutationsWithExtraPairs);
     for (const std::string& f : failures)
         std::printf("FAIL %s\n", f.c_str());
     return sum.failed != 0 ? 1 : 0;
