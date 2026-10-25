@@ -417,6 +417,15 @@ const Entry kEntries[] = {
       "shows the whole Banished logo on wide screens, and lets the UI scale go down to 25% (a much larger "
       "interface).",
       0, [](State& s) -> bool& { return s.ext.phone_menu; } },
+    // FPSCAP (docs/android/P8_INPUT_OPTIONS.md): a frame-rate ceiling for the menu and the game
+    // (src/app/frame_limiter.h), at ext.fps_cap_rate. Class A: frames only; the sim's fixed step runs
+    // every tick the elapsed time owes, nothing is saved, live. OFF by default on a desktop (the game
+    // stays uncapped, as retail); the Android first run turns it on at 60 (ruled 2026-10-25).
+    { "fps_cap", Tier::Extension, Class::A, false,
+      "Frame rate cap",
+      "Limits the frame rate in the menu and in game (the Enhanced tab's Frame rate cap): less power and "
+      "heat, the simulation unchanged.",
+      0, [](State& s) -> bool& { return s.ext.fps_cap; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
@@ -436,6 +445,7 @@ constexpr int kEntryCount = static_cast<int>(sizeof(kEntries) / sizeof(kEntries[
 // the owner row's bool; opacity 0..30 percent, default 20: the user's look of 2026-10-14 put
 // the usable maximum at 20 and anything past 30 "iffy").
 constexpr int32_t kMaxShadowSizes[] = { 4096, 8192 };
+constexpr int32_t kFpsCapRates[] = { 30, 60, 90, 120 };
 
 const ValueKey kValueKeys[] = {
     { "ao_quality", "ambient_occlusion", 1, 3, 2,
@@ -475,6 +485,10 @@ const ValueKey kValueKeys[] = {
     // a range key). The code below the key still takes any drop N (texture_quality.h).
     { "texture_quality_drop", "texture_quality", 0, 1, 0,
       [](State& s) -> int32_t& { return s.val.texture_quality_drop; }, nullptr, 0 },
+    // FPSCAP: the ceiling while the row fps_cap is on, one of the combo's rates; 60 is the phone's ruled
+    // default. Any other number reads as 60 (a discrete key).
+    { "fps_cap_rate", "fps_cap", 30, 120, 60,
+      [](State& s) -> int32_t& { return s.val.fps_cap_rate; }, kFpsCapRates, 4 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

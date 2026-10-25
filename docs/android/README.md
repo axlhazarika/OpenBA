@@ -16,7 +16,8 @@ their own Banished install into the app's data folder (below).
 | `android/` | The Gradle project: `settings.gradle`, `build.gradle` (AGP pin), `gradle.properties` (the package id and app name, each set once), the Gradle wrapper. |
 | `android/app/build.gradle` | The app module: SDK levels, NDK and CMake pins, arm64-v8a only, the native build over `../../CMakeLists.txt` (targets `OpenBA` = `libmain.so` and `SDL3-shared` = `libSDL3.so`), SDL's Java glue compiled in place from `third_party/SDL/android-project`. |
 | `android/app/src/main/AndroidManifest.xml` | One activity, landscape only, Vulkan 1.3 required. |
-| `android/app/src/main/java/org/openba/game/OpenBAActivity.java` | `SDLActivity` subclass: runs the game's own `main`, turns the launch intent's `BANISHED_*` extras into the environment. |
+| `android/app/src/main/java/org/openba/game/OpenBAActivity.java` | `SDLActivity` subclass: runs the game's own `main`, turns the launch intent's `BANISHED_*` extras into the environment, makes the surface an `OpenBASurface`. |
+| `android/app/src/main/java/org/openba/game/OpenBASurface.java` | `SDLSurface` subclass: the captured mouse's buttons and motion (P8). |
 | `src/platform/android/` | The platform twins (`README.md` there has the rule). |
 | `src/diag/android/` | The crash handler and boot-state watchdog twins. |
 | `tools/android.sh` | Build, install, push the data, run, pull the logs. |
@@ -56,7 +57,7 @@ modules because SDL's Java glue calls into them at startup. The renderer is the 
 ## Install, data, run
 
 ```bash
-tools/android.sh install debug            # adb install -r
+tools/android.sh install debug            # adb install -r -d (a debug apk replaces any debuggable build)
 tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg + the FrancophilSans files -> the phone (once)
 tools/android.sh run                      # launch to the main menu
 tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
@@ -109,7 +110,8 @@ only `GameEdgeScroll=false` (P7: a touch held at the edge is a parked cursor), `
 `VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low Shadow Resolution; shadows stay on: retail's own
 off is Options > Shadow Quality = None, `VideoShaderDetail=0`, `P8_SHADOWS_RELEASE.md`), and
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
-`ext.max_shadow_res` off, and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
+`ext.max_shadow_res` off, `ext.fps_cap` on at `ext.fps_cap_rate=60` (P8, ruled: the menu and the game
+paced to 60 on the 120 Hz panel), and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
 main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
 rounded corners and the camera cut-out, the in-game interface (the toolbar and event notices bottom-right,
 the panels at their default top-left, tooltips, drop-downs) is kept inside the same safe area, and Options >
@@ -119,10 +121,23 @@ User interface scale goes down to 25 % (the UI four times larger than 100 %;
 
 **Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
 window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
-1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key once at window creation (no
-Options control; edit the file and restart); desktops answer 1.0. The SDL layer hands the engine the scaled
-size and pixel density, so taps land where they are drawn. The MSAA default stays off and the 60 fps cap
-is unruled: the numbers are in `P7_FIRST_PASS.md`.
+1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key at window creation; since P8
+Options > Enhanced "Render scale" (Full / Half / Quarter = 100 / 50 / 25) changes it live
+(`SetRenderScale`, then `Video::Device::settingsChanged`: the Vulkan backend rebuilds the back buffer, the
+targets and the swap chain at the next frame) and records the key. Desktops answer 1.0 and show the row
+disabled. The SDL layer hands the engine the scaled size and pixel density, so taps land where they are
+drawn. The UI is laid out in engine pixels, so it grows as the scale shrinks (known_port_issues). The MSAA
+default stays off: the numbers are in `P7_FIRST_PASS.md`.
+
+**Frame rate cap** (P8). Options > Enhanced "Frame rate cap" (Off / 30 / 60 / 90 / 120) is the class A row
+`ext.fps_cap` with `ext.fps_cap_rate`: `src/app/frame_limiter.h` paces the menu and the game to it (the
+game's fixed simulation step is untouched; only fewer frames draw it). The phone's first run turns it on
+at 60; a desktop leaves it off, the game uncapped as retail. `BANISHED_FPS_CAP` still overrides it.
+
+**Mouse** (P8). A mouse works as on a desktop. While the middle button is held (camera rotate) the window
+is in relative mode, which on Android is pointer capture; `OpenBASurface.java` passes the captured
+pointer's buttons and motion to SDL, which the pinned SDL drops (`docs/reference/android_mouse.md`). A
+uinput mouse for tests: `adb shell uinput <file.json>` (the script in that reference).
 
 ## Logs
 

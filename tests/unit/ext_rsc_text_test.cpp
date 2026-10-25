@@ -162,7 +162,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(page && page->body.Find("_content") &&
           page->body.Find("_content")->tokens[0].text == "enhancedOptionsTable");
     const Object* table = e.Find("enhancedOptionsTable");
-    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 15);   // seven labels, eight controls (COMPRESSAO: the cache size and, under it, its button; TEXQUALITY: texture quality)
+    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 19);   // nine labels, ten controls (COMPRESSAO: the cache size and, under it, its button; TEXQUALITY: texture quality; P8: render scale, frame rate cap)
     // TEXQUALITY: the Texture quality combo offers Full / Half only (Quarter removed by the user's ruling).
     const Object* tqItems = e.Find("textureQualityItems");
     CHECK(tqItems && tqItems->body.Find("_strings") && tqItems->body.Find("_strings")->blocks.size() == 2);

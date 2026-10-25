@@ -120,6 +120,7 @@ struct Extensions {
     bool find_fastpath = false; // class A, next start: src/ext/find_fastpath/, seam Object::ExternalFactory::_extFindFast (docs/extensions/handins/VISITREPLAY.md)
     bool heap_slack = false; // class A, next start: src/ext/heap_slack/, seam System::MemoryAllocator::_extCommitSeam (docs/extensions/handins/HEAPSLACK.md)
     bool phone_menu = false; // class A, live: src/ext/phone_menu/, seam UI::UserInterface::_extDialogPlace + the Options UI-scale slider (docs/extensions/handins/PHONEMENU.md)
+    bool fps_cap = false; // class A, live: src/ext/fps_cap/, FrameLimiter::SetSettingsCap (src/app/frame_limiter.h; docs/android/P8_INPUT_OPTIONS.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.
@@ -146,6 +147,7 @@ struct Values {
     int32_t rock_seat_mode = 2; // ext.rock_seat_mode 1..2 (owner fix rock_seat): 1 sink to the lowest ground under the rock, 2 tilt to the slope (the default, ROCKSEAT.md)
     int32_t create_on_demand_idle_min = 0; // ext.create_on_demand_idle_min 0..120 (owner create_on_demand): minutes unused before a made object is given back, 0 = never, the default until re-makes are prefetched (CREATEONDEMAND.md section 7)
     int32_t texture_quality_drop = 0; // ext.texture_quality_drop 0..1 (owner texture_quality): the top mip levels a qualifying texture is made without, 0 = Full (the default: the row or profile=all alone drops nothing), 1 = Half; an older 2 (Quarter, removed by ruling) clamps to 1; read once at boot (TEXQUALITY.md)
+    int32_t fps_cap_rate = 60; // ext.fps_cap_rate 30 | 60 | 90 | 120 (owner fps_cap): the menu's and the game's frame-rate ceiling while the row is on; 60 is the phone's ruled default (docs/android/P8_INPUT_OPTIONS.md)
     int32_t derived_cache_mb = 4096; // ext.derived_cache_mb 256..65536 (owner compress_ao, the cache's first user): the derived-data cache's cap in MB (COMPRESSAO.md)
 };
 
@@ -402,6 +404,12 @@ int32_t MaxShadowResChoice();
 int32_t SetTextureQualityAndRecord(int32_t drop);
 // The same choice read back: 0 while the row is off (requested), else ext.texture_quality_drop.
 int32_t TextureQualityChoice();
+// "Frame rate cap" as one choice (the Enhanced tab's combo): 0 = the row ext.fps_cap off
+// (ext.fps_cap_rate kept), 30 / 60 / 90 / 120 = the rate key, then the row on. Live: the frame
+// limiter follows at once (Ext::FpsCap::Sync). The caller flushes. Returns the choice now in effect.
+int32_t SetFpsCapAndRecord(int32_t fps);
+// The same choice read back: 0 while the row is off (requested), else ext.fps_cap_rate.
+int32_t FpsCapChoice();
 void PersistSettings();
 
 }  // namespace Ext

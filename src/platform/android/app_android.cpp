@@ -111,7 +111,10 @@ void MirrorThread() {
 // unshadowed pixel variant; P8, docs/android/P8_SHADOWS_RELEASE.md); the seed leaves shadows on (ruled
 // 2026-10-25). P7 (ruled 2026-10-25): edge scrolling off, because a touch held at
 // the screen's edge is a cursor parked there (an unattended game scrolled to the map's corner); the
-// render scale at half the screen (ruled 2026-10-24; window_android.cpp RenderScale reads it).
+// render scale at half the screen (ruled 2026-10-24; window_android.cpp RenderScale reads it). P8
+// (ruled 2026-10-25): the frame rate capped at 60 (ext.fps_cap: the frame limiter paces the menu and
+// the game; the S25's panel runs at 120 Hz, docs/android/P7_FIRST_PASS.md "The 60 fps question").
+// Both are rows of Options > Enhanced (Render scale, Frame rate cap).
 const char kPhoneSettings[] =
     "GameEdgeScroll=false\n"
     "VideoRenderScale=50\n"
@@ -122,7 +125,9 @@ const char kPhoneSettings[] =
     "ext.foliage_aa=0\n"
     "ext.billboard_shadow=0\n"
     "ext.max_shadow_res=0\n"
-    "ext.phone_menu=1\n";
+    "ext.phone_menu=1\n"
+    "ext.fps_cap=1\n"
+    "ext.fps_cap_rate=60\n";
 
 void SeedPhoneSettings(const std::string& userDir) {
     mkdir(userDir.c_str(), 0770);
