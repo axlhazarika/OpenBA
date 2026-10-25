@@ -90,3 +90,48 @@ temporary); the three FrancophilSans files in `files/` (they are the point of it
   another P8 item).
 - A release apk with the font inside (and the extraction to `files/`) is a ruling, not done.
 - Dialogs taller than the safe area keep retail's vertical extent (the Options dialog at 25 %).
+
+## 6. Round 2 (the owner's own S25 test of the merged tree, PR #53)
+
+The owner's phone settings at the time: UI 35, render scale 100 (an 819 x 378 layout, 2.86 device
+pixels per layout unit). Screenshots: the session scratchpad's `android-ui-fit/round2/`.
+
+**Pause menu jump: FIXED.** Esc showed the pause menu centred for one frame, then moved right. Cause:
+`Pause.rsc` has the same 16:9 backdrop as the main menu, and the first layout code learned the logo's
+place from the backdrop's DRAW (`kExtPlaceBackdrop`), after the frame's layout had run: the first frame
+was laid out without it, the second moved the column beside the logo. The main menu had the same
+one-frame jump. The layout hook now decides from this frame's sizes only: it sizes the menu's tree and
+the version line's itself (`ComputeSize`, which retail's `ComputeLayout` runs anyway) and takes the
+backdrop's place from the dialog's own picture. Checked on Windows with a temporary per-frame print:
+the main and pause menus' rectangles are the same from their first frame on.
+
+**The "changes to mods require a restart" notice not scaled: FIXED (retail bug, under
+`fix.ui_scale_layout`).** It is `Dialog/Reload.rsc`, shown modally through `UserInterface::ShowDialog`
+(0x18011fd10), which builds a nested UserInterface whose `_uiScale` is its ctor's 1.0: every modal shown
+that way ignores the Options UI scale (invisible at retail's 100). The same path shows the Extensions
+restart notice, the save / load warnings and the Options key-capture confirmation; all are fixed by the
+one line (the nested UI copies the scale; `docs/retail_bugs.md` section 5). The modal also lands in the
+safe area (the layout seam is static, the nested UI uses it). Seen on Windows at UI 50 (the notice
+the size of the Mods dialog under it); not reproduced on the phone (no mod is installed there).
+
+**Main menu relayout: DONE.** The owner's sketch: the logo centred at the top, the buttons as one
+horizontal row of square buttons across the middle, the version line centred at the bottom. Both the
+main menu and the pause menu, on a screen wider than their 16:9 backdrop; the logo-left layout is
+retired (its math and tests removed). Details and numbers: `docs/extensions/handins/PHONEMENU.md` §2.
+Retail button art (nine-sliced frames) at any size, the label's icon above its text; the game's small
+font when the labels' own does not fit. Touch targets on the S25 at the owner's UI 35: main menu 254 x
+254 device pixels (about 15 mm), pause menu 203 x 203 (about 12 mm). No new art, setting or flag.
+
+Verified: on the S25 the main menu row (8), the pause menu row (10, small font), Options opened from
+each (the final build, `p2_pause4.png`, logged `819x378: button row (... square 89)` and `(... square
+71, small font)`); on Windows the row at UI 83 and 35, the pause row, the ext off = retail's centred column, unit
+1485 / 0 / 1 skipped (the kit cross-check). The phone was left with this branch's debug apk, stopped,
+and its settings as found.
+
+Left / for a ruling:
+- Below about UI 33 % (render scale 100) the pause menu's ten labels do not fit across even in the small
+  font, and below about 27 % the main menu's eight; both fall back to the column, which then overlaps
+  the logo. Options if wanted: two rows of squares, or icon-only squares at the smallest scales.
+- The Options dialog is taller than the screen at UI 35: its tabs are off the top (retail keeps a
+  too-tall dialog's bottom on screen). A phone layout for Options is its own item.
+- The "Achievements" label in the small font leaves about one unit to its square's frame.

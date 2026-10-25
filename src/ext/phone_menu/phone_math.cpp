@@ -20,36 +20,65 @@ Rect InsetLayout(int32_t width, int32_t height) {
     return Rect{m, m, width - m, height - m};
 }
 
-Rect LogoLeft(const Rect& retail, int32_t width) {
-    const int32_t drawnW = retail.x2 - retail.x1;
-    const int32_t drawnH = retail.y2 - retail.y1;
-    if (retail.y1 >= 0 || drawnW <= 0 || drawnH <= 0 || width <= 0) return retail;
-    const float w = 2.0f * (1.0f - kLogoCentreFraction) * static_cast<float>(width);
-    const float h = w * static_cast<float>(drawnH) / static_cast<float>(drawnW);
-    const int32_t overlayW = static_cast<int32_t>(w + 0.5f);
-    return Rect{width - overlayW, 0, width, static_cast<int32_t>(h + 0.5f)};
+bool WiderThanBackdrop(int32_t width, int32_t height, int32_t spriteW, int32_t spriteH) {
+    if (width <= 0 || height <= 0 || spriteW <= 0 || spriteH <= 0) return false;
+    const float screenAspect = static_cast<float>(width) / static_cast<float>(height);
+    const float spriteAspect = static_cast<float>(spriteW) / static_cast<float>(spriteH);
+    return !(spriteAspect > screenAspect);
 }
 
-int32_t LogoRight(const Rect& overlay) {
-    const float w = static_cast<float>(overlay.x2 - overlay.x1);
-    return overlay.x1 + static_cast<int32_t>(w * kLogoRightFraction + 0.5f);
+int32_t BackdropHeight(int32_t width, int32_t height, int32_t spriteW, int32_t spriteH) {
+    if (!WiderThanBackdrop(width, height, spriteW, spriteH)) return height;
+    const float spriteAspect = static_cast<float>(spriteW) / static_cast<float>(spriteH);
+    const int32_t half = static_cast<int32_t>(static_cast<float>(width) / spriteAspect + 0.5f) >> 1;
+    return 2 * half;
 }
 
-Rect ColumnBeside(int32_t width, int32_t height, int32_t logoRight, int32_t columnWidth) {
+Rect LogoTop(const Rect& retail) {
+    if (retail.y1 >= 0) return retail;
+    return Rect{retail.x1, 0, retail.x2, retail.y2 - retail.y1};
+}
+
+int32_t LogoBottom(int32_t backdropHeight) {
+    if (backdropHeight <= 0) return -1;
+    return static_cast<int32_t>(static_cast<float>(backdropHeight) * kLogoBottomFraction + 0.5f);
+}
+
+int32_t SquareSide(const int32_t* labelWidths, const int32_t* labelHeights, int32_t count) {
+    int32_t side = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        if (labelWidths[i] > side) side = labelWidths[i];
+        if (labelHeights[i] > side) side = labelHeights[i];
+    }
+    return side;
+}
+
+int32_t FitSide(int32_t width, int32_t height, int32_t fixedWidth, int32_t count) {
+    if (count <= 0) return 0;
     const Rect safe = InsetLayout(width, height);
-    int32_t left = logoRight;
-    if (left < safe.x1) left = safe.x1;
-    if (columnWidth <= 0 || columnWidth <= safe.x2 - left) return Rect{left, safe.y1, safe.x2, safe.y2};
-    return Rect{safe.x2 - columnWidth, safe.y1, safe.x2, safe.y2};
+    const int32_t room = (safe.x2 - safe.x1) - fixedWidth;
+    return room > 0 ? room / count : 0;
 }
 
-Rect VersionUnderLogo(int32_t width, int32_t height, int32_t logoCentre) {
+int32_t RowSide(int32_t contentSide, int32_t fitSide, int32_t height) {
+    if (contentSide <= 0 || contentSide > fitSide) return 0;
+    const int32_t m = SafeMargin(height);
+    const int32_t safeHeight = 2 * m < height ? height - 2 * m : height;
+    const int32_t cap = static_cast<int32_t>(static_cast<float>(safeHeight) * kRowSideFraction);
+    int32_t side = fitSide < cap ? fitSide : cap;
+    if (side < contentSide) side = contentSide;
+    return side;
+}
+
+bool RowFits(int32_t width, int32_t height, int32_t rowWidth, int32_t rowHeight, int32_t logoBottom,
+             int32_t versionTop) {
     const Rect safe = InsetLayout(width, height);
-    if (logoCentre <= safe.x1 || logoCentre >= safe.x2) return safe;
-    // A rectangle symmetric about the logo's centre line, as wide as fits on screen.
-    int32_t half = logoCentre;
-    if (width - logoCentre < half) half = width - logoCentre;
-    return Rect{logoCentre - half, safe.y1, logoCentre + half, safe.y2};
+    if (rowWidth <= 0 || rowHeight <= 0) return false;
+    if (rowWidth > safe.x2 - safe.x1 || rowHeight > safe.y2 - safe.y1) return false;
+    const int32_t top = safe.y1 + ((safe.y2 - safe.y1) - rowHeight) / 2;
+    if (logoBottom >= 0 && top < logoBottom) return false;
+    if (versionTop >= 0 && top + rowHeight > versionTop - kVersionGap) return false;
+    return true;
 }
 
 Rect MenuBand(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop,
@@ -79,6 +108,11 @@ bool VersionAside(int32_t width, int32_t height, int32_t versionTop, int32_t ver
 Rect VersionAsideLayout(int32_t width, int32_t height, int32_t versionWidth) {
     const Rect safe = InsetLayout(width, height);
     return Rect{safe.x1, safe.y1, safe.x1 + versionWidth, safe.y2};
+}
+
+int32_t VersionTop(int32_t width, int32_t height, int32_t versionHeight) {
+    if (versionHeight <= 0) return -1;
+    return InsetLayout(width, height).y2 - versionHeight;
 }
 
 namespace {

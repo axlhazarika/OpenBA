@@ -77,49 +77,83 @@ UNIT_TEST(ext_phone_menu_inset_layout_takes_edges) {
     CHECK(thin.y2 == 1000);
 }
 
-UNIT_TEST(ext_phone_menu_logo_left) {
+UNIT_TEST(ext_phone_menu_backdrop_logo_top) {
     // 2340x1080 against the menu's 16:9 overlay: retail cuts 118 off the top and the bottom.
+    CHECK(Ext::PhoneMenu::WiderThanBackdrop(2340, 1080, 1600, 900));
     const Ext::PhoneMenu::Rect retail = RetailCoverWide(2340, 1080, 1600.0f / 900.0f);
     CHECK(retail.y1 == -118);
     CHECK(retail.y2 == 1198);
-    // 1.28 screen widths wide, against the right and top edges: the logo centred on 36 %.
-    const Ext::PhoneMenu::Rect r = Ext::PhoneMenu::LogoLeft(retail, 2340);
+    CHECK(Ext::PhoneMenu::BackdropHeight(2340, 1080, 1600, 900) == 1316);
+    // The top on the screen's top: the logo whole and centred, the cut moved to the bottom.
+    const Ext::PhoneMenu::Rect r = Ext::PhoneMenu::LogoTop(retail);
+    CHECK(r.x1 == 0);
     CHECK(r.x2 == 2340);
-    CHECK(r.x1 == 2340 - 2995);
     CHECK(r.y1 == 0);
-    CHECK(r.y2 >= 1080);                                   // still covers the screen
-    CHECK(r.x1 + (r.x2 - r.x1) / 2 == 842);                // 0.36 * 2340
-    CHECK(Ext::PhoneMenu::LogoRight(r) == -655 + 2052);    // 0.685 of the overlay
-    // A screen narrower than the overlay (cut at the sides) or an exact fit: unchanged.
+    CHECK(r.y2 == 1316);
+    CHECK(Ext::PhoneMenu::LogoBottom(1316) == 290);   // 0.22 of the drawn picture
+    // A 16:9 screen fits exactly (retail's compare sends it to the width fit, no overhang).
+    CHECK(Ext::PhoneMenu::WiderThanBackdrop(1920, 1080, 1600, 900));
+    CHECK(Ext::PhoneMenu::BackdropHeight(1920, 1080, 1600, 900) == 1080);
+    // A 16:10 screen is narrower: retail fits the height, the picture is the screen's height.
+    CHECK(!Ext::PhoneMenu::WiderThanBackdrop(1920, 1200, 1600, 900));
+    CHECK(Ext::PhoneMenu::BackdropHeight(1920, 1200, 1600, 900) == 1200);
+    // A rectangle that does not overhang the top: unchanged.
     const Ext::PhoneMenu::Rect sides{-200, 0, 1800, 1200};
-    const Ext::PhoneMenu::Rect same = Ext::PhoneMenu::LogoLeft(sides, 1600);
+    const Ext::PhoneMenu::Rect same = Ext::PhoneMenu::LogoTop(sides);
     CHECK(same.x1 == -200);
     CHECK(same.y1 == 0);
-    CHECK(same.x2 == 1800);
     CHECK(same.y2 == 1200);
+    // No picture: never wider.
+    CHECK(!Ext::PhoneMenu::WiderThanBackdrop(2340, 1080, 0, 0));
+    CHECK(Ext::PhoneMenu::LogoBottom(0) == -1);
 }
 
-UNIT_TEST(ext_phone_menu_column_beside_the_logo) {
-    // The S25 at 100 %: the logo ends at 1397, a 240-unit column: centred between the logo and
-    // the safe area's right edge.
-    Ext::PhoneMenu::Rect r = Ext::PhoneMenu::ColumnBeside(2340, 1080, 1397, 240);
-    CHECK(r.x1 == 1397);
-    CHECK(r.x2 == 2340 - 49);
-    CHECK(r.y1 == 49);
-    CHECK(r.y2 == 1080 - 49);
-    // At 25 % (585x270, the logo ends at 349): a 250-unit column does not fit right of the
-    // logo, so it is right-aligned on the safe margin.
-    r = Ext::PhoneMenu::ColumnBeside(585, 270, 349, 250);
-    CHECK(r.x2 == 585 - 12);
-    CHECK(r.x1 == 585 - 12 - 250);
-    // Not laid out yet: the space right of the logo.
-    r = Ext::PhoneMenu::ColumnBeside(585, 270, 349, 0);
-    CHECK(r.x1 == 349);
-    // The version line centred on the logo's centre line.
-    r = Ext::PhoneMenu::VersionUnderLogo(2340, 1080, 842);
-    CHECK(r.x1 == 0);
-    CHECK(r.x2 == 1684);
-    CHECK(r.y2 == 1080 - 49);
+UNIT_TEST(ext_phone_menu_button_row) {
+    // The labels need the largest padded label ("Achievements", 109 + 16).
+    const int32_t widths[] = {65, 67, 92, 125, 85, 71, 104, 60};
+    const int32_t heights[] = {30, 30, 30, 30, 30, 30, 30, 30};
+    CHECK(Ext::PhoneMenu::SquareSide(widths, heights, 8) == 125);
+    const int32_t tallW[] = {20};
+    const int32_t tallH[] = {40};
+    CHECK(Ext::PhoneMenu::SquareSide(tallW, tallH, 1) == 40);
+    CHECK(Ext::PhoneMenu::SquareSide(widths, heights, 0) == 0);
+    // The S25 at UI 100, render scale 50: 1170x540 units, margin 24. Eight squares of 125 with
+    // the buttons' and the ribbon's padding: 1062 x 145. The logo ends at 145 (0.22 of a
+    // 658-unit picture), the version line (56 padded) starts at 460.
+    CHECK(Ext::PhoneMenu::BackdropHeight(1170, 540, 1600, 900) == 658);
+    CHECK(Ext::PhoneMenu::LogoBottom(658) == 145);
+    CHECK(Ext::PhoneMenu::VersionTop(1170, 540, 56) == 460);
+    CHECK(Ext::PhoneMenu::VersionTop(1170, 540, 0) == -1);
+    CHECK(Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 145, 460));   // rows 197 .. 342
+    CHECK(Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, -1, -1));     // nothing else known
+    // Too wide for the safe area (UI 50: 585x270 units): back to the column.
+    CHECK(!Ext::PhoneMenu::RowFits(585, 270, 1062, 145, 72, 230));
+    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1123, 145, -1, -1));
+    CHECK(Ext::PhoneMenu::RowFits(1170, 540, 1122, 145, -1, -1));
+    // Over the logo, or into the version line's gap.
+    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 220, 460));
+    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 145, 340));
+    // Not sized.
+    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 0, 0, -1, -1));
+}
+
+UNIT_TEST(ext_phone_menu_row_square_side) {
+    // The S25 at UI 100, render scale 50 (1170x540 units, safe width 1122): eight squares with
+    // 62 units of padding and gaps around them fill the row at 132 ...
+    CHECK(Ext::PhoneMenu::FitSide(1170, 540, 62, 8) == 132);
+    // ... capped at 0.22 of the safe height (492): 108, more than the labels' 95.
+    CHECK(Ext::PhoneMenu::RowSide(95, 132, 540) == 108);
+    // The owner's UI 35 at render scale 100 (819x378 units, safe width 785, safe height 344):
+    // 90 across; the labels in their own font need 107 (no row), in the small font 71.
+    CHECK(Ext::PhoneMenu::FitSide(819, 378, 62, 8) == 90);
+    CHECK(Ext::PhoneMenu::RowSide(107, 90, 378) == 0);
+    CHECK(Ext::PhoneMenu::RowSide(71, 90, 378) == 75);   // the cap: 0.22 * 344
+    CHECK(Ext::PhoneMenu::RowSide(80, 90, 378) == 80);   // never smaller than the labels
+    CHECK(Ext::PhoneMenu::RowSide(90, 90, 378) == 90);
+    // Nothing fits / nothing to fit.
+    CHECK(Ext::PhoneMenu::FitSide(100, 378, 200, 8) == 0);
+    CHECK(Ext::PhoneMenu::FitSide(1170, 540, 62, 0) == 0);
+    CHECK(Ext::PhoneMenu::RowSide(0, 90, 378) == 0);
 }
 
 UNIT_TEST(ext_phone_menu_menu_band) {

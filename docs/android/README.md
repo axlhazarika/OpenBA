@@ -112,7 +112,8 @@ off is Options > Shadow Quality = None, `VideoShaderDetail=0`, `P8_SHADOWS_RELEA
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
 `ext.max_shadow_res` off, `ext.fps_cap` on at `ext.fps_cap_rate=60` (P8, ruled: the menu and the game
 paced to 60 on the 120 Hz panel), and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
-main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
+main menu's logo sits whole and centred at the top and the menu's buttons form one row of square buttons
+across the middle (owner's ruling, P8 round 2), inside a 4.5 % safe area clear of the
 rounded corners and the camera cut-out, the in-game interface (the toolbar and event notices bottom-right,
 the panels at their default top-left, tooltips, drop-downs) is kept inside the same safe area, and Options >
 User interface scale goes down to 25 % (the UI four times larger than 100 %;

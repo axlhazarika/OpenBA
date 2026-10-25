@@ -43,7 +43,8 @@ const Entry kEntries[] = {
 
     { "ui_scale_layout", Tier::Fix, Class::None, true,
       "Steady dialogs on UI rescale",
-      "Dialogs no longer flash to a corner when the UI scale changes.",
+      "Dialogs no longer flash to a corner when the UI scale changes, and pop-up notices follow the "
+      "UI scale.",
       0, [](State& s) -> bool& { return s.fix.ui_scale_layout; } },
 
     // ROCKSEAT (docs/extensions/handins/ROCKSEAT.md, docs/retail_bugs.md section 7): rocks and ore
