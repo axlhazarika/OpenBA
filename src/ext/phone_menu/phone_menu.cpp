@@ -7,8 +7,8 @@
 // the version line's) itself before retail's ComputeLayout does, so a menu's first drawn frame is
 // already its final layout. A dialog that is not a menu is laid out in phone_math.h's SafeArea.
 //
-// THE BUTTON ROW. On a screen wider than the main menu's backdrop the menu's button list
-// (MainMenu.rsc `buttonList`, a RibbonElement laid out top-to-bottom) is turned into one
+// THE BUTTON ROW. On a screen wider than the menus' backdrop a menu's button list (MainMenu.rsc
+// `buttonList`; Pause.rsc's root; RibbonElements laid out top-to-bottom) is turned into one
 // horizontal row of square buttons: the ribbon's `_vertical` cleared, every button's minimum
 // size set to one square side (as large as fits across the safe area, phone_math.h RowSide), its
 // label centred with the icon above the text, in the small font (Font/FontSmall.rsc) when the
@@ -99,6 +99,7 @@ struct RowState {
     int32_t inner[kMaxButtons] = {};              // the icon / text pair's alignment (_align)
     uint32_t mode[kMaxButtons] = {};              // the icon's side of the text (_mode)
     UI::Font* font[kMaxButtons] = {};
+    int32_t pads[kMaxButtons][4] = {};            // the label's left / top / right / bottom padding
     UI::Font* smallFont = nullptr;                // Font/FontSmall.rsc, when the row needs it
     bool applied = false;
 };
@@ -134,7 +135,9 @@ UI::Font* LoadSmallFont() {
 void Capture(const UI::DialogInstance* dialog, UI::Element* root) {
     g_row = RowState();
     g_row.dialog = dialog;
+    // The main menu's buttons are its `buttonList`; the pause menu's root is the list itself.
     UI::Element* list = FindNamed(root, "buttonList", 0);
+    if (list == nullptr) list = root;
     if (!::Object::IsDerivedFromNullSafe(list, UI::RibbonElement::TypeId())) return;
     UI::RibbonElement* ribbon = static_cast<UI::RibbonElement*>(list);
     for (int32_t i = 0; i < ribbon->_children._size && g_row.count < kMaxButtons; ++i) {
@@ -151,6 +154,10 @@ void Capture(const UI::DialogInstance* dialog, UI::Element* root) {
         g_row.inner[n] = label->_align;
         g_row.mode[n] = label->_mode;
         g_row.font[n] = label->_font;
+        g_row.pads[n][0] = label->_leftPad;
+        g_row.pads[n][1] = label->_topPad;
+        g_row.pads[n][2] = label->_rightPad;
+        g_row.pads[n][3] = label->_bottomPad;
     }
     g_row.ribbon = ribbon;
     g_row.vertical = ribbon->_vertical;
@@ -167,6 +174,10 @@ void Restore() {
         label->_align = g_row.inner[i];
         label->_mode = g_row.mode[i];
         label->_font = g_row.font[i];
+        label->_leftPad = g_row.pads[i][0];
+        label->_topPad = g_row.pads[i][1];
+        label->_rightPad = g_row.pads[i][2];
+        label->_bottomPad = g_row.pads[i][3];
         label->SetNeedsSizeCalc();
     }
     g_row.ribbon->SetNeedsSizeCalc();
@@ -185,6 +196,10 @@ void Shape(UI::Font* font, int32_t side) {
         label->_align = 4;       //   and the icon / text pair centred inside the label
         label->_mode = 3;        //   with the icon above the text
         label->_font = font != nullptr ? font : g_row.font[i];
+        label->_leftPad = 0;     //   with no padding of its own: the square's frame is the margin
+        label->_topPad = 0;
+        label->_rightPad = 0;
+        label->_bottomPad = 0;
         label->SetNeedsSizeCalc();
     }
     g_row.ribbon->SetNeedsSizeCalc();
@@ -209,18 +224,34 @@ int32_t ContentSide(int32_t& visible) {
 
 void PaddedSize(UI::Element* root, int32_t& w, int32_t& h);
 
+// The last row decision's numbers, for the one [PhoneMenu] line printed when they change.
+struct RowNumbers {
+    int32_t visible = 0;
+    int32_t content = 0;
+    int32_t fit = 0;
+    int32_t side = 0;
+    bool small = false;
+};
+RowNumbers g_numbers;
+
 // The row in one font: the squares as large as fits across the safe area (RowSide). False when
 // the labels do not fit in a square that small.
 bool ShapeRow(UI::Element* root, UI::Font* font, int32_t width, int32_t height) {
     Shape(font, 0);
     int32_t visible = 0;
     const int32_t content = ContentSide(visible);
+    g_numbers = RowNumbers();
+    g_numbers.visible = visible;
+    g_numbers.content = content;
+    g_numbers.small = font != nullptr;
     if (visible == 0 || content <= 0) return false;
     Shape(font, content);
     int32_t w = 0;
     int32_t h = 0;
     PaddedSize(root, w, h);
-    const int32_t side = RowSide(content, FitSide(width, height, w - visible * content, visible), height);
+    g_numbers.fit = FitSide(width, height, w - visible * content, visible);
+    const int32_t side = RowSide(content, g_numbers.fit, height);
+    g_numbers.side = side;
     if (side <= 0) return false;
     Shape(font, side);
     return true;
@@ -262,7 +293,25 @@ bool VersionSize(const UI::DialogInstance* menu, int32_t& w, int32_t& h) {
 
 // ---- the hook ---------------------------------------------------------------
 
-void PlaceMenu(const UI::DialogInstance* dialog, bool pause, int32_t width, int32_t height, int32_t* rect) {
+// One stderr line each time the menu's layout decision changes (a new menu, a new screen size
+// or UI scale): row or column, and the numbers that decided it.
+void LogDecision(bool wide, int32_t width, int32_t height) {
+    static bool lastRow = false;
+    static int32_t lastWidth = -1;
+    static int32_t lastSide = -1;
+    static const UI::DialogInstance* lastDialog = nullptr;
+    if (lastDialog == g_row.dialog && lastRow == g_rowActive && lastWidth == width && lastSide == g_numbers.side)
+        return;
+    lastDialog = g_row.dialog;
+    lastRow = g_rowActive;
+    lastWidth = width;
+    lastSide = g_numbers.side;
+    std::fprintf(stderr, "[PhoneMenu] %dx%d: %s (wide %d, %d buttons, labels need %d, %d fit across, square %d%s)\n",
+                 width, height, g_rowActive ? "button row" : "column", wide ? 1 : 0, g_numbers.visible,
+                 g_numbers.content, g_numbers.fit, g_numbers.side, g_numbers.small ? ", small font" : "");
+}
+
+void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, int32_t* rect) {
     // The layout hook runs where retail's ComputeLayout sizes and lays out this same tree; the
     // seam hands the dialog const because it only reads it on every other path.
     UI::Element* const root = const_cast<UI::Element*>(dialog->_root.Get());
@@ -272,7 +321,7 @@ void PlaceMenu(const UI::DialogInstance* dialog, bool pause, int32_t width, int3
     // The backdrop as Draw will place it (this frame, from the dialog's own picture).
     int32_t logoBottom = -1;
     bool wide = false;
-    if (!pause && dialog->_spriteSheet != nullptr && dialog->_spriteIndex >= 0) {
+    if (dialog->_spriteSheet != nullptr && dialog->_spriteIndex >= 0) {
         const auto& sprite = dialog->_spriteSheet->m_sprites._data[dialog->_spriteIndex];
         wide = WiderThanBackdrop(width, height, sprite.width, sprite.height);
         logoBottom = LogoBottom(BackdropHeight(width, height, sprite.width, sprite.height));
@@ -291,6 +340,7 @@ void PlaceMenu(const UI::DialogInstance* dialog, bool pause, int32_t width, int3
         g_rowActive = RowFits(width, height, w, h, logoBottom, versionTop);
     }
     if (!g_rowActive) Restore();
+    LogDecision(wide, width, height);
 
     int32_t columnW = 0;
     int32_t columnH = 0;
@@ -320,16 +370,16 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
     const UI::Element* const root = dialog->_root.Get();
 
     if (point == UI::UserInterface::kExtPlaceBackdrop) {
-        // The main menu's backdrop on a wider screen: its top on the screen's top, the logo
-        // whole. Retail's fit for every other backdrop.
-        if (!menu) return;
+        // The menus' backdrop on a wider screen: its top on the screen's top, the logo whole.
+        // Retail's fit for every other backdrop.
+        if (!menu && !pause) return;
         Store(LogoTop(Rect{rect[0], rect[1], rect[2], rect[3]}), rect);
         return;
     }
     if (point != UI::UserInterface::kExtPlaceLayout) return;
 
     if (menu || pause) {
-        PlaceMenu(dialog, pause, width, height, rect);
+        PlaceMenu(dialog, width, height, rect);
         return;
     }
     if (version) {

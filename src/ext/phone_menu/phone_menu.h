@@ -7,10 +7,10 @@
 //   (a) on a screen wider than the main menu's backdrop overlay (16:9: the Banished logo and
 //       the dark torn borders over the 3D menu scene; retail cover-fits it and cuts the logo's
 //       top off at 19.5:9) the overlay is drawn with its top on the screen's top, so the logo is
-//       whole and centred at the top, and the main menu's buttons become one horizontal row of
-//       square buttons across the middle of the safe area, the version line centred at the
-//       bottom (phone_math.h LogoTop / SquareSide / RowFits; owner's ruling 2026-10-25);
-//   (b) otherwise (a desktop screen, a row too wide for the screen, and the pause menu) the
+//       whole and centred at the top, and the main and pause menus' buttons become one horizontal
+//       row of square buttons across the middle of the safe area, the version line centred at
+//       the bottom (phone_math.h LogoTop / RowSide / RowFits; owner's ruling 2026-10-25);
+//   (b) otherwise (a desktop screen narrower than the backdrop, a row too wide for the screen) the
 //       menu dialogs (the main / pause menu and the version line) are laid out inside a safe
 //       area 4.5 % of the screen height in from every edge, the column centred between the logo
 //       and the version line when it fits there (MenuBand), the version line moved to the
