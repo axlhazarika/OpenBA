@@ -234,14 +234,17 @@ uint32_t g_hazardSlots = 0;
 // the frame's last pass on it (the AO pass is the one reader, and it asks for a readable depth first),
 // so that pass may end with STORE_OP_DONT_CARE and the tile's depth is never written out. The store op
 // is fixed when the pass begins, before it is known to be the last, so the last one is PREDICTED: the
-// pass whose index equals the previous frame's count of main-depth passes, less one. A wrong
-// prediction is caught where it matters: a main-depth pass that LOADs while the contents are discarded
-// clears instead (the far plane, stencil 0), is logged once, and the prediction pauses for 60 frames.
-// The game clears the depth at the start of every frame, so in a steady frame this never fires.
+// pass whose index equals the previous frame's count of main-depth passes, less one, and only once
+// that count has been the same for kDiscardStableFrames frames in a row. A wrong prediction is caught
+// where it matters: a main-depth pass that LOADs while the contents are discarded clears instead (the
+// far plane, stencil 0). That pass's geometry is then drawn against an empty depth for one frame (it
+// shows through the scene), so ONE miss turns the discard off for the rest of the session (logged).
 uint32_t g_lastFrameDepthPasses = 0;
-bool g_depthLost = false;         // the main depth's contents were discarded and not cleared since
-uint32_t g_discardHold = 0;       // frames left with the prediction paused
-uint32_t g_depthMispredicts = 0;  // since the start (the frame line)
+uint32_t g_depthPassesStable = 0;  // frames in a row with the same count of main-depth passes
+bool g_depthLost = false;          // the main depth's contents were discarded and not cleared since
+bool g_discardOff = false;         // a prediction missed: no discard for the rest of the session
+uint32_t g_depthMispredicts = 0;   // since the start (the frame line)
+constexpr uint32_t kDiscardStableFrames = 600;
 // A one-shot command pool for a read-back outside a frame (under the device lock).
 VkCommandPool g_readPool = VK_NULL_HANDLE;
 
@@ -554,13 +557,15 @@ bool BeginPass(const Target& t) {
             depth.clearValue.depthStencil.depth = 1.0f;
             stencil.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             stencil.clearValue.depthStencil.stencil = 0;
-            g_discardHold = 60;
+            g_discardOff = true;
             ++g_depthMispredicts;
-            LogOnce(32, "the main depth was discarded by a pass predicted last, then loaded: cleared instead, "
-                        "the prediction paused for 60 frames (THE DEPTH DISCARD)");
+            std::fprintf(stderr, "[Vulkan] the main depth was discarded by a pass predicted last, then loaded "
+                                 "(pass %u, last frame %u): cleared instead; the discard is off for the session "
+                                 "(THE DEPTH DISCARD)\n", index, g_lastFrameDepthPasses);
         }
         g_depthLost = false;
-        if (g_discardHold == 0 && !g_readableRequested.load() && index + 1 == g_lastFrameDepthPasses) {
+        if (!g_discardOff && g_depthPassesStable >= kDiscardStableFrames && !g_readableRequested.load() &&
+            index + 1 == g_lastFrameDepthPasses) {
             depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             g_depthLost = true;
@@ -1367,8 +1372,12 @@ void DrawEndFrame() {
     if (!g_frame.active) return;
     FlushPendingClear();
     EndPass();
+    if (g_frame.depthPasses == g_lastFrameDepthPasses) {
+        if (g_depthPassesStable < kDiscardStableFrames) ++g_depthPassesStable;
+    } else {
+        g_depthPassesStable = 0;
+    }
     g_lastFrameDepthPasses = g_frame.depthPasses;
-    if (g_discardHold > 0) --g_discardHold;
     VkCommandBuffer cb = g_frame.target.cb;
     // A frame that drew nothing on the main colour still presents a defined image: black.
     if (!g_frame.mainDrawn && EnsureMainTargets()) {
