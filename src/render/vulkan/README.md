@@ -12,13 +12,13 @@ NOT RETAIL. The third backend behind `src/render/common/README.md`'s seam, picke
 | `shader_cache.cpp` | `LoadOrConvert`: the SPIR-V cache over the per-user derived-data cache (`src/ext/derived_cache`). |
 | `device_objects.h` | What the other files read from the device file: the live device, queue, properties, `Caps`, the depth and swap-chain formats; shader modules (tracked, destroyed at Shutdown). |
 | `vk_mem.h`, `vma_impl.cpp` | VMA (`third_party/VulkanMemoryAllocator`), configured once (no static or dynamic function fetching, API 1.3); the implementation is compiled in `vma_impl.cpp`. |
-| `resources.h`, `resources.cpp` | GPU memory (VMA buffers and images), submission (one queue, the timeline semaphore), the upload batch, the frame-indexed retire queue, shared samplers, the placeholders. |
+| `resources.h`, `resources.cpp` | GPU memory (VMA buffers and images, multisampled and attachment-only ones for the main targets), submission (one queue, the timeline semaphore), the upload batch, the frame-indexed retire queue, shared samplers, the placeholders, the read-back buffer, and `ImageState` / `TransitionImage`: per-image layout tracking with sync2 barriers. |
 | `pipelines.h`, `pipelines.cpp` | The pipeline layout, the shader registry, vertex layouts, the render-state block, the pipeline key and cache, the persistent `VkPipelineCache` and the warm list with its worker. |
-| `draw.h`, `draw.cpp` | The bound state, the lazily-begun pass, the constant ring, descriptor sets, and the ContextData draw slots (Clear, the Bind* slots, DrawIndexed, the dynamic-vertex slots). |
+| `draw.h`, `draw.cpp` | The bound state, the render targets (the main targets: swap-chain image, MSAA colour + depth; every render buffer's own images), the lazily-begun pass with its clears as load ops, layout transitions at pass boundaries, Resolve (the frame copy) and the image read-back, the constant ring, descriptor sets, and the ContextData draw slots (Clear, the Bind* slots, DrawIndexed, the dynamic-vertex slots). |
 | `vk_api.h`, `vk_api.cpp` | The entry points the backend calls, as function pointers resolved at run time from SDL's `vkGetInstanceProcAddr` (nothing links the loader). Three X-lists: global, instance, device. |
 | `VideoVulkanData.h` | The twelve companion subclasses of `src/engine/video/CompanionData.h`. |
-| `device.cpp` | Instance, physical device, logical device, SDL surface, swap chain, the frame loop (`BeginCommands` / `Finish`), the adapter enumeration, the main-target attach slots, the start and stop of the resource files. |
-| `companions.cpp` | Buffers (static device-local, dynamic renamed on DISCARD), images (every retail format, mips, cubes), constant buffers, programs (through the shader registry), vertex layouts, render states. |
+| `device.cpp` | Instance, physical device, logical device, SDL surface, swap chain, the frame loop (`BeginCommands` / `Finish`, and `SubmitFrameSoFar` for a mid-frame read-back), the multisample count (dx11 ResolveMultisampleMode), the adapter enumeration, the main-target attach slots, `RenderBufferData::Bind` / `Resolve`, the game cursor (`SetImageBuffer`), the start and stop of the resource files. |
+| `companions.cpp` | Buffers (static device-local, dynamic renamed on DISCARD), images (every retail format, mips, cubes; a render-buffer image's attachment view and layout state), the image read-back slot, constant buffers, programs (through the shader registry), vertex layouts, render states. |
 | `integration.cpp` | The backend-neutral seams (`AoBackend::`, `FaaBackend::`, … , `Ext::RenderPipe::`, `Graphics::ExtAoAfterOpaque`): every answer is "not supported" until P4. |
 | `render_backend_vulkan.cpp` | `Render::` entry points and the compatibility-slot placeholder. |
 | `vulkan_entry.h` | What the plain entry file needs from `device.cpp` without a Vulkan header. |
@@ -35,8 +35,26 @@ P2 (resources and draws, done): buffers, textures, samplers, vertex layouts, ren
 (persistent cache plus a warm list) and descriptors are real, and the main menu renders into the
 swap-chain image with the backend's depth image. A RenderDoc capture of the menu under
 `/profile:faithful` has the same main-target draws as the DX11 exe's. Render buffers other than the
-main one (shadow map, water reflection, frame copy) are skipped and counted, and `ImageBufferData::Read`
-answers false. Next: P3 render targets (`docs/vulkan/PLAN.md` §5).
+main one (shadow map, water reflection, frame copy) were skipped in P2.
+P3 (render targets, done): every render buffer renders into its own colour / depth images (the 1264x672
+reflection, the depth-only shadow map, the minimap capture), the frame copy's Resolve copies the main
+colour, `ImageBufferData::Read` reads back (the game cursor, the minimap, `TakeScreenshot`'s BMP), the
+Options multisample count drives the main targets (resolve attachments on desktop; the tiler path
+`VK_EXT_multisampled_render_to_single_sampled` where the device has it), and a settings change or a
+window resize remakes the main targets. A new game boots, plays and quits through the pause menu on
+the debug and perf flavours; an in-game RenderDoc capture under `/profile:faithful` at a 60 fps cap
+has the DX11 exe's draw count per target. The divergences left are in `docs/known_port_issues.md`
+("Vulkan backend"). Next: P4 ext seams and the parity table.
+
+## Validation on the Windows bed
+The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With no Vulkan SDK
+installed, a layer built from Khronos's source with the MinGW toolchain works: build
+`KhronosGroup/Vulkan-ValidationLayers` (tag matching the loader) with `scripts/update_deps.py` and
+CMake + Ninja in a SHORT path (the dependency builds exceed MAX_PATH under the session scratchpad),
+link it with `-DCMAKE_MODULE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"` (the loader does
+not find MinGW's runtime DLLs beside the layer), then run with `VK_ADD_LAYER_PATH=<build>\layers`;
+`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=1` adds synchronization validation. Messages land in
+`standalone_error.log` as `[Vulkan] validation ...`.
 
 ## Checking the shaders
 ```bash

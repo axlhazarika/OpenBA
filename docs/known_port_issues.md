@@ -960,6 +960,40 @@ the hand-ins; the sentences are not evidence.
   that haze returns with the shared values has not been compared. See
   [pass reference](reference/macos_metal_passes.md).
 
+## Vulkan backend
+
+`src/render/vulkan/` (`docs/vulkan/PLAN.md`). Divergences from the DX11 backend that are left on
+purpose or not yet closed, as of P3 (2026-10-24).
+
+- **Mid-frame updates land early.** The upload batch (`resources.h`) is submitted before the frame
+  that recorded it, so an `UpdateSubresource`-style update made between two draws of a frame lands
+  before the whole frame. D3D11 orders it between the two draws. The engine updates its dynamic
+  textures (minimap, UI atlases) between frames, so nothing visible is known; a mid-frame update
+  would show one frame early.
+- **MSAA resolve per main pass.** Retail renders the main target multisampled and resolves it into
+  the back buffer once a frame (EndCommands). The Vulkan resolve-attachment path resolves at the end
+  of every pass on the main target (several a frame: the frame copy and read-backs split it), and
+  keeps the multisampled colour and depth stored rather than transient so the next pass can load
+  them. The picture is the same; the cost is bandwidth. The tiler path
+  (`VK_EXT_multisampled_render_to_single_sampled`, chosen when the device has it, the S25) resolves on
+  the tile instead; it compiles and is selected by `caps.msrtss` but has not run on a device yet (the
+  RTX 5080 lacks the extension). P7 measures both on the S25.
+- **Mixed sample counts.** A render buffer pairing the multisampled main colour with a single-sampled
+  depth image (or the reverse) is rendered without the depth (logged once). D3D11 would refuse the
+  draw. No route in the game builds one; it was only reached through the P0 attach bug fixed in P3.
+- **Resolve outside a frame.** `RenderBuffer::Resolve` is recorded into the frame's command stream;
+  one called outside BeginCommands / Finish is skipped (logged once). Every known caller
+  (`FrameCopyImageBuffer::Generate` from the screenshot and the save thumbnail) runs inside a frame.
+- **Read-back formats.** `ImageBufferData::Read` answers false for a compressed or depth image (the
+  Metal backend's rule). Retail's staging copy is BGRA8 and D3D11 refuses those copies too, then reads
+  the uninitialised staging texture; here the caller sees "not readable".
+- **Validation residue (P2).** One pipeline-creation error remains with the Khronos validation layer:
+  a vertex attribute declared `R8G8B8A8_UINT` (the engine's byte-4 element, dx11
+  `vertexlayoutdata.cpp`) feeds a shader input the converter typed `int4`. The values are 0..255, so
+  the bits are the same either way; a fix types the attribute from the shader's declared input. The
+  shadow map's depth-only pass also draws with pixel shaders that write `SV_Target` into no colour
+  attachment (a validation warning, not an error), exactly as D3D11 binds a null render target.
+
 ## 15. `ResourceLimitUI` accepted a config's resource index only below 11 — FIXED
 
 **Where.** `src/game/Dialog/resourcelimitui.cpp`, `resourcelimitui_sa::IdxFor`, used by
