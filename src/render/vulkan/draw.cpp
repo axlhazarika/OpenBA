@@ -68,7 +68,6 @@ struct Bound {
     Video::Viewport scissor{};
     int topology = kTopologyNone;
     const Video::RenderBuffer* target = nullptr;
-    bool targetIsMain = true;
 };
 Bound g_bound;
 
@@ -94,12 +93,29 @@ struct SlotResources {
 };
 SlotResources g_slots[kFramesInFlight];
 
+// The attachments of a pass, resolved from a render buffer when the pass begins (draw.h TARGETS).
+struct Target {
+    bool main = false;                     // the colour (or, with no colour, the depth) is a main target
+    ImageState* color = nullptr;
+    VkImageView colorView = VK_NULL_HANDLE;
+    VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+    ImageState* resolve = nullptr;         // the swap-chain image, resolve-attachment MSAA only
+    VkImageView resolveView = VK_NULL_HANDLE;
+    ImageState* depth = nullptr;
+    VkImageView depthView = VK_NULL_HANDLE;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    uint32_t samples = 1;
+    bool msrtss = false;
+    VkExtent2D extent{};
+};
+
 // The frame being recorded, and what its command buffer has bound (reset with each frame).
 struct Frame {
     FrameTarget target;
     bool active = false;
     bool passActive = false;
-    bool colorReady = false;      // the swap-chain image is in COLOR_ATTACHMENT_OPTIMAL this frame
+    bool mainDrawn = false;       // a pass ran on the main colour this frame
+    Target pass;                  // the attachments of the active (or last) pass
     uint64_t index = 0;           // the frame index (FramesSubmitted at BeginCommands)
     VkPipeline pipeline = VK_NULL_HANDLE;
     bool viewportSet = false;
@@ -122,8 +138,9 @@ struct Frame {
     // Counters for the frame line.
     uint32_t passes = 0;
     uint32_t setsAllocated = 0;
-    uint32_t skippedDraws = 0;
-    uint32_t skippedClears = 0;
+    uint32_t targetPasses = 0;    // passes on render buffers other than the main one
+    uint32_t resolves = 0;
+    uint32_t reads = 0;
     uint32_t failedDraws = 0;
     VkDeviceSize ringBytes = 0;
 };
@@ -139,15 +156,29 @@ struct PendingClear {
 };
 PendingClear g_clear;
 
-// The backend's depth image (D24S8 / D32S8), sized to the swap chain; shared by the frames in flight
-// (each pass begins with a barrier on it).
-GpuImage g_depth;
-VkImageView g_depthAttachmentView = VK_NULL_HANDLE;   // DEPTH | STENCIL aspects
-VkImageLayout g_depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+// The backend's main targets (draw.h TARGETS), sized to the swap chain and shared by the frames in
+// flight (submission order plus the pass barriers order them).
+struct MainTargets {
+    uint32_t samples = 0;
+    bool msrtss = false;
+    VkExtent2D extent{};
+    GpuImage depth;               // attachment-only: `view` covers depth and stencil
+    ImageState depthState;
+    GpuImage color;               // MSAA only: the multisampled colour, or the tiler-MSAA colour
+    ImageState colorState;
+};
+MainTargets g_main;
+ImageState g_swap;                // the acquired swap-chain image, this frame
 bool g_targetsChanged = false;
+// The companion images this frame moved out of SHADER_READ_ONLY (the frame's end moves them back).
+std::vector<ImageState*> g_touched;
+std::vector<VkImageMemoryBarrier2> g_barriers;
+// Texture slots of the draw being issued that sample an attachment of the bound render buffer.
+uint32_t g_hazardSlots = 0;
+// A one-shot command pool for a read-back outside a frame (under the device lock).
+VkCommandPool g_readPool = VK_NULL_HANDLE;
 
 std::unordered_set<const void*> g_loggedTargets;
-uint64_t g_skippedDrawsTotal = 0;
 uint32_t g_logOnce = 0;
 
 uint64_t HashKey(const SetKey& k) {
@@ -166,45 +197,186 @@ void LogOnce(uint32_t bit, const char* message) {
     std::fprintf(stderr, "[Vulkan] %s\n", message);
 }
 
-// ---- the depth image ----
-
-void DestroyDepth() {
-    if (!g_depth.image) return;
-    GpuImage image = g_depth;
-    VkImageView view = g_depthAttachmentView;
-    g_depth = GpuImage{};
-    g_depthAttachmentView = VK_NULL_HANDLE;
-    g_depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    Retire([image, view]() mutable {
-        if (view && LiveDevice()) vkDestroyImageView(LiveDevice(), view, nullptr);
-        DestroyImageNow(&image);
-    });
+const ImageBufferData* Companion(const Video::ImageBuffer* ib) {
+    return ib ? static_cast<const ImageBufferData*>(ib->_data) : nullptr;
 }
 
-bool EnsureDepth(VkExtent2D extent) {
-    if (g_depth.image && !g_targetsChanged && g_depth.width == extent.width && g_depth.height == extent.height) {
-        return true;
-    }
-    g_targetsChanged = false;
-    DestroyDepth();
+ImageBufferData* MutableCompanion(const Video::ImageBuffer* ib) {
+    return ib ? static_cast<ImageBufferData*>(ib->_data) : nullptr;
+}
+
+void Touch(ImageState* state) {
+    if (std::find(g_touched.begin(), g_touched.end(), state) == g_touched.end()) g_touched.push_back(state);
+}
+
+// The command buffer has no state of its own yet (a new frame, or SubmitFrameSoFar's continuation).
+void ResetCommandState() {
+    g_frame.pipeline = VK_NULL_HANDLE;
+    g_frame.viewportSet = false;
+    g_frame.scissorSet = false;
+    g_frame.stencilRef = -1;
+    g_frame.vbuffersSet = false;
+    g_frame.ibuffer = VK_NULL_HANDLE;
+    g_frame.setsBound = false;
+}
+
+// ---- the main targets ----
+
+void DestroyMainTargets() {
+    GpuImage depth = g_main.depth;
+    GpuImage color = g_main.color;
+    g_main = MainTargets{};
+    if (depth.image) RetireImage(&depth);
+    if (color.image) RetireImage(&color);
+}
+
+bool MakeMainImage(VkFormat format, VkImageUsageFlags usage, uint32_t samples, bool msrtss, VkExtent2D extent,
+                   GpuImage* image, ImageState* state) {
     ImageDesc d;
     d.width = extent.width;
     d.height = extent.height;
-    d.format = DepthStencilFormat();
-    d.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    d.format = format;
+    d.usage = usage;
+    d.attachmentOnly = true;
+    d.samples = static_cast<VkSampleCountFlagBits>(msrtss ? 1u : samples);
+    d.flags = msrtss ? VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT : 0;
     std::string why;
-    if (!CreateImage(d, &g_depth, &why)) {
-        std::fprintf(stderr, "[Vulkan] depth image %ux%u: %s\n", extent.width, extent.height, why.c_str());
+    if (!CreateImage(d, image, &why)) {
+        std::fprintf(stderr, "[Vulkan] main target %ux%u format %d x%u: %s\n", extent.width, extent.height,
+                     static_cast<int>(format), samples, why.c_str());
         return false;
     }
-    VkImageViewCreateInfo vi = Make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
-    vi.image = g_depth.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = g_depth.format;
-    vi.subresourceRange = { g_depth.aspect, 0, 1, 0, 1 };
-    vkCreateImageView(LiveDevice(), &vi, nullptr, &g_depthAttachmentView);
-    g_depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    state->image = image->image;
+    state->aspect = image->aspect;
+    state->layout = VK_IMAGE_LAYOUT_UNDEFINED;
     return true;
+}
+
+bool EnsureMainTargets() {
+    const VkExtent2D extent = g_frame.target.extent;
+    const uint32_t samples = MainSampleCount();
+    const bool msrtss = samples > 1 && LiveCaps().msrtss;
+    if (g_main.depth.image && !g_targetsChanged && g_main.extent.width == extent.width &&
+        g_main.extent.height == extent.height && g_main.samples == samples && g_main.msrtss == msrtss) {
+        return true;
+    }
+    g_targetsChanged = false;
+    DestroyMainTargets();
+    g_main.samples = samples;
+    g_main.msrtss = msrtss;
+    g_main.extent = extent;
+    if (!MakeMainImage(DepthStencilFormat(), VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, samples, msrtss, extent,
+                       &g_main.depth, &g_main.depthState)) {
+        return false;
+    }
+    if (samples > 1) {
+        const VkImageUsageFlags usage =
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (msrtss ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+        if (!MakeMainImage(SwapchainFormat(), usage, samples, msrtss, extent, &g_main.color, &g_main.colorState)) {
+            return false;
+        }
+    }
+    std::fprintf(stderr, "[Vulkan] main targets %ux%u, multisample %ux (%s)\n", extent.width, extent.height, samples,
+                 samples == 1 ? "swap-chain image" : (msrtss ? "tiler msrtss" : "resolve attachments"));
+    return true;
+}
+
+// The main colour as a Resolve / read source: where the frame so far is single-sampled.
+ImageState* MainColorSource() {
+    if (g_main.samples > 1 && g_main.msrtss) return &g_main.colorState;
+    return &g_swap;
+}
+
+void MainColorInto(Target* t) {
+    t->main = true;
+    t->samples = g_main.samples;
+    t->extent = g_frame.target.extent;
+    t->colorFormat = SwapchainFormat();
+    if (g_main.samples == 1) {
+        t->color = &g_swap;
+        t->colorView = g_frame.target.view;
+    } else if (g_main.msrtss) {
+        t->color = &g_main.colorState;
+        t->colorView = g_main.color.view;
+        t->msrtss = true;
+    } else {
+        t->color = &g_main.colorState;
+        t->colorView = g_main.color.view;
+        t->resolve = &g_swap;
+        t->resolveView = g_frame.target.view;
+    }
+}
+
+void MainDepthInto(Target* t) {
+    t->depth = &g_main.depthState;
+    t->depthView = g_main.depth.view;
+    t->depthFormat = g_main.depth.format;
+}
+
+void MainTarget(Target* t) {
+    *t = Target{};
+    MainColorInto(t);
+    MainDepthInto(t);
+}
+
+// The attachments of `rb` (draw.h TARGETS). False when it has none this backend can render to.
+bool ResolveTarget(const Video::RenderBuffer* rb, Target* t) {
+    *t = Target{};
+    if (!rb) return false;
+    if (!EnsureMainTargets()) return false;
+    const ImageBufferData* c = Companion(rb->colorBuffer);
+    const ImageBufferData* d = Companion(rb->depthBuffer);
+    bool ownDepthMismatch = false;
+    if (c && c->mainTarget == ImageBufferData::MainTarget::Color) {
+        MainColorInto(t);
+    } else if (c && c->attachmentView) {
+        t->color = const_cast<ImageState*>(&c->state);   // CAST-OK: the bound state holds const companions
+        t->colorView = c->attachmentView;
+        t->colorFormat = c->image.format;
+        t->extent = { c->image.width, c->image.height };
+    }
+    if (d && d->mainTarget != ImageBufferData::MainTarget::None) {
+        if (!t->color) {
+            t->main = true;
+            t->samples = g_main.samples;
+            t->msrtss = g_main.samples > 1 && g_main.msrtss;
+            t->extent = g_frame.target.extent;
+        }
+        if (t->main) {
+            MainDepthInto(t);
+        } else if (g_main.samples == 1) {
+            MainDepthInto(t);
+            t->extent = { std::min(t->extent.width, g_main.extent.width),
+                          std::min(t->extent.height, g_main.extent.height) };
+        } else {
+            ownDepthMismatch = true;
+        }
+    } else if (d && d->attachmentView) {
+        if (!t->color || !t->main || g_main.samples == 1) {
+            t->depth = const_cast<ImageState*>(&d->state);   // CAST-OK: as above
+            t->depthView = d->attachmentView;
+            t->depthFormat = d->image.format;
+            if (t->color) {
+                t->extent = { std::min(t->extent.width, d->image.width), std::min(t->extent.height, d->image.height) };
+            } else {
+                t->extent = { d->image.width, d->image.height };
+            }
+        } else {
+            ownDepthMismatch = true;
+        }
+    }
+    // NOT RETAIL, a divergence of this backend: D3D11 would refuse a multisampled main colour with a
+    // single-sampled depth (or the reverse) at the draw; here the depth is left out of the pass.
+    if (ownDepthMismatch) LogOnce(4, "a render buffer pairs the multisampled main colour with a single-sampled depth: "
+                                     "the depth is left out");
+    if (g_loggedTargets.insert(rb).second) {
+        std::fprintf(stderr, "[Vulkan] render target %p: %ux%u colour %s (format %d) depth %s (format %d) x%u\n",
+                     static_cast<const void*>(rb), t->extent.width, t->extent.height,
+                     t->color ? (t->main ? "main" : "own") : "none", static_cast<int>(t->colorFormat),
+                     t->depth ? (t->depth == &g_main.depthState ? "main" : "own") : "none",
+                     static_cast<int>(t->depthFormat), t->samples);
+    }
+    return (t->color || t->depth) && t->extent.width > 0 && t->extent.height > 0;
 }
 
 // ---- the pass ----
@@ -215,74 +387,115 @@ void EndPass() {
     g_frame.passActive = false;
 }
 
-bool EnsurePass() {
-    if (g_frame.passActive) return true;
+bool BeginPass(const Target& t) {
     VkCommandBuffer cb = g_frame.target.cb;
-    if (!EnsureDepth(g_frame.target.extent)) return false;
-
-    VkImageMemoryBarrier2 barriers[2];
-    barriers[0] = Make<VkImageMemoryBarrier2>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
-    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    barriers[0].srcAccessMask = g_frame.colorReady ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : 0;
-    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    barriers[0].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    barriers[0].oldLayout = g_frame.colorReady ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
-    barriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barriers[0].image = g_frame.target.image;
-    barriers[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    const bool depthFresh = g_depthLayout == VK_IMAGE_LAYOUT_UNDEFINED;
-    barriers[1] = Make<VkImageMemoryBarrier2>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
-    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    barriers[1].srcAccessMask = depthFresh ? 0 : VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    barriers[1].dstAccessMask =
-        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    barriers[1].oldLayout = depthFresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barriers[1].image = g_depth.image;
-    barriers[1].subresourceRange = { g_depth.aspect, 0, 1, 0, 1 };
-    VkDependencyInfo dep = Make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
-    dep.imageMemoryBarrierCount = 2;
-    dep.pImageMemoryBarriers = barriers;
-    vkCmdPipelineBarrier2(cb, &dep);
-    g_depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    const VkImageLayout colorWas = t.color ? t.color->layout : VK_IMAGE_LAYOUT_UNDEFINED;
+    const VkImageLayout depthWas = t.depth ? t.depth->layout : VK_IMAGE_LAYOUT_UNDEFINED;
+    if (t.color) TransitionImage(*t.color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
+    if (t.resolve) TransitionImage(*t.resolve, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &g_barriers);
+    if (t.depth) TransitionImage(*t.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, &g_barriers);
+    FlushBarriers(cb, &g_barriers);
+    if (!t.main) {
+        if (t.color) Touch(t.color);
+        if (t.depth && t.depth != &g_main.depthState) Touch(t.depth);
+    }
 
     VkRenderingAttachmentInfo color = Make<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
-    color.imageView = g_frame.target.view;
+    color.imageView = t.colorView;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = g_clear.color ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    // Nothing to load from an image with no contents yet (fresh, or the acquired swap-chain image).
+    color.loadOp = g_clear.color ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                 : (colorWas == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                                                          : VK_ATTACHMENT_LOAD_OP_LOAD);
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     for (int i = 0; i < 4; ++i)
         color.clearValue.color.float32[i] = g_clear.rgba[i];
+    if (t.resolve) {
+        color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color.resolveImageView = t.resolveView;
+        color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
     VkRenderingAttachmentInfo depth = Make<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
-    depth.imageView = g_depthAttachmentView;
+    depth.imageView = t.depthView;
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     // A fresh depth image has no contents to load: it starts at the far plane, stencil 0.
+    const bool depthFresh = depthWas == VK_IMAGE_LAYOUT_UNDEFINED;
     depth.loadOp = (g_clear.depth || depthFresh) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depth.clearValue.depthStencil.depth = g_clear.depth ? g_clear.depthValue : 1.0f;
     depth.clearValue.depthStencil.stencil = g_clear.stencil ? g_clear.stencilValue : 0;
     VkRenderingAttachmentInfo stencil = depth;
     stencil.loadOp = (g_clear.stencil || depthFresh) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-    const bool hasStencil = (g_depth.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+    const bool hasStencil = t.depth && (t.depth->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
 
+    auto msrtss = Make<VkMultisampledRenderToSingleSampledInfoEXT>(
+        VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
+    msrtss.multisampledRenderToSingleSampledEnable = VK_TRUE;
+    msrtss.rasterizationSamples = static_cast<VkSampleCountFlagBits>(t.samples);
     VkRenderingInfo ri = Make<VkRenderingInfo>(VK_STRUCTURE_TYPE_RENDERING_INFO);
-    ri.renderArea = { { 0, 0 }, g_frame.target.extent };
+    ri.pNext = t.msrtss ? &msrtss : nullptr;
+    ri.renderArea = { { 0, 0 }, t.extent };
     ri.layerCount = 1;
-    ri.colorAttachmentCount = 1;
-    ri.pColorAttachments = &color;
-    ri.pDepthAttachment = &depth;
+    ri.colorAttachmentCount = t.color ? 1 : 0;
+    ri.pColorAttachments = t.color ? &color : nullptr;
+    ri.pDepthAttachment = t.depth ? &depth : nullptr;
     ri.pStencilAttachment = hasStencil ? &stencil : nullptr;
     vkCmdBeginRendering(cb, &ri);
     g_frame.passActive = true;
-    g_frame.colorReady = true;
+    g_frame.pass = t;
     g_clear = PendingClear{};
     ++g_frame.passes;
+    if (t.main && t.color) g_frame.mainDrawn = true;
+    if (!t.main) ++g_frame.targetPasses;
+    // A new pass: the scissor default is its own extent.
+    g_frame.scissorSet = false;
     return true;
+}
+
+bool EnsurePass() {
+    if (g_frame.passActive) return true;
+    Target t;
+    if (!ResolveTarget(g_bound.target, &t)) {
+        g_clear = PendingClear{};
+        return false;
+    }
+    return BeginPass(t);
+}
+
+// A clear recorded for the bound target with no draw after it: run it now as an empty pass (D3D11
+// clears at once). Called before the target changes, a copy, a read-back and the frame's end.
+void FlushPendingClear() {
+    if (!g_frame.active) return;
+    if (!g_clear.color && !g_clear.depth && !g_clear.stencil) return;
+    EndPass();
+    if (EnsurePass()) EndPass();
+}
+
+// The textures the draw being issued samples are moved to SHADER_READ_ONLY before its pass begins (a
+// pass in progress ends for it). One that is an attachment of the bound render buffer reads the
+// placeholder instead (g_hazardSlots).
+void PrepareTextures(const ShaderEntry* ps) {
+    g_hazardSlots = 0;
+    if (!ps) return;
+    const uint32_t mask = ps->reflection.textureMask;
+    const Video::RenderBuffer* rb = g_bound.target;
+    const ImageBufferData* attachedColor = rb ? Companion(rb->colorBuffer) : nullptr;
+    const ImageBufferData* attachedDepth = rb ? Companion(rb->depthBuffer) : nullptr;
+    for (uint32_t t = 0; t < kTextureSlots; ++t) {
+        if (!((mask >> t) & 1)) continue;
+        const ImageBufferData* img = g_bound.textures[t];
+        if (!img || img->mainTarget != ImageBufferData::MainTarget::None || !img->state.image) continue;
+        if (img->state.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) continue;
+        if (img == attachedColor || img == attachedDepth) {
+            g_hazardSlots |= 1u << t;
+            continue;
+        }
+        EndPass();
+        auto* state = const_cast<ImageState*>(&img->state);   // CAST-OK: the bound state holds const companions
+        TransitionImage(*state, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+        Touch(state);
+    }
+    FlushBarriers(g_frame.target.cb, &g_barriers);
 }
 
 // ---- the constant ring ----
@@ -386,8 +599,9 @@ VkDescriptorSet AllocateSet(Shaders::Stage stage) {
 
 // The texture a stage's slot t samples, as a view of the type the shader declares (a placeholder when
 // nothing usable is bound: never a null descriptor).
-VkImageView TextureView(const ImageBufferData* image, bool cube) {
-    if (image && image->image.view && image->mainTarget == ImageBufferData::MainTarget::None && image->cube == cube) {
+VkImageView TextureView(const ImageBufferData* image, bool cube, bool hazard) {
+    if (!hazard && image && image->image.view && image->mainTarget == ImageBufferData::MainTarget::None &&
+        image->cube == cube) {
         return image->image.view;
     }
     return cube ? WhiteCubeView() : WhiteImageView();
@@ -436,7 +650,7 @@ VkDescriptorSet StageSet(Shaders::Stage stage, const Shaders::ShaderReflection* 
     for (uint32_t t = 0; t < kTextureSlots; ++t) {
         if ((key.texMask >> t) & 1) {
             const bool cube = refl && ((refl->textureCubeMask >> t) & 1);
-            key.view[t] = TextureView(pixel ? g_bound.textures[t] : nullptr, cube);
+            key.view[t] = TextureView(pixel ? g_bound.textures[t] : nullptr, cube, pixel && ((g_hazardSlots >> t) & 1));
         }
         if ((key.smpMask >> t) & 1) key.sampler[t] = TextureSampler(pixel ? g_bound.textures[t] : nullptr);
     }
@@ -548,11 +762,6 @@ StateBlock DefaultState() {
 // The one draw path of every slot below: resolve the bound state, then record the draw.
 void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first, int32_t baseVertex) {
     if (!g_frame.active || count == 0 || instances == 0) return;
-    if (!g_bound.targetIsMain) {
-        ++g_frame.skippedDraws;
-        ++g_skippedDrawsTotal;
-        return;
-    }
     // D3D11 draws nothing with no topology set (UNDEFINED) or an empty viewport.
     if (g_bound.topology == kTopologyNone || g_bound.viewport.width <= 0 || g_bound.viewport.height <= 0) {
         ++g_frame.failedDraws;
@@ -567,6 +776,7 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
         ++g_frame.failedDraws;
         return;
     }
+    PrepareTextures(ps);
     if (!EnsurePass()) {
         ++g_frame.failedDraws;
         return;
@@ -578,11 +788,12 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
     key.ps = ps ? ps->hash : 0;
     key.layout = g_bound.layout ? g_bound.layout->layoutHash : 0;
     key.state = g_bound.state ? g_bound.state->block : DefaultState();
-    key.colorFormat = static_cast<uint32_t>(SwapchainFormat());
-    key.depthFormat = static_cast<uint32_t>(g_depth.format);
+    key.colorFormat = static_cast<uint32_t>(g_frame.pass.colorFormat);
+    key.depthFormat = static_cast<uint32_t>(g_frame.pass.depthFormat);
     key.topology = static_cast<uint8_t>(g_bound.topology == kTopologyLines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
                                                                            : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    key.samples = 1;
+    key.samples = static_cast<uint8_t>(g_frame.pass.samples);
+    key.msrtss = g_frame.pass.msrtss ? 1 : 0;
     key.linked = g_frame.lastValid ? g_frame.lastKey.linked : 0;
     VkPipeline pipeline = VK_NULL_HANDLE;
     if (g_frame.lastValid && std::memcmp(&key, &g_frame.lastKey, sizeof(PipelineKey)) == 0) {
@@ -612,7 +823,7 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
         g_frame.viewport = vp;
         g_frame.viewportSet = true;
     }
-    VkRect2D sc{ { 0, 0 }, g_frame.target.extent };
+    VkRect2D sc{ { 0, 0 }, g_frame.pass.extent };
     if (g_bound.state && g_bound.state->scissorEnable) {
         const Video::Viewport& s = g_bound.scissor;
         const int32_t x0 = std::max(s.x, 0);
@@ -676,13 +887,19 @@ void IssueDraw(bool indexed, uint32_t count, uint32_t instances, uint32_t first,
 // ---- lifecycle ------------------------------------------------------------------------------------
 
 bool DrawStartup(std::string* why) {
-    (void)why;
     g_bound = Bound{};
     g_frame = Frame{};
     g_clear = PendingClear{};
     g_loggedTargets.clear();
-    g_skippedDrawsTotal = 0;
+    g_touched.clear();
     g_logOnce = 0;
+    auto pi = Make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+    pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pi.queueFamilyIndex = LiveGraphicsFamily();
+    if (vkCreateCommandPool(LiveDevice(), &pi, nullptr, &g_readPool) != VK_SUCCESS) {
+        *why = "vkCreateCommandPool (read-back) failed";
+        return false;
+    }
     return true;
 }
 
@@ -699,10 +916,12 @@ void DrawShutdown() {
         s.offset = 0;
         s.pool = 0;
     }
-    if (g_depthAttachmentView) vkDestroyImageView(LiveDevice(), g_depthAttachmentView, nullptr);
-    g_depthAttachmentView = VK_NULL_HANDLE;
-    DestroyImageNow(&g_depth);
-    g_depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    DestroyImageNow(&g_main.depth);
+    DestroyImageNow(&g_main.color);
+    g_main = MainTargets{};
+    if (g_readPool) vkDestroyCommandPool(LiveDevice(), g_readPool, nullptr);
+    g_readPool = VK_NULL_HANDLE;
+    g_touched.clear();
     g_bound = Bound{};
     g_frame = Frame{};
 }
@@ -728,32 +947,60 @@ void DrawBeginFrame(const FrameTarget& target) {
     g_frame.lastPipeline = lastPipeline;
     g_frame.lastValid = lastValid;
     g_clear = PendingClear{};
+    g_swap.image = target.image;
+    g_swap.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    g_swap.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    g_touched.clear();
+}
+
+// Copies (or blits, where the formats or sizes differ) mip 0 of `src` into `dst`; both already moved
+// to TRANSFER_SRC / TRANSFER_DST.
+void CopyColor(VkCommandBuffer cb, VkImage src, VkFormat srcFormat, VkExtent2D srcExtent, VkImage dst,
+               VkFormat dstFormat, VkExtent2D dstExtent) {
+    if (srcFormat == dstFormat && srcExtent.width == dstExtent.width && srcExtent.height == dstExtent.height) {
+        VkImageCopy c{};
+        c.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        c.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        c.extent = { srcExtent.width, srcExtent.height, 1 };
+        vkCmdCopyImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        return;
+    }
+    VkImageBlit b{};
+    b.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    b.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    b.srcOffsets[1] = { static_cast<int32_t>(srcExtent.width), static_cast<int32_t>(srcExtent.height), 1 };
+    b.dstOffsets[1] = { static_cast<int32_t>(dstExtent.width), static_cast<int32_t>(dstExtent.height), 1 };
+    vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
+                   VK_FILTER_NEAREST);
 }
 
 void DrawEndFrame() {
     if (!g_frame.active) return;
-    // A frame that drew nothing still presents a defined image: its clear (or black).
-    if (!g_frame.colorReady || g_clear.color || g_clear.depth || g_clear.stencil) {
-        if (!g_frame.colorReady && !g_clear.color) g_clear.color = true;
-        EndPass();
-        EnsurePass();
-    }
+    FlushPendingClear();
     EndPass();
-    VkImageMemoryBarrier2 b = Make<VkImageMemoryBarrier2>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
-    b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-    b.dstAccessMask = 0;
-    b.oldLayout = g_frame.colorReady ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
-    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = g_frame.target.image;
-    b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    VkDependencyInfo d = Make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
-    d.imageMemoryBarrierCount = 1;
-    d.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(g_frame.target.cb, &d);
+    VkCommandBuffer cb = g_frame.target.cb;
+    // A frame that drew nothing on the main colour still presents a defined image: black.
+    if (!g_frame.mainDrawn && EnsureMainTargets()) {
+        Target t;
+        MainTarget(&t);
+        g_clear.color = true;
+        BeginPass(t);
+        EndPass();
+    }
+    // Tiler MSAA: the frame is in the backend's colour image; the swap-chain image gets a copy.
+    if (g_main.samples > 1 && g_main.msrtss && g_main.color.image) {
+        TransitionImage(g_main.colorState, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, &g_barriers);
+        TransitionImage(g_swap, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &g_barriers);
+        FlushBarriers(cb, &g_barriers);
+        CopyColor(cb, g_main.color.image, g_main.color.format, g_main.extent, g_swap.image, SwapchainFormat(),
+                  g_frame.target.extent);
+    }
+    TransitionImage(g_swap, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, &g_barriers);
+    // Every companion image this frame used goes back to SHADER_READ_ONLY (resources.h ImageState).
+    for (ImageState* s : g_touched)
+        TransitionImage(*s, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, &g_barriers);
+    g_touched.clear();
+    FlushBarriers(cb, &g_barriers);
     g_frame.active = false;
 }
 
@@ -766,13 +1013,13 @@ void DrawLogFrame(uint64_t frame, const Video::Context* context) {
     uint32_t batches = 0;
     TakeUploadStats(&uploadBytes, &batches);
     std::fprintf(stderr,
-                 "[Vulkan] frame=%llu draws=%d triangles=%d vertices=%d objects=%d | passes=%u sets=%u "
-                 "ring=%lluB skipped(other targets)=%u clears-skipped=%u failed=%u | pipelines +%u built +%u warmed "
+                 "[Vulkan] frame=%llu draws=%d triangles=%d vertices=%d objects=%d | passes=%u (other targets %u) "
+                 "resolves=%u reads=%u sets=%u ring=%lluB failed=%u | pipelines +%u built +%u warmed "
                  "%u failed | uploads %llu KB in %u batch(es)\n",
                  static_cast<unsigned long long>(frame), context->_drawsSubmitted, context->_trianglesSubmitted,
-                 context->_verticesSubmitted, context->_objectsSubmitted, g_frame.passes, g_frame.setsAllocated,
-                 static_cast<unsigned long long>(g_frame.ringBytes), g_frame.skippedDraws, g_frame.skippedClears,
-                 g_frame.failedDraws, built, warmed, failed, static_cast<unsigned long long>(uploadBytes >> 10),
+                 context->_verticesSubmitted, context->_objectsSubmitted, g_frame.passes, g_frame.targetPasses,
+                 g_frame.resolves, g_frame.reads, g_frame.setsAllocated,
+                 static_cast<unsigned long long>(g_frame.ringBytes), g_frame.failedDraws, built, warmed, failed, static_cast<unsigned long long>(uploadBytes >> 10),
                  batches);
 }
 
@@ -822,25 +1069,11 @@ void DrawSetConstants(const ConstantBufferData* cb, bool vertexStage, uint32_t s
 }
 
 void DrawSetRenderBuffer(const Video::RenderBuffer* rb) {
-    bool main = false;
-    if (rb && rb->colorBuffer && rb->colorBuffer->_data) {
-        const auto* color = static_cast<const ImageBufferData*>(rb->colorBuffer->_data);
-        main = color->mainTarget == ImageBufferData::MainTarget::Color;
-    }
-    if (rb == g_bound.target && main == g_bound.targetIsMain) return;
-    g_bound.target = rb;
-    if (main == g_bound.targetIsMain) return;
-    g_bound.targetIsMain = main;
-    if (main) return;   // back on the main target: the next draw begins a pass that loads it
-    // P3: render buffers other than the main one. The pass on the main target ends here; this
-    // buffer's clears and draws are skipped (counted in the frame line).
+    if (rb == g_bound.target) return;
+    // The old target's pending clear lands before the switch; the next draw begins a pass on `rb`.
+    FlushPendingClear();
     EndPass();
-    if (g_loggedTargets.insert(rb).second) {
-        std::fprintf(stderr, "[Vulkan] render buffer %p (%dx%d, colour %s, depth %s) is not the main target: its "
-                             "clears and draws are skipped until P3\n",
-                     static_cast<const void*>(rb), rb ? rb->width : 0, rb ? rb->height : 0,
-                     rb && rb->colorBuffer ? "yes" : "no", rb && rb->depthBuffer ? "yes" : "no");
-    }
+    g_bound.target = rb;
 }
 
 void DrawForget(const void* companion) {
@@ -860,6 +1093,136 @@ void DrawForget(const void* companion) {
             if (c.cb == companion) c = CbBinding{};
         }
     }
+    // P3: a render buffer going away while bound, or an image the active pass renders into.
+    if (g_bound.target == companion) {
+        EndPass();
+        g_bound.target = nullptr;
+        g_clear = PendingClear{};
+    }
+}
+
+void DrawForgetImage(const ImageBufferData* image) {
+    const ImageState* state = &image->state;
+    if (g_frame.passActive && (g_frame.pass.color == state || g_frame.pass.depth == state)) EndPass();
+    auto it = std::find(g_touched.begin(), g_touched.end(), state);
+    if (it != g_touched.end()) g_touched.erase(it);
+}
+
+// ---- P3: copies and read-backs ------------------------------------------------------------------------
+
+void DrawResolve(const Video::RenderBuffer* dst, const Video::RenderBuffer* src) {
+    if (!g_frame.active || !dst || !src) {
+        LogOnce(8, "RenderBuffer::Resolve outside a frame is not recorded");
+        return;
+    }
+    ImageBufferData* to = MutableCompanion(dst->colorBuffer);
+    const ImageBufferData* from = Companion(src->colorBuffer);
+    if (!to || !from || !to->state.image || to->mainTarget != ImageBufferData::MainTarget::None) {
+        LogOnce(16, "RenderBuffer::Resolve into a buffer with no colour image of its own is skipped");
+        return;
+    }
+    FlushPendingClear();
+    EndPass();
+    if (!EnsureMainTargets()) return;
+    VkCommandBuffer cb = g_frame.target.cb;
+    ImageState* source = nullptr;
+    VkFormat sourceFormat = VK_FORMAT_UNDEFINED;
+    VkExtent2D sourceExtent{};
+    if (from->mainTarget == ImageBufferData::MainTarget::Color) {
+        source = MainColorSource();
+        sourceFormat = SwapchainFormat();
+        sourceExtent = g_frame.target.extent;
+    } else if (from->state.image) {
+        source = const_cast<ImageState*>(&from->state);   // CAST-OK: the source is only read
+        sourceFormat = from->image.format;
+        sourceExtent = { from->image.width, from->image.height };
+        Touch(source);
+    } else {
+        return;
+    }
+    TransitionImage(*source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, &g_barriers);
+    TransitionImage(to->state, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &g_barriers);
+    Touch(&to->state);
+    FlushBarriers(cb, &g_barriers);
+    CopyColor(cb, source->image, sourceFormat, sourceExtent, to->image.image, to->image.format,
+              { to->image.width, to->image.height });
+    ++g_frame.resolves;
+}
+
+bool DrawReadImage(ImageBufferData* image, void* dst, int width, int height) {
+    const int format = static_cast<int>(image->_owner->_format);
+    // The Metal backend's rule: no compressed or depth read-back (retail's staging copy is BGRA8, which
+    // D3D11 refuses from those formats too), and nothing past the image.
+    if (format < 3 || format == 7 || !image->image.image || image->mainTarget != ImageBufferData::MainTarget::None ||
+        !dst || width <= 0 || height <= 0 || static_cast<uint32_t>(width) > image->image.width ||
+        static_cast<uint32_t>(height) > image->image.height) {
+        return false;
+    }
+    const uint32_t texel = (format == 3 || format == 4) ? 1u : 4u;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * texel;
+    GpuBuffer readback;
+    std::string why;
+    if (!CreateReadbackBuffer(bytes, &readback, &why)) {
+        std::fprintf(stderr, "[Vulkan] read-back buffer: %s\n", why.c_str());
+        return false;
+    }
+    VkBufferImageCopy region{};
+    region.bufferRowLength = static_cast<uint32_t>(width);
+    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    region.imageExtent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 };
+    auto toHost = Make<VkMemoryBarrier2>(VK_STRUCTURE_TYPE_MEMORY_BARRIER_2);
+    toHost.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toHost.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toHost.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    toHost.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+    VkDependencyInfo hostDep = Make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+    hostDep.memoryBarrierCount = 1;
+    hostDep.pMemoryBarriers = &toHost;
+    if (g_frame.active) {
+        // The recording thread, inside a frame: the image holds what this frame drew into it so far.
+        FlushPendingClear();
+        EndPass();
+        VkCommandBuffer cb = g_frame.target.cb;
+        TransitionImage(image->state, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, &g_barriers);
+        Touch(&image->state);
+        FlushBarriers(cb, &g_barriers);
+        vkCmdCopyImageToBuffer(cb, image->image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1,
+                               &region);
+        vkCmdPipelineBarrier2(cb, &hostDep);
+        g_frame.target.cb = SubmitFrameSoFar();
+        ResetCommandState();
+        ++g_frame.reads;
+    } else {
+        // Between frames (the device lock is held): a command buffer of its own, after the upload batch.
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        auto ai = Make<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+        ai.commandPool = g_readPool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(LiveDevice(), &ai, &cb) != VK_SUCCESS) {
+            DestroyBufferNow(&readback);
+            return false;
+        }
+        auto bi = Make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cb, &bi);
+        const VkImageLayout was = image->state.layout;
+        TransitionImage(image->state, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, &g_barriers);
+        FlushBarriers(cb, &g_barriers);
+        vkCmdCopyImageToBuffer(cb, image->image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1,
+                               &region);
+        vkCmdPipelineBarrier2(cb, &hostDep);
+        if (was != VK_IMAGE_LAYOUT_UNDEFINED) TransitionImage(image->state, was, &g_barriers);
+        FlushBarriers(cb, &g_barriers);
+        vkEndCommandBuffer(cb);
+        FlushUploads();
+        WaitSerial(SubmitCommands(cb, nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE));
+        vkFreeCommandBuffers(LiveDevice(), g_readPool, 1, &cb);
+    }
+    InvalidateBuffer(readback);
+    std::memcpy(dst, readback.mapped, static_cast<size_t>(bytes));
+    DestroyBufferNow(&readback);
+    return true;
 }
 
 // ---- ContextData: the slots that record work (dx11 contextdata.cpp slots 4-19) ------------------------
@@ -867,17 +1230,13 @@ void DrawForget(const void* companion) {
 // Slot 4. The DX11 order: flush the lazily-bound render buffer / viewport / scissor first (a clear
 // targets what is bound), clear the three dirty bits in one AND, then the clears; here a clear is
 // recorded as the next pass's LOAD_OP_CLEAR (draw.h). The colour word is 0xAARRGGBB, each component
-// DIVIDED by 255 as retail does. A clear of a render buffer P2 does not render to is skipped.
+// DIVIDED by 255 as retail does.
 void ContextData::Clear(unsigned flags, unsigned color, float depth, int stencil) {
     if (static_cast<uint8_t>(_owner->_dirty) & 0x01) ContextData::BindRenderBuffer();
     if (_owner->_dirty & 0x200) ContextData::BindViewport();
     if (_owner->_dirty & 0x400) ContextData::BindScissor();
     _owner->_dirty &= 0xfffff9feu;
     if (!g_frame.active) return;
-    if (!g_bound.targetIsMain) {
-        ++g_frame.skippedClears;
-        return;
-    }
     if ((flags & 7) == 0) return;
     EndPass();   // never a mid-pass clear: the next draw begins a pass that clears
     if (flags & 1) {

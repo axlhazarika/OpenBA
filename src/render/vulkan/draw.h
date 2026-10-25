@@ -11,12 +11,33 @@
 // companions' Bind slots record into it (Draw* calls); a draw resolves it into a pipeline, two
 // descriptor sets and the vertex / index buffers.
 //
-// THE PASS (§4.4): dynamic rendering on the swap-chain image plus the backend's depth image, begun
-// lazily at the first draw; a Clear only records intent, so it becomes the pass's LOAD_OP_CLEAR (a
-// Clear after draws ends the pass and the next draw begins a new one: no mid-pass clear is emitted).
-// P2 renders only into the main render buffer: binding another one (shadow map, minimap, the
-// reflection and frame-copy targets) ends the pass, and its clears and draws are skipped and counted
-// (one log line per distinct buffer) until P3.
+// THE PASS (§4.4): dynamic rendering on the bound render buffer's attachments, begun lazily at the
+// first draw; a Clear only records intent, so it becomes the pass's LOAD_OP_CLEAR (a Clear after draws
+// ends the pass and the next draw begins a new one: no mid-pass clear is emitted). A clear nothing draws
+// after still lands: a target change, a Resolve, a read-back or the frame's end runs it as an empty pass.
+//
+// TARGETS (P3). A render buffer's colour and depth are either the MAIN targets (the default render
+// buffer's two images, and every other ImageBuffer AttachColorBuffer / AttachDepthBuffer aliased to
+// them, as FrameCopyImageBuffer's) or a companion's own render-buffer image (ImageBufferData:
+// attachment view + layout state). The main targets are the backend's:
+//   * 1x: the acquired swap-chain image and the backend's depth image (P2's pass);
+//   * MSAA (Configuration::multisample, the dx11 ResolveMultisampleMode index), resolve-attachment path:
+//     a multisampled colour image resolved into the swap-chain image at the end of EVERY main pass, and
+//     a multisampled depth image. Retail resolves its multisampled colour into the back buffer once a
+//     frame (EndCommands); here each pass resolves, so the swap-chain image always holds the resolved
+//     frame so far, which is what the frame copy reads. The multisampled images are stored (not
+//     transient): the main target is split into several passes a frame (the frame copy, read-backs),
+//     and a later pass loads what the earlier one drew;
+//   * MSAA where the device has VK_EXT_multisampled_render_to_single_sampled (the S25): a single-sampled
+//     colour image and depth image made for it, rendered with the tiler's own MSAA (resolved on the
+//     tile), and the colour copied to the swap-chain image at the frame's end.
+// Every other render buffer is single-sampled, as retail's textures are.
+//
+// LAYOUTS (§4.4): every tracked image (resources.h ImageState) is moved with sync2 barriers at pass
+// boundaries only: to an attachment layout when a pass begins on it, to SHADER_READ_ONLY when a draw
+// samples it, to TRANSFER_SRC / DST for a Resolve or a read-back. The frame's end moves every companion
+// image it touched back to SHADER_READ_ONLY and the swap-chain image to PRESENT_SRC. A texture that is
+// an attachment of the bound render buffer reads the placeholder (D3D11 unbinds such an SRV).
 //
 // CONSTANT BUFFERS: a per-frame-slot ring of host-visible chunks; each constant buffer's bytes are
 // copied in at the first draw that reads them after a Bind (or in a new frame), at a 256-byte-or-
@@ -78,7 +99,20 @@ void DrawSetTexture(uint32_t slot, const ImageBufferData* image);
 void DrawSetConstants(const ConstantBufferData* cb, bool vertexStage, uint32_t slot);
 void DrawSetRenderBuffer(const Video::RenderBuffer* renderBuffer);
 // A companion is being destroyed: every binding that names it is dropped (D3D11 holds a reference on
-// what is bound; here the binding just falls back to the placeholder).
+// what is bound; here the binding just falls back to the placeholder). A render buffer's companion
+// passes its owner (the bound target is the Video::RenderBuffer).
 void DrawForget(const void* companion);
+// An image companion is going away or replacing its image: a pass rendering into it ends, and the
+// frame's end no longer moves its state back.
+void DrawForgetImage(const ImageBufferData* image);
+
+// ---- P3: copies and read-backs ---------------------------------------------------------------------------
+// RenderBufferData::Resolve: `src`'s colour into `dst`'s, in the frame's command stream.
+void DrawResolve(const Video::RenderBuffer* dst, const Video::RenderBuffer* src);
+// ImageBufferData::Read: mip 0 of the image into `dst`, `width` x `height` texels, rows `width` texels
+// apart. Synchronous: inside a frame the frame's commands so far are submitted first (SubmitFrameSoFar),
+// outside one a command buffer of its own is submitted and waited for. False for a format the read
+// cannot express (compressed, depth) or a size past the image's.
+bool DrawReadImage(ImageBufferData* image, void* dst, int width, int height);
 
 }  // namespace VideoVulkan

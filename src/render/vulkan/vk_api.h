@@ -126,6 +126,9 @@ namespace VideoVulkan {
     X(vkDestroyPipeline)                                 \
     X(vkCmdCopyBuffer)                                   \
     X(vkCmdCopyBufferToImage)                            \
+    X(vkCmdCopyImage)                                    \
+    X(vkCmdBlitImage)                                    \
+    X(vkCmdCopyImageToBuffer)                            \
     X(vkCmdFillBuffer)                                   \
     X(vkCmdClearDepthStencilImage)                       \
     X(vkCmdBeginRendering)                               \

@@ -422,7 +422,8 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     blend.alphaBlendOp = static_cast<VkBlendOp>(s.blendOp);
     blend.colorWriteMask = ps ? s.writeMask : 0;   // no pixel shader: nothing reaches the colour target
     auto cb = Make<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
-    cb.attachmentCount = 1;
+    // No colour attachment (the shadow map's depth-only pass): no blend state either.
+    cb.attachmentCount = key.colorFormat != VK_FORMAT_UNDEFINED ? 1 : 0;
     cb.pAttachments = &blend;
     const VkDynamicState dynamics[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
                                         VK_DYNAMIC_STATE_STENCIL_REFERENCE,
@@ -437,6 +438,12 @@ VkPipeline BuildPipeline(const PipelineKey& key, const ShaderEntry* vs, const Sh
     ri.pColorAttachmentFormats = &color;
     ri.depthAttachmentFormat = depth;
     ri.stencilAttachmentFormat = HasStencil(depth) ? depth : VK_FORMAT_UNDEFINED;
+    // P3: the tiler's MSAA on single-sampled attachments (VK_EXT_multisampled_render_to_single_sampled).
+    auto msrtss = Make<VkMultisampledRenderToSingleSampledInfoEXT>(
+        VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
+    msrtss.multisampledRenderToSingleSampledEnable = VK_TRUE;
+    msrtss.rasterizationSamples = static_cast<VkSampleCountFlagBits>(key.samples);
+    if (key.msrtss) ri.pNext = &msrtss;
 
     auto pi = Make<VkGraphicsPipelineCreateInfo>(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
     pi.pNext = &ri;

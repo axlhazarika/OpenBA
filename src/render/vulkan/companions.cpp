@@ -6,9 +6,9 @@
 // vertexlayoutdata.cpp, renderstatedata.cpp); the GPU objects come from resources.h, the pipeline
 // pieces from pipelines.h, and every Bind records into the bound state of draw.h.
 //
-// P2 (docs/vulkan/PLAN.md §5): everything here is real except two read-backs that are P3:
-// ImageBufferData::Read answers false (so the game cursor and screenshots see "not readable"), and
-// RenderBufferData::Resolve does nothing (render buffers other than the main one are P3).
+// P2 (docs/vulkan/PLAN.md §5): everything here is real. P3: a render-buffer image gets an attachment
+// view and layout tracking (draw.h TARGETS / LAYOUTS), and ImageBufferData::Read reads back through
+// draw.cpp (DrawReadImage).
 //
 // The buffers' Serialize is part of the resource stream format (a mesh's vertex and index bytes sit
 // inline in the .rsc after `dynamic` and `size`): the load arm reads them and creates the buffer from
@@ -266,22 +266,37 @@ uint8_t Pick(const uint8_t (&table)[N], int index, uint8_t fallback) {
 // ---- ImageBufferData (AttachColorBuffer / AttachDepthBuffer are in device.cpp: they alias the
 // main targets) ---------------------------------------------------------------------------
 
+// The attachment view of a render-buffer image (retired with it: the frame being recorded may use it).
+static void RetireAttachmentView(VkImageView* view) {
+    if (!*view) return;
+    VkImageView v = *view;
+    *view = VK_NULL_HANDLE;
+    Retire([v]() {
+        if (LiveDevice()) vkDestroyImageView(LiveDevice(), v, nullptr);
+    });
+}
+
 ImageBufferData::~ImageBufferData() {
     DrawForget(this);
+    DrawForgetImage(this);
+    RetireAttachmentView(&attachmentView);
     RetireImage(&image);
 }
 
 // Slot 3 (dx11 Create). Same early-out (a non-generated, non-rendered owner with no extent makes
 // nothing), same shape: 2D or a cube (6 layers), one mip or the full chain (dx11 MipLevels =
 // ~flags & 1, 0 meaning the full chain), the level arrays face-major as D3D11's subresource order.
-// A render-buffer kind gets attachment usage (P3 renders into it); every image is created readable:
-// uploaded, or cleared (colour 0, depth 1) when it has no levels.
+// A render-buffer kind gets attachment usage (draw.h TARGETS renders into it); every image is created
+// readable: uploaded, or cleared (colour 0, depth 1) when it has no levels.
 bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>* levels) {
     Video::ImageBuffer* const ib = _owner;
     const int width = ib->Width();
     const int height = ib->Height();
     if (!ib->IsGenerated() && !ib->IsRendered() && (width == 0 || height == 0)) return true;
+    DrawForgetImage(this);
+    RetireAttachmentView(&attachmentView);
     RetireImage(&image);
+    state = ImageState{};
     const int format = static_cast<int>(ib->_format);
     const VkFormat vkFormat = ImageFormat(format);
     if (vkFormat == VK_FORMAT_UNDEFINED) {
@@ -303,12 +318,31 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
     if (ib->IsRenderBuffer()) {
         desc.usage = ib->IsDepthBuffer() ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                                          : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        desc.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
     std::string why;
     if (!CreateImage(desc, &image, &why)) {
         std::fprintf(stderr, "[Vulkan] image %dx%d format %d: %s\n", width, height, format, why.c_str());
         return false;
+    }
+    // P3: every image is tracked from here (ClearImage / UploadImage below leave it SHADER_READ_ONLY in
+    // the upload batch, which runs before any frame that uses it). A 2D render-buffer image also gets
+    // dx11's RTV / DSV: the attachment view over mip 0 and every aspect, no swizzle (a cube gets none,
+    // as dx11 makes none).
+    state.image = image.image;
+    state.aspect = image.aspect;
+    state.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (ib->IsRenderBuffer() && !cube) {
+        VkImageViewCreateInfo vi = Make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+        vi.image = image.image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = image.format;
+        vi.subresourceRange = { image.aspect, 0, 1, 0, 1 };
+        const VkResult r = vkCreateImageView(LiveDevice(), &vi, nullptr, &attachmentView);
+        if (r != VK_SUCCESS) {
+            std::fprintf(stderr, "[Vulkan] attachment view %dx%d format %d: %s\n", width, height, format,
+                         ResultName(r));
+            attachmentView = VK_NULL_HANDLE;
+        }
     }
     sampler = GetSampler(SamplerFor(ib, false));
     pointSampler = GetSampler(SamplerFor(ib, true));
@@ -381,14 +415,15 @@ bool ImageBufferData::Update(void* data, int width, int height) {
     return true;
 }
 
-// Slot 6: P3. The image read-back (dx11 copies to a staging texture and maps it) needs the
-// render-target work; until then it answers "not readable", which the cursor copy and the screenshot
-// path both handle.
+// Slot 6 (dx11 0x180002ef0: a staging copy, Map READ_WRITE, rows `width * 4` bytes apart). Under the
+// device lock (the Metal backend's rule): a caller outside the frame waits for the recording thread's
+// frame to end; the recording thread itself (minimap, save thumbnail, screenshot) reads inside it.
 bool ImageBufferData::Read(void* dst, int width, int height) {
-    (void)dst;
-    (void)width;
-    (void)height;
-    return false;
+    Video::Device* const dev = Video::Device::_singleton;
+    dev->Lock();
+    const bool ok = DrawReadImage(this, dst, width, height);
+    dev->Unlock();
+    return ok;
 }
 
 // ---- IndexBufferData -----------------------------------------------------------------------
@@ -502,6 +537,12 @@ int32_t ConstantBufferData::SlotIndexPlusOne() {
 }
 
 // ---- RenderBufferData (Bind / Resolve are in device.cpp with the targets) -------------------
+
+// Retail's destructor is empty (the views belong to the images). Here the bound target names the
+// owner, so a render buffer released while bound stops being the target (draw.cpp).
+RenderBufferData::~RenderBufferData() {
+    DrawForget(_owner);
+}
 
 bool RenderBufferData::Slot1() {
     return true;

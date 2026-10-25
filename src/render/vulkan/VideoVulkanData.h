@@ -10,9 +10,9 @@
 //
 // P0 (docs/vulkan/PLAN.md §5): the device, swap chain and frame loop are real. P1: the two
 // program classes convert their DXBC to SPIR-V shader modules. P2: buffers, images, layouts,
-// states and the draws are real (resources.h, pipelines.h, draw.h); render buffers other than the
-// main one are P3. No retail layout constraints apply to a backend subclass's own members (the
-// base pins the two words every companion starts with).
+// states and the draws are real (resources.h, pipelines.h, draw.h); P3: the render buffers
+// (draw.h TARGETS) and the image read-back. No retail layout constraints apply to a backend
+// subclass's own members (the base pins the two words every companion starts with).
 // ============================================================================
 
 #include "vk_api.h"
@@ -49,6 +49,10 @@ public:
     Video::RenderStateData* CreateRenderStateData(Video::RenderState* owner) override;
     Video::VideoProgramData* CreateVideoProgramData(Video::VideoProgram* owner) override;
     Video::RenderBufferData* CreateRenderBufferData(Video::RenderBuffer* owner) override;
+    // SetImageBuffer's cache (dx11 DeviceData +0x50 / +0x58 / +0x5c).
+    Video::ImageBuffer* cursorImage = nullptr;
+    int cursorHotX = 0;
+    int cursorHotY = 0;
 };
 
 class ContextData final : public Video::ContextData {
@@ -97,6 +101,10 @@ public:
     VkSampler pointSampler = VK_NULL_HANDLE;
     enum class MainTarget : uint8_t { None, Color, Depth };
     MainTarget mainTarget = MainTarget::None;
+    // P3, a render-buffer image (ImageBuffer::IsRenderBuffer, 2D): the attachment view (mip 0, every
+    // aspect, no swizzle: dx11's RTV / DSV) and the layout tracking (draw.cpp).
+    VkImageView attachmentView = VK_NULL_HANDLE;
+    ImageState state;
 };
 
 // The storage of a vertex or index buffer (companions.cpp). A static buffer is one device-local
@@ -163,7 +171,7 @@ public:
 class RenderBufferData final : public Video::RenderBufferData {
 public:
     explicit RenderBufferData(Owner* o) : Video::RenderBufferData(o) {}
-    ~RenderBufferData() override = default;
+    ~RenderBufferData() override;
     bool Slot1() override;
     void Bind(void* context) override;
     void Resolve(void* context, Video::RenderBuffer* other, bool flag) override;

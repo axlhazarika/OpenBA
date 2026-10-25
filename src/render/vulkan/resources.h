@@ -95,6 +95,10 @@ void UploadBuffer(const GpuBuffer& dst, VkDeviceSize offset, const void* data, V
 // Reads `size` bytes of a buffer back into `dst`, synchronously (the pending batch is submitted and
 // waited for). False when the buffer is not alive.
 bool ReadBuffer(const GpuBuffer& src, void* dst, VkDeviceSize size);
+// A host-visible, persistently mapped TRANSFER_DST buffer for an image read-back (P3, draw.cpp).
+// Read it after the copy's serial completed and InvalidateBuffer.
+bool CreateReadbackBuffer(VkDeviceSize size, GpuBuffer* out, std::string* why);
+void InvalidateBuffer(const GpuBuffer& b);
 // Destroys the buffer now (a no-op for an empty one or one the shutdown already took) and empties *b.
 void DestroyBufferNow(GpuBuffer* b);
 // Hands the buffer to the retire queue and empties *b.
@@ -108,7 +112,13 @@ struct ImageDesc {
     uint32_t layers = 1;          // 6 for a cube
     bool cube = false;
     VkFormat format = VK_FORMAT_UNDEFINED;
-    VkImageUsageFlags usage = 0;  // SAMPLED and TRANSFER_DST are always added
+    VkImageUsageFlags usage = 0;  // SAMPLED, TRANSFER_SRC and TRANSFER_DST are added unless attachmentOnly
+    // P3, the backend's own main targets (draw.cpp): a multisampled image, extra create flags
+    // (VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT), and an attachment-only image
+    // (`usage` exactly as given, no sampled view: `view` is the attachment view over every aspect).
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    VkImageCreateFlags flags = 0;
+    bool attachmentOnly = false;
     VkComponentMapping swizzle{ VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                                 VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
 };
@@ -133,6 +143,23 @@ struct ImageRegion {
     uint32_t width = 0;
     uint32_t height = 0;
 };
+
+// The layout tracking of one image (P3, draw.cpp): the render targets, the backend's main targets and
+// the acquired swap-chain image. `layout` is what the command stream leaves the image in at the point
+// being recorded. Every image a companion owns is SHADER_READ_ONLY_OPTIMAL between frames (the frame's
+// end puts back the render targets it used), which is what UploadImage / ClearImage assume.
+struct ImageState {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageAspectFlags aspect = 0;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+// Appends the barrier that moves `state` to `layout` (stages and accesses derived from the two
+// layouts; synchronization2) to `out`, and records the new layout. A move between two equal attachment
+// or transfer-write layouts still emits a memory dependency (two passes writing one attachment); an
+// equal read-only layout emits nothing.
+void TransitionImage(ImageState& state, VkImageLayout layout, std::vector<VkImageMemoryBarrier2>* out);
+// Issues the collected barriers in one vkCmdPipelineBarrier2 and empties the list.
+void FlushBarriers(VkCommandBuffer cb, std::vector<VkImageMemoryBarrier2>* barriers);
 
 // Makes the image and its view. Its contents are undefined until UploadImage or ClearImage.
 bool CreateImage(const ImageDesc& desc, GpuImage* out, std::string* why);

@@ -129,7 +129,8 @@ struct PipelineKey {
     uint8_t topology = 0;        // VkPrimitiveTopology
     uint8_t samples = 1;
     uint8_t linked = 0;          // the pixel shader is the pair's linked conversion
-    uint8_t pad[9] = {};
+    uint8_t msrtss = 0;          // P3: `samples` is the tiler's MSAA on single-sampled attachments
+    uint8_t pad[8] = {};
 };
 static_assert(sizeof(PipelineKey) == 72, "PipelineKey is hashed as bytes: no padding");
 

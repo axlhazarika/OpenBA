@@ -573,6 +573,10 @@ bool CreateStaticBuffer(VkDeviceSize size, VkBufferUsageFlags usage, const void*
     std::lock_guard<std::mutex> guard(g_uploadLock);
     UploadBatch* b = OpenBatchLocked();
     vkCmdFillBuffer(b->cb, out->buffer, 0, VK_WHOLE_SIZE, 0);
+    // A SetData later in the same batch copies over the fill (synchronization validation: write after
+    // write): the fill lands first.
+    MemoryBarrier(b->cb, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     return true;
 }
 
@@ -630,6 +634,15 @@ bool ReadBuffer(const GpuBuffer& src, void* dst, VkDeviceSize size) {
     return true;
 }
 
+bool CreateReadbackBuffer(VkDeviceSize size, GpuBuffer* out, std::string* why) {
+    return MakeBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, 0, out, why);
+}
+
+void InvalidateBuffer(const GpuBuffer& b) {
+    if (b.allocation) vmaInvalidateAllocation(g_allocator, b.allocation, 0, VK_WHOLE_SIZE);
+}
+
 void DestroyBufferNow(GpuBuffer* b) {
     if (!b->buffer) return;
     {
@@ -662,19 +675,22 @@ bool CreateImage(const ImageDesc& desc, GpuImage* out, std::string* why) {
     }
     const bool depth = IsDepthFormat(desc.format);
     VkImageCreateInfo ii = Make<VkImageCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
-    ii.flags = desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+    ii.flags = (desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0) | desc.flags;
     ii.imageType = VK_IMAGE_TYPE_2D;
     ii.format = desc.format;
     ii.extent = { std::max(desc.width, 1u), std::max(desc.height, 1u), 1 };
     ii.mipLevels = std::max(desc.mips, 1u);
     ii.arrayLayers = std::max(desc.layers, 1u);
-    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.samples = desc.samples;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = desc.usage | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ii.usage = desc.attachmentOnly ? desc.usage
+                                   : (desc.usage | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VmaAllocationCreateInfo ai{};
-    ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    ai.usage = (ii.usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) ? VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED
+                                                                      : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     VkResult r = vmaCreateImage(g_allocator, &ii, &ai, &out->image, &out->allocation, nullptr);
     if (r != VK_SUCCESS) {
         *why = std::string("vmaCreateImage: ") + ResultName(r);
@@ -693,9 +709,11 @@ bool CreateImage(const ImageDesc& desc, GpuImage* out, std::string* why) {
     vi.viewType = desc.cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     vi.format = desc.format;
     vi.components = desc.swizzle;
-    // A depth image is sampled through its depth aspect (retail's R24_UNORM_X8_TYPELESS view).
-    vi.subresourceRange = { depth ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT) : out->aspect, 0,
-                            out->mips, 0, out->layers };
+    // A depth image is sampled through its depth aspect (retail's R24_UNORM_X8_TYPELESS view); an
+    // attachment-only image's view is the attachment view over every aspect.
+    const bool depthOnlyView = depth && !desc.attachmentOnly;
+    vi.subresourceRange = { depthOnlyView ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT) : out->aspect,
+                            0, out->mips, 0, out->layers };
     r = vkCreateImageView(Dev(), &vi, nullptr, &out->view);
     if (r != VK_SUCCESS) {
         *why = std::string("vkCreateImageView: ") + ResultName(r);
@@ -789,6 +807,77 @@ void RetireImage(GpuImage* image) {
     Retire([copy]() mutable {
         DestroyImageNow(&copy);
     });
+}
+
+// ---- layout tracking ----------------------------------------------------------------------------
+
+namespace {
+
+// What a layout means for one half of a barrier: the stages that touch an image in it and how.
+struct LayoutUse {
+    VkPipelineStageFlags2 stages;
+    VkAccessFlags2 access;
+    bool writes;
+};
+
+constexpr VkPipelineStageFlags2 kDepthStages =
+    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+
+LayoutUse UseOf(VkImageLayout layout) {
+    switch (layout) {
+    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+        return { VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, true };
+    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+        return { kDepthStages,
+                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, true };
+    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+        return { VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false };
+    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        return { VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, false };
+    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+        return { VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, true };
+    case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+        // As a destination: the presentation engine waits on the frame's semaphore.
+        return { VK_PIPELINE_STAGE_2_NONE, 0, false };
+    default:
+        // UNDEFINED (a fresh image, or the acquired swap-chain image): no contents to keep, but the last
+        // frame's work on the same memory, and the acquire semaphore (waited at colour output), come first.
+        return { VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | kDepthStages | VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
+                 false };
+    }
+}
+
+}  // namespace
+
+void TransitionImage(ImageState& state, VkImageLayout layout, std::vector<VkImageMemoryBarrier2>* out) {
+    if (!state.image) return;
+    const LayoutUse from = UseOf(state.layout);
+    const LayoutUse to = UseOf(layout);
+    if (state.layout == layout && !from.writes) return;
+    VkImageMemoryBarrier2 b = Make<VkImageMemoryBarrier2>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+    b.srcStageMask = from.stages;
+    b.srcAccessMask = from.writes ? from.access : 0;
+    b.dstStageMask = to.stages;
+    b.dstAccessMask = to.access;
+    b.oldLayout = state.layout;
+    b.newLayout = layout;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = state.image;
+    b.subresourceRange = { state.aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+    out->push_back(b);
+    state.layout = layout;
+}
+
+void FlushBarriers(VkCommandBuffer cb, std::vector<VkImageMemoryBarrier2>* barriers) {
+    if (barriers->empty()) return;
+    VkDependencyInfo d = Make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+    d.imageMemoryBarrierCount = static_cast<uint32_t>(barriers->size());
+    d.pImageMemoryBarriers = barriers->data();
+    vkCmdPipelineBarrier2(cb, &d);
+    barriers->clear();
 }
 
 bool FormatSampleable(VkFormat format) {

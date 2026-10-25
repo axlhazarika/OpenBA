@@ -33,6 +33,7 @@
 #include "app/options.h"
 #include "boot_window.h"   // BootWindow::ArmDeferredShow (src/app): the deferred first show
 #include "stall_debug.h"   // StallDebug::Mark (src/diag): the boot timeline
+#include "platform/common/cursor_image.h"            // Platform::Cursor::SetFromTexels
 #include "platform/common/platform_window.h"         // Platform::Window::ShowDefault
 #include "platform/common/platform_window_hooks.h"   // Platform::Window::QueryScreenForModes
 #include "display_geometry.h"                        // Platform::Window::BuildResolutionList
@@ -61,8 +62,12 @@ namespace {
 
 struct Frame {
     VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer commands = VK_NULL_HANDLE;
-    VkFence done = VK_NULL_HANDLE;              // signalled when this slot's submit completed
+    VkCommandBuffer commands = VK_NULL_HANDLE;   // the one being recorded (the first, or a split's)
+    VkCommandBuffer first = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> extra;          // SubmitFrameSoFar's continuations, reused per frame
+    uint32_t extraUsed = 0;
+    bool acquireWaited = false;                  // a split submit already waited on imageAvailable
+    VkFence done = VK_NULL_HANDLE;               // signalled when this slot's submit completed
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
 };
 
@@ -89,6 +94,7 @@ Caps caps;
 VkPhysicalDeviceProperties deviceProperties{};
 int lastFullscreen = -1;
 uint64_t frameCount = 0;
+uint32_t mainSamples = 1;   // MainSampleCount (device_objects.h)
 bool resourcesUp = false;   // ResourcesStartup / PipelinesStartup / DrawStartup ran
 // The shader modules CreateShaderModule made and nothing destroyed yet (device_objects.h); Shutdown
 // destroys the rest before the device. Its own lock: programs are created on the loader thread too.
@@ -247,6 +253,21 @@ bool HasDeviceExtension(VkPhysicalDevice pd, const char* name) {
         if (std::strcmp(p.extensionName, name) == 0) return true;
     }
     return false;
+}
+
+// dx11 devicedata.cpp ResolveMultisampleMode (0x180004510): clamp the configuration's index to the
+// adapter's list, walk down to a supported mode, write the index back when it changed, answer index + 1.
+// The adapter list (Enumerate) marks only the counts the device has for colour and depth together.
+uint32_t ResolveMultisampleMode(Video::Device* dev) {
+    Video::Configuration* cfg = Video::Configuration::_singleton;
+    if (!cfg) return 1;
+    int index = cfg->multisample;
+    if (index >= dev->GetMultisampleModeCount()) index = dev->GetMultisampleModeCount() - 1;
+    while (index > 0 && !dev->IsMultisampleModeSupported(index))
+        --index;
+    if (index < 0) index = 0;   // NOT RETAIL: retail's walk has no floor (mode 0 is always supported)
+    if (cfg->multisample != index) cfg->multisample = index;
+    return static_cast<uint32_t>(index + 1);
 }
 
 // ---- the swap chain ---------------------------------------------------------------------------
@@ -412,6 +433,13 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
     }
     if (cw > 0 && ch > 0 && device) {
         vkDeviceWaitIdle(device);
+        // Options Apply may change the multisample index: the main targets follow (draw.cpp remakes
+        // them through DrawTargetsChanged, which the swap-chain rebuild below calls).
+        const uint32_t samples = ResolveMultisampleMode(dev);
+        if (samples != mainSamples) {
+            std::fprintf(stderr, "[Vulkan] multisample %ux -> %ux\n", mainSamples, samples);
+            mainSamples = samples;
+        }
         // Apply also changes shadowScalar without changing the window: recreate every dynamic
         // image / render buffer so the engine's extents agree with the new back buffer.
         dev->ReleaseDynamic();
@@ -426,6 +454,7 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
 
 void DestroyFrames() {
     for (Frame& f : frames) {
+        f.extra.clear();   // freed with the pool
         if (f.done) vkDestroyFence(device, f.done, nullptr);
         if (f.imageAvailable) vkDestroySemaphore(device, f.imageAvailable, nullptr);
         if (f.pool) vkDestroyCommandPool(device, f.pool, nullptr);
@@ -448,10 +477,11 @@ bool CreateFrames(std::string* why) {
         ai.commandPool = f.pool;
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ai.commandBufferCount = 1;
-        if (vkAllocateCommandBuffers(device, &ai, &f.commands) != VK_SUCCESS) {
+        if (vkAllocateCommandBuffers(device, &ai, &f.first) != VK_SUCCESS) {
             *why = "vkAllocateCommandBuffers failed";
             return false;
         }
+        f.commands = f.first;
         VkFenceCreateInfo fi = Make<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
         fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         vkCreateFence(device, &fi, nullptr, &f.done);
@@ -509,6 +539,37 @@ VkFormat DepthStencilFormat() {
 
 VkFormat SwapchainFormat() {
     return swapFormat;
+}
+
+uint32_t MainSampleCount() {
+    return mainSamples;
+}
+
+VkCommandBuffer SubmitFrameSoFar() {
+    Frame& f = frames[frameSlot];
+    vkEndCommandBuffer(f.commands);
+    FlushUploads();
+    VkSemaphoreSubmitInfo wait = Make<VkSemaphoreSubmitInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO);
+    wait.semaphore = f.imageAvailable;
+    wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const uint64_t serial = SubmitCommands(f.commands, f.acquireWaited ? nullptr : &wait, VK_NULL_HANDLE,
+                                           VK_NULL_HANDLE);
+    f.acquireWaited = true;
+    WaitSerial(serial);
+    if (f.extraUsed == f.extra.size()) {
+        auto ai = Make<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+        ai.commandPool = f.pool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vkAllocateCommandBuffers(device, &ai, &cb);
+        f.extra.push_back(cb);
+    }
+    f.commands = f.extra[f.extraUsed++];
+    VkCommandBufferBeginInfo bi = Make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(f.commands, &bi);
+    return f.commands;
 }
 
 // ---- device objects (device_objects.h) ----------------------------------------------------------
@@ -634,7 +695,10 @@ bool DeviceData::CreateDevice() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
     auto have12 = Make<VkPhysicalDeviceVulkan12Features>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES);
+    auto have11 = Make<VkPhysicalDeviceVulkan11Features>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES);
     have13.pNext = &have12;
+    have12.pNext = &have11;
     auto have2 = Make<VkPhysicalDeviceFeatures2>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
     have2.pNext = &have13;
@@ -658,6 +722,14 @@ bool DeviceData::CreateDevice() {
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_D24_UNORM_S8_UINT, &fp);
         caps.d24s8 = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+    }
+    if (HasDeviceExtension(physical, VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME)) {
+        auto msrtss = Make<VkPhysicalDeviceMultisampledRenderToSingleSampledFeaturesEXT>(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_FEATURES_EXT);
+        auto probe = Make<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
+        probe.pNext = &msrtss;
+        vkGetPhysicalDeviceFeatures2(physical, &probe);
+        caps.msrtss = msrtss.multisampledRenderToSingleSampled != 0;
     }
     caps.colorSamples = deviceProperties.limits.framebufferColorSampleCounts;
     caps.samplerAnisotropy = have2.features.samplerAnisotropy != 0;
@@ -730,10 +802,19 @@ bool DeviceData::CreateDevice() {
     if (caps.pushDescriptor) extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     if (caps.vertexInputDynamicState) extensions.push_back(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     if (caps.extendedDynamicState2) extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
+    if (caps.msrtss) extensions.push_back(VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME);
     auto want13 = Make<VkPhysicalDeviceVulkan13Features>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
     want13.dynamicRendering = VK_TRUE;
     want13.synchronization2 = VK_TRUE;
+    // The converted shaders (dxbc-spirv) rely on these when present: maintenance4 lets a vertex output
+    // be wider than the pixel input it feeds (D3D's register linking), shaderDrawParameters backs the
+    // DrawParameters capability (SV_InstanceID's base). Validation flags their absence.
+    want13.maintenance4 = have13.maintenance4;
+    want13.shaderDemoteToHelperInvocation = have13.shaderDemoteToHelperInvocation;   // D3D discard
+    auto want11 = Make<VkPhysicalDeviceVulkan11Features>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES);
+    want11.shaderDrawParameters = have11.shaderDrawParameters;
     auto want12 = Make<VkPhysicalDeviceVulkan12Features>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES);
     want12.timelineSemaphore = have12.timelineSemaphore;
@@ -747,7 +828,11 @@ bool DeviceData::CreateDevice() {
     auto wantEds2 = Make<VkPhysicalDeviceExtendedDynamicState2FeaturesEXT>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT);
     wantEds2.extendedDynamicState2 = VK_TRUE;
-    void** tail = &want12.pNext;
+    auto wantMsrtss = Make<VkPhysicalDeviceMultisampledRenderToSingleSampledFeaturesEXT>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_FEATURES_EXT);
+    wantMsrtss.multisampledRenderToSingleSampled = VK_TRUE;
+    want12.pNext = &want11;
+    void** tail = &want11.pNext;
     if (caps.vertexInputDynamicState) {
         *tail = &wantVids;
         tail = &wantVids.pNext;
@@ -755,6 +840,10 @@ bool DeviceData::CreateDevice() {
     if (caps.extendedDynamicState2) {
         *tail = &wantEds2;
         tail = &wantEds2.pNext;
+    }
+    if (caps.msrtss) {
+        *tail = &wantMsrtss;
+        tail = &wantMsrtss.pNext;
     }
     auto want2 = Make<VkPhysicalDeviceFeatures2>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
@@ -780,8 +869,9 @@ bool DeviceData::CreateDevice() {
     vkGetDeviceQueue(device, graphicsFamily, 0, &queue);
     StallDebug::Mark("  Vulkan vkCreateDevice");
 
-    // 11 -- the frames and the swap chain.
+    // 11 -- the frames, the main targets' sample count, and the swap chain.
     if (!CreateFrames(&why)) return Fail("Vulkan: " + why);
+    mainSamples = ResolveMultisampleMode(dev);
     if (!CreateSwapchain(w, &why)) return Fail("Vulkan: " + why);
     frameSlot = 0;
     frameCount = 0;
@@ -797,12 +887,13 @@ bool DeviceData::CreateDevice() {
 
     std::fprintf(stderr,
                  "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d "
-                 "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d validation=%d\n",
+                 "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d; "
+                 "multisample %ux\n",
                  deviceProperties.deviceName, DeviceTypeName(deviceProperties.deviceType),
                  VK_API_VERSION_MAJOR(caps.apiVersion), VK_API_VERSION_MINOR(caps.apiVersion),
                  VK_API_VERSION_PATCH(caps.apiVersion), deviceProperties.driverVersion, caps.pushDescriptor,
                  caps.vertexInputDynamicState, caps.extendedDynamicState2, caps.loadStoreOpNone, caps.d24s8,
-                 caps.validation);
+                 caps.msrtss, caps.validation, mainSamples);
     return true;
 }
 
@@ -866,13 +957,29 @@ bool DeviceData::Slot7() {
     return true;
 }
 
-// Retail slot 8 (dx11 devicedata.cpp): the game cursor from a 32x32 ImageBuffer. It needs the
-// texture read-back (ImageBufferData::Read), which is P3 with the render targets; until then the
-// cursor stays the platform's. The Metal body is the template.
+// Retail slot 8 (dx11 devicedata.cpp 0x180005450): the game cursor from a 32x32 ImageBuffer, rebuilt
+// only when (image, hotspot) change. The texels are read back under the device lock as retail does; the
+// SDL platform builds the cursor from them with retail's 1-bit classification (Platform::Cursor::
+// SetFromTexels, the Metal backend's route).
 void DeviceData::SetImageBuffer(Video::ImageBuffer* imageBuffer, int hotX, int hotY) {
-    (void)imageBuffer;
-    (void)hotX;
-    (void)hotY;
+    if (imageBuffer == cursorImage && hotX == cursorHotX && hotY == cursorHotY) return;
+    uint32_t texels[32 * 32];
+    _owner->Lock();
+    const bool ok = imageBuffer->CopyFromTexture(texels, 32, 32);
+    _owner->Unlock();
+    if (!ok) {
+        std::fprintf(stderr, "[Vulkan] cursor image %p not readable: the platform cursor stays\n",
+                     static_cast<void*>(imageBuffer));
+        return;
+    }
+    Platform::Cursor::SetFromTexels(texels, hotX, hotY);
+    if (!cursorImage) {
+        std::fprintf(stderr, "[Vulkan] cursor set from image %p (format %d, hotspot %d,%d)\n",
+                     static_cast<void*>(imageBuffer), static_cast<int>(imageBuffer->_format), hotX, hotY);
+    }
+    cursorImage = imageBuffer;
+    cursorHotX = hotX;
+    cursorHotY = hotY;
 }
 
 Video::ContextData* DeviceData::CreateContextData(Video::Context* owner) {
@@ -956,6 +1063,9 @@ bool ContextData::BeginCommands() {
     imageAcquired = true;
     vkResetFences(device, 1, &f.done);
     vkResetCommandPool(device, f.pool, 0);
+    f.commands = f.first;
+    f.extraUsed = 0;
+    f.acquireWaited = false;
     VkCommandBufferBeginInfo bi = Make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(f.commands, &bi);
@@ -1006,7 +1116,8 @@ void ContextData::Finish() {
     VkSemaphoreSubmitInfo wait = Make<VkSemaphoreSubmitInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO);
     wait.semaphore = f.imageAvailable;
     wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    const uint64_t serial = SubmitCommands(f.commands, &wait, renderFinished[imageIndex], f.done);
+    const uint64_t serial =
+        SubmitCommands(f.commands, f.acquireWaited ? nullptr : &wait, renderFinished[imageIndex], f.done);
     NoteFrameSubmitted(serial);
 
     VkPresentInfoKHR pi = Make<VkPresentInfoKHR>(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
@@ -1027,53 +1138,62 @@ void ContextData::Finish() {
 }
 
 // ---- the main targets ---------------------------------------------------------------------------
-// RenderBuffer::Create on the default render buffer calls these on its colour and depth images:
-// the companion publishes the back-buffer shape through the owner's fields (dx11
-// imagebufferdata.cpp AttachColorBuffer / AttachDepthBuffer: format 5 = BGRA8, 7 = D24S8; kind
-// 0 = render target, 1 = depth) and marks itself a main target: the draws aim at the swap-chain
-// image and the backend's depth image (draw.cpp), and a Bind of either as a texture reads the
-// placeholder.
+// The default render buffer's colour and depth images (and every other image aliased to them, as
+// FrameCopyImageBuffer's) call these: the companion stamps the owner's descriptor exactly as dx11
+// imagebufferdata.cpp AttachColorBuffer / AttachDepthBuffer (0x180002580 / 0x180002650) do, in
+// their field order -- the back-buffer size, 2D, kind 0 / 1, format 5 (BGRA8) / 7 (D24S8), CLAMP
+// addressing, POINT filter, flags 0x10 / 0x20 -- and marks itself a main target: the draws aim at
+// the backend's main targets (draw.cpp), and a Bind of either as a texture reads the placeholder.
+// The flags matter: Device::RecreateDynamic re-attaches an image by bit 4 / bit 5 after a settings
+// change (dynamic_resources.cpp); without them the default depth came back as a plain depth image.
 
 void ImageBufferData::AttachColorBuffer() {
     mainTarget = MainTarget::Color;
     auto dev = Video::Device::_singleton;
-    _owner->_width = dev->backBufferWidth;
-    _owner->_height = dev->backBufferHeight;
-    _owner->_dimension = 0;
-    _owner->_kind = 0;
-    _owner->_format = 5;
-    _owner->_flags = 0x10;
+    Video::ImageBuffer* const ib = _owner;
+    ib->_width = dev->backBufferWidth;
+    ib->_height = dev->backBufferHeight;
+    ib->_dimension = 0;
+    ib->_kind = 0;
+    ib->_format = 5;
+    ib->_addressW = 1;
+    ib->_addressV = 1;
+    ib->_addressU = 1;
+    ib->_filter = 0;
+    ib->_flags = 0x10;
 }
 
 void ImageBufferData::AttachDepthBuffer() {
     mainTarget = MainTarget::Depth;
-    if (_owner->Width() <= 0 || _owner->Height() <= 0) {
-        auto dev = Video::Device::_singleton;
-        _owner->_width = dev->backBufferWidth;
-        _owner->_height = dev->backBufferHeight;
-    }
-    _owner->_dimension = 0;
-    _owner->_kind = 1;
-    _owner->_format = 7;
+    auto dev = Video::Device::_singleton;
+    Video::ImageBuffer* const ib = _owner;
+    ib->_width = dev->backBufferWidth;
+    ib->_height = dev->backBufferHeight;
+    ib->_dimension = 0;
+    ib->_kind = 1;
+    ib->_format = 7;
+    ib->_addressW = 1;
+    ib->_addressV = 1;
+    ib->_addressU = 1;
+    ib->_filter = 0;
+    ib->_flags = 0x20;
 }
 
-// dx11: OMSetRenderTargets(colour, depth). Here the render buffer becomes the draw target (draw.h:
-// P2 draws only into the main one).
+// dx11 0x180001070: OMSetRenderTargets(colour, depth). Here the render buffer becomes the draw target;
+// the pass on it begins lazily at its first draw or flushed clear (draw.h).
 void RenderBufferData::Bind(void* context) {
     (void)context;
     DrawSetRenderBuffer(_owner);
 }
 
-// dx11: ResolveSubresource from `other`'s colour into this one's. P3 (render targets).
+// dx11 0x1800010e0: ResolveSubresource FROM `other`'s colour INTO this one's; the depth buffers and
+// the flag are not touched (retail's gap, kept). Here a copy (a blit where the formats differ) in the
+// frame's command stream (draw.cpp DrawResolve): the main colour is already single-sampled when it is
+// read (resolved by its passes, or the tiler's own MSAA).
 void RenderBufferData::Resolve(void* context, Video::RenderBuffer* other, bool flag) {
     (void)context;
-    (void)other;
     (void)flag;
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
-        std::fprintf(stderr, "[Vulkan] RenderBuffer::Resolve is P3: skipped\n");
-    }
+    DrawResolve(_owner, other);
 }
 
 }  // namespace VideoVulkan
