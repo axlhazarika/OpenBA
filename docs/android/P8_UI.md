@@ -123,7 +123,8 @@ font when the labels' own does not fit. Touch targets on the S25 at the owner's 
 254 device pixels (about 15 mm), pause menu 203 x 203 (about 12 mm). No new art, setting or flag.
 
 Verified: on the S25 the main menu row (8), the pause menu row (10, small font), Options opened from
-each; on Windows the row at UI 83 and 35, the pause row, the ext off = retail's centred column, unit
+each (the final build, `p2_pause4.png`, logged `819x378: button row (... square 89)` and `(... square
+71, small font)`); on Windows the row at UI 83 and 35, the pause row, the ext off = retail's centred column, unit
 1485 / 0 / 1 skipped (the kit cross-check). The phone was left with this branch's debug apk, stopped,
 and its settings as found.
 
