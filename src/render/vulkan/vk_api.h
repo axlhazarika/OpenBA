@@ -144,11 +144,17 @@ namespace VideoVulkan {
     X(vkCmdDrawIndexed)                                  \
     X(vkCmdPushConstants)
 
+// Resolved with vkGetDeviceProcAddr(device, ...) when present: null when the device lacks the
+// extension (Caps says which were enabled). P7: VK_KHR_push_descriptor.
+#define VIDEO_VULKAN_DEVICE_EXT_FUNCS(X)                 \
+    X(vkCmdPushDescriptorSetKHR)
+
 #define VIDEO_VULKAN_DECLARE(name) extern PFN_##name name;
 VIDEO_VULKAN_GLOBAL_FUNCS(VIDEO_VULKAN_DECLARE)
 VIDEO_VULKAN_INSTANCE_FUNCS(VIDEO_VULKAN_DECLARE)
 VIDEO_VULKAN_INSTANCE_EXT_FUNCS(VIDEO_VULKAN_DECLARE)
 VIDEO_VULKAN_DEVICE_FUNCS(VIDEO_VULKAN_DECLARE)
+VIDEO_VULKAN_DEVICE_EXT_FUNCS(VIDEO_VULKAN_DECLARE)
 #undef VIDEO_VULKAN_DECLARE
 extern PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
 

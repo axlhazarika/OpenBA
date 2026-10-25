@@ -876,6 +876,14 @@ bool DeviceData::CreateDevice() {
         return Fail("Vulkan: the device has no VK_KHR_swapchain");
     }
     caps.pushDescriptor = HasDeviceExtension(physical, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    if (caps.pushDescriptor) {
+        auto push = Make<VkPhysicalDevicePushDescriptorPropertiesKHR>(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR);
+        auto props2 = Make<VkPhysicalDeviceProperties2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2);
+        props2.pNext = &push;
+        vkGetPhysicalDeviceProperties2(physical, &props2);
+        caps.maxPushDescriptors = push.maxPushDescriptors;
+    }
     caps.vertexInputDynamicState =
         HasDeviceExtension(physical, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     caps.extendedDynamicState2 = HasDeviceExtension(physical, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
@@ -1087,13 +1095,13 @@ bool DeviceData::CreateDevice() {
     CreateOnDemand::Resume();
 
     std::fprintf(stderr,
-                 "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d "
+                 "[Vulkan] device %s (%s) api %u.%u.%u driver 0x%x created; push_descriptor=%d (max %u) "
                  "vertex_input_dynamic=%d eds2=%d load_store_none=%d d24s8=%d msrtss=%d validation=%d "
                  "ao=%d/%d/%d; multisample %ux\n",
                  deviceProperties.deviceName, DeviceTypeName(deviceProperties.deviceType),
                  VK_API_VERSION_MAJOR(caps.apiVersion), VK_API_VERSION_MINOR(caps.apiVersion),
                  VK_API_VERSION_PATCH(caps.apiVersion), deviceProperties.driverVersion, caps.pushDescriptor,
-                 caps.vertexInputDynamicState, caps.extendedDynamicState2, caps.loadStoreOpNone, caps.d24s8,
+                 caps.maxPushDescriptors, caps.vertexInputDynamicState, caps.extendedDynamicState2, caps.loadStoreOpNone, caps.d24s8,
                  caps.msrtss, caps.validation, caps.fragmentStores, caps.storageWriteWithoutFormat, caps.aoFormats,
                  mainSamples);
     return true;

@@ -15,6 +15,7 @@ VIDEO_VULKAN_GLOBAL_FUNCS(VIDEO_VULKAN_DEFINE)
 VIDEO_VULKAN_INSTANCE_FUNCS(VIDEO_VULKAN_DEFINE)
 VIDEO_VULKAN_INSTANCE_EXT_FUNCS(VIDEO_VULKAN_DEFINE)
 VIDEO_VULKAN_DEVICE_FUNCS(VIDEO_VULKAN_DEFINE)
+VIDEO_VULKAN_DEVICE_EXT_FUNCS(VIDEO_VULKAN_DEFINE)
 #undef VIDEO_VULKAN_DEFINE
 PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
 
@@ -63,6 +64,9 @@ bool LoadDeviceFunctions(VkDevice device, std::string* why) {
     if (!fn && !missing) missing = #fn;
     VIDEO_VULKAN_DEVICE_FUNCS(VIDEO_VULKAN_LOAD)
 #undef VIDEO_VULKAN_LOAD
+#define VIDEO_VULKAN_LOAD_OPTIONAL(fn) fn = reinterpret_cast<PFN_##fn>(vkGetDeviceProcAddr(device, #fn));
+    VIDEO_VULKAN_DEVICE_EXT_FUNCS(VIDEO_VULKAN_LOAD_OPTIONAL)
+#undef VIDEO_VULKAN_LOAD_OPTIONAL
     if (missing) {
         if (why) *why = std::string("the Vulkan device has no ") + missing + " (Vulkan 1.3 core is required)";
         return false;
