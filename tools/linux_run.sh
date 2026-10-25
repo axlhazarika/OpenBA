@@ -59,6 +59,14 @@ case "$ROUTE" in
 esac
 [ -n "${EXTRA_ENV:-}" ] && ENVV+=($EXTRA_ENV)
 
+# The profile: every Windows route runs FAITHFUL (tools/build.sh run, resave_gate.sh, stress_run.sh
+# pass /profile:faithful on the command line, which turns every fix and extension off whatever
+# settings.cfg says), so the Linux routes do too, or world.txt and the resave image carry the
+# settings.cfg profile's fixes and are not comparable with the Windows reference or the golden.
+# LINUX_PROFILE=/profile:<name> picks another; LINUX_PROFILE= (empty) leaves the settings.cfg
+# profile, as GATE_PROFILE= does for resave_gate.sh.
+PROFILE_ARG="${LINUX_PROFILE-/profile:faithful}"
+
 # The stress town must simulate unattended: GameAutoPause (the retail option, settings.cfg under
 # Platform::DocumentsDir) pauses the sim whenever the window loses focus, and under WSLg the
 # window loses it as soon as the desktop is used (2026-10-11: two stress runs at 0.00 sim
@@ -75,8 +83,8 @@ cd "$G" || exit 2
 rm -f standalone_{debug,error,crash,hang}.log standalone_boot_state.txt \
       standalone_roundtrip_loaded.bin standalone_roundtrip_resaved.bin
 T0=$(date +%s.%N)
-env "${ENVV[@]}" ./OpenBA & PID=$!
-echo "[linux_run] $ROUTE pid $PID env: ${ENVV[*]}" | tee "$OUT/route.txt"
+env "${ENVV[@]}" ./OpenBA $PROFILE_ARG & PID=$!
+echo "[linux_run] $ROUTE pid $PID env: ${ENVV[*]} args: ${PROFILE_ARG:-(none)}" | tee "$OUT/route.txt"
 [ -n "$CFG_SAVED" ] && echo "[linux_run] GameAutoPause=false for this run (settings.cfg restored at exit)" | tee -a "$OUT/route.txt"
 
 last=""; t_running=""; f_running=""; t_last=""; f_last=""
