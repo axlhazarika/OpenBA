@@ -33,7 +33,7 @@ blocks, compress_ao's BC4 still gets `% 4`).
 | Piece | File |
 |---|---|
 | Rule, run state, counters, the `[TextureQuality]` line | `src/render/common/texture_quality/texture_quality.{h,cpp}` |
-| Backend answer | `texture_quality_backend.h`; DX11 `src/render/dx11/texture_quality/` (true), Metal `src/render/metal/texture_quality/` (false) |
+| Backend answer | `texture_quality_backend.h`; DX11 `src/render/dx11/texture_quality/` (true), Metal `src/render/metal/texture_quality/` (true since the Metal follow-up, section 7) |
 | Lazy reader (create_on_demand on) | `src/ext/create_on_demand/level_source.cpp`: dropped levels sized and skipped, **no Locator kept**; the record holds the kept levels only, so Materialize never re-decodes the dropped ones |
 | Eager reader (create_on_demand off, or a stream create_on_demand cannot locate) | `src/ext/texture_quality/texture_quality.cpp` `ReadDropped`: each dropped level's size read as retail reads it, its bytes skipped by `CreateOnDemand::SkipIfWithin` (new, `stream_locate.h`: a reading CompressedStream whose block directory says the bytes lie ahead, or ext.stream_cache's record stream) or, where that cannot skip, read and freed; the kept levels by retail's `RtVideo_SerializeBlobArray` |
 | Texture create | `src/render/dx11/imagebufferdata.cpp` `Create` (EXT SEAM lines): `drop = DropFor(*ib, levels->GetSize())`; desc halved; after the faithful pitch loop `DropLeading` removes the dropped subresources (the loop's pitches for the kept levels are the smaller texture's own: unit test); `CreateSamplerState(drop)`; the deferred (async_gpu_create) copy and share_gpu_data sizes index level `i + drop` |
@@ -142,11 +142,11 @@ crash route 5/5 + 5/5 instrumented, full-settings route 5/5, the gate route (aut
 
 ## 7. Not done / not tested
 
-- **Metal**: answers `TextureQualityBackend::Supported() == false`; the extension then keeps the drop
-  at 0, so `PlanUploads` (`backend.mm:1498`) and `shape.levelCount` (`:1616`) never see a dropped
-  array and were left untouched. Supporting it = plan uploads from the first kept level at the
-  halved size with `levelCount - drop` levels, and `lodMaxClamp` lowered the same way. Not compiled
-  here (no Mac); the new Metal file is plain C++.
+- **Metal**: done as a follow-up. `ImageBufferData::Create` (`backend.mm`) makes the descriptor at
+  `(w >> drop) x (h >> drop)` with `levelCount - drop` mips, plans the uploads from the first kept level,
+  and gives the shape the kept chain (`shape.levelCount = levelCount - drop`, so ext.compress_ao still sees a
+  whole chain and ext.create_on_demand's record, which holds the kept levels only, matches it). The
+  sampler's `lodMaxClamp` follows from the texture's mip count in `MakeSampler`.
 - Linux not built.
 - MegaMod set not run (vanilla only); the faithful gate and resave gate not run (coordinator).
 - A UI-visible check of the Enhanced tab combo was not done (the rsc parse test covers the row).

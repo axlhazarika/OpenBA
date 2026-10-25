@@ -14,6 +14,7 @@
 #include "compress_ao/bc4_chain.h"
 #include "share_gpu_data/share_create.h"
 #include "create_on_demand/lazy_create.h"
+#include "texture_quality/texture_quality.h"   // ext.texture_quality's DropFor
 #include "seeded_create.h"
 #include "video/Device.h"
 #include "platform/common/cursor_image.h"
@@ -1607,13 +1608,27 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
             if (_owner->_dimension != 0) d.textureType = MTLTextureTypeCube;
             d.storageMode = MTLStorageModeShared;
             d.usage = MTLTextureUsageShaderRead;
+            // EXT SEAM (NOT RETAIL, docs/extensions/handins/TEXQUALITY.md): ext.texture_quality -- a qualifying
+            // texture seeded from a resource file is made without its `drop` largest levels (the engine's level
+            // reader skipped their bytes, or the array still holds them and they are left out below): the
+            // descriptor at the first kept level's size with that many fewer mips, so the sampler's
+            // lodMaxClamp (MakeSampler, from the mip count) drops by the same count. The shape is the smaller
+            // texture's: ext.create_on_demand's record holds the kept levels only (level_source.cpp), and
+            // ext.compress_ao sees a whole chain. 0 for every other image and while the row is off: retail's.
+            const int drop =
+                (levels && int(_owner->_kind) == 2) ? ::TextureQuality::DropFor(*_owner, levels->GetSize()) : 0;
+            if (drop > 0) {
+                d.width = NSUInteger(std::max(w >> drop, 1));
+                d.height = NSUInteger(std::max(h >> drop, 1));
+                d.mipmapLevelCount = NSUInteger(_owner->GetLevelCount() - drop);
+            }
             TextureShape shape;
-            shape.width = w;
-            shape.height = h;
+            shape.width = int(d.width);
+            shape.height = int(d.height);
             shape.format = f;
             shape.kind = int(_owner->_kind);
             shape.faces = _owner->_dimension != 0 ? 6u : 1u;
-            shape.levelCount = _owner->GetLevelCount();
+            shape.levelCount = _owner->GetLevelCount() - drop;
             if (f >= 3 && shape.kind != 2) d.usage |= MTLTextureUsageRenderTarget;
 
             // EXT SEAM (NOT RETAIL, docs/extensions/handins/CREATEONDEMAND.md): ext.create_on_demand -- the
@@ -1632,11 +1647,11 @@ bool ImageBufferData::Create(const Collection::Array<Collection::Array<uint8_t>>
             // The load's create (seeded_create.h): ext.compress_ao's BC4 conversion, then
             // ext.share_gpu_data's create-or-share for a texture seeded from a resource file (kind 2), else
             // the plain create. A short level still leaves the texture made with the levels before it, and
-            // Create answers false.
+            // Create answers false. ext.texture_quality's dropped levels are left out (2D only).
             std::vector<SourceLevel> source;
             if (levels) {
                 source.reserve(static_cast<size_t>(levels->GetSize()));
-                for (int i = 0; i < levels->GetSize(); ++i) {
+                for (int i = drop; i < levels->GetSize(); ++i) {
                     source.push_back(SourceLevel{ (*levels)[i].GetData(), size_t((*levels)[i].GetSize()) });
                 }
             }
