@@ -102,7 +102,7 @@ const FieldDesc kElement[] = {
     F("_color", UInt),                   // +0x3c: the header's `_id`, copied to Element::_color
     F("_tabOrder", Int),
     F("_border", Ext),                   // +0x48 _childDesc
-    F("", Ext),                          // +0x50 the tool-tip Dialog (never set by our text)
+    F("_toolTipDialog", Ext),            // +0x50 the tool-tip Dialog (Dialog/ToolTip.rsc)
     F("_toolTipStringTable", Ext),       // +0x58
     F("_toolTipText", String),           // +0x60
 };

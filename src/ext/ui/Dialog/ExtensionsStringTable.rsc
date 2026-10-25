@@ -39,6 +39,21 @@ StringTable resource
 		{ String _name = "ExtensionsWindowTitle";	String _text = "Game extensions"; }
 		{ String _name = "ExtensionsWindowTip";		String _text = "Game extensions: the pages of the extensions active in this town."; }
 		{ String _name = "RestrictedFoodsTab";			String _text = "Foods"; }
+		// ext.terrain_edit's page in it (TerrainEditPage.rsc)
+		{ String _name = "TerrainEditTab";				String _text = "Terrain"; }
+		{ String _name = "TerrainEditHint";				String _text = "Pick a brush, then hold the left mouse button over the map."; }
+		{ String _name = "TerrainEditHint2";			String _text = "Lower digs lakes; Flatten levels ground to build on; Mountain raises peaks."; }
+		{ String _name = "TerrainEditHint3";			String _text = "Right click ends the brush. Undo reverses the last stroke."; }
+		{ String _name = "TerrainEditHint4";			String _text = "Undo does not bring back trees or rocks a lake covered."; }
+		{ String _name = "TerrainEditRaise";			String _text = "Raise"; }
+		{ String _name = "TerrainEditLower";			String _text = "Lower"; }
+		{ String _name = "TerrainEditFlatten";			String _text = "Flatten"; }
+		{ String _name = "TerrainEditMountain";			String _text = "Mountain"; }
+		{ String _name = "TerrainEditSmooth";			String _text = "Smooth"; }
+		{ String _name = "TerrainEditUndo";				String _text = "Undo"; }
+		{ String _name = "TerrainEditSizeLabel";			String _text = "Size"; }
+		{ String _name = "TerrainEditStrengthLabel";		String _text = "Strength"; }
+		{ String _name = "TerrainEditStatus";			String _text = "@0"; }
 		{ String _name = "RestrictedFoodsHint";			String _text = "Check a food to stop citizens eating it. It can still be stored, sold and cooked."; }
 		{ String _name = "RestrictedFoodsParam";			String _text = "@0"; }
 		{ String _name = "RestrictedFoodsCheckTip";		String _text = "Check to stop citizens eating this food."; }

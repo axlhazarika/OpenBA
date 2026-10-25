@@ -97,6 +97,9 @@ struct Extensions {
     bool restricted_foods = false;
     // class C: src/ext/item_priority/ (docs/extensions/handins/ITEMPRIO.md); the town's ranked item lists
     bool item_priority = false;
+    // class B: src/ext/terrain_edit/ (docs/extensions/handins/TERRAINEDIT.md); a brush tool that edits the
+    // terrain under the mouse
+    bool terrain_edit = false;
     bool spread_warmth = false; // class B: src/ext/spread_warmth/ (docs/extensions/handins/HITCH_PFBURST.md)
     bool async_save_compress = false; // class A: src/ext/async_save_compress/, seam IO::CompressedStream::_extAsyncCompress (docs/extensions/handins/HITCH_SAVE.md)
     bool drain_split = false; // class B: src/ext/drain_split/ (docs/extensions/handins/HITCH_DRAINSPLIT.md)

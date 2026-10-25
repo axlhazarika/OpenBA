@@ -149,6 +149,23 @@ def entry_icons():
     return found
 
 
+def glyph_sprites():
+    """{name: draw(size) -> image} from the GLYPHS of every tools/ext_icons/*.py module: white picture-button glyphs."""
+    import importlib.util
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ext_icons")
+    found = {}
+    for name in sorted(os.listdir(here)):
+        if not name.endswith(".py") or name.startswith("_"):
+            continue
+        spec = importlib.util.spec_from_file_location(name[:-3], os.path.join(here, name))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for glyph_id, draw in getattr(mod, "GLYPHS", {}).items():
+            assert glyph_id not in found, glyph_id
+            found[glyph_id] = draw
+    return found
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     icon().save(os.path.join(OUT, "ExtensionsIcon.png"))
@@ -164,7 +181,10 @@ def main():
         draw(img.load())
         img = img.resize((W * ICON_SCALE, H * ICON_SCALE), Image.NEAREST)
         img.save(os.path.join(OUT, "Entry_%s.png" % entry_id))
-    print("wrote %d sprites to %s" % (7 + len(icons), OUT))
+    glyphs = glyph_sprites()
+    for glyph_id, draw in sorted(glyphs.items()):
+        draw().save(os.path.join(OUT, "Glyph_%s.png" % glyph_id))
+    print("wrote %d sprites to %s" % (7 + len(icons) + len(glyphs), OUT))
 
 
 if __name__ == "__main__":
