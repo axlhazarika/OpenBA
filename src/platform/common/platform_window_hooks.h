@@ -57,5 +57,13 @@ void QueryScreenForModes(int* maxW, int* maxH, int* nativeW, int* nativeH);
 // 1.0 before it exists. For code that has no SDL_Window (display_density.cpp).
 float GamePixelDensity();
 
+// P7, the render scale: engine pixels per window pixel, in (0, 1]. The SDL backend multiplies it into
+// PixelDensity and into every window pixel size it reports (Sdl::WindowSizeInEnginePixels), so the
+// engine's back buffer, the client rect, the cursor and the size events all agree on the smaller
+// size, and the renderer scales the frame up to the window when it presents. 1.0 on Windows, Linux
+// and macOS; Android reads `VideoRenderScale` (a percent, 25..100) from the user's settings.cfg once
+// (the phone's first-run file seeds 50: half resolution, docs/vulkan/PLAN.md §1).
+float RenderScale();
+
 }  // namespace Window
 }  // namespace Platform

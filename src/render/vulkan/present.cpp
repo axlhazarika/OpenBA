@@ -31,6 +31,7 @@ VkSurfaceTransformFlagBitsKHR g_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KH
 GpuImage g_source;
 VkExtent2D g_sourceExtent{};
 bool g_sourceRead = false;   // a recorded present pass has left the source in SHADER_READ_ONLY
+bool g_active = false;       // the frame renders into the source (pre-rotated, or scaled: P7)
 
 // The push constant: uv = A * st + b, A row-wise (present.vert).
 struct Transform {
@@ -220,12 +221,15 @@ void PresentShutdown() {
     g_frag = VK_NULL_HANDLE;
     g_sampler = VK_NULL_HANDLE;   // the shared sampler cache owns it
     g_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    g_active = false;
 }
 
 bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, VkExtent2D renderExtent,
-                      std::string* why) {
+                      VkExtent2D swapExtent, std::string* why) {
     g_transform = transform;
-    if (transform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+    const bool scaled = renderExtent.width != swapExtent.width || renderExtent.height != swapExtent.height;
+    g_active = transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR || scaled;
+    if (!g_active) {
         ReleaseSource();
         return true;
     }
@@ -261,8 +265,8 @@ bool PresentConfigure(VkSurfaceTransformFlagBitsKHR transform, VkFormat format, 
     return true;
 }
 
-bool PresentRotates() {
-    return g_transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR && g_source.image != VK_NULL_HANDLE;
+bool PresentActive() {
+    return g_active && g_source.image != VK_NULL_HANDLE;
 }
 
 VkImage PresentSourceImage() {

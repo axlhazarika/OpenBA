@@ -438,12 +438,21 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     VkExtent2D frameExtent = extent;
     VkExtent2D imageExtent = extent;
     if (rotate) {
-        // The frame is the window's (landscape) size; the images are the panel's.
+        // The images are the panel's: the window's (landscape) pixel size, turned.
         int w = 0;
         int h = 0;
         SDL_GetWindowSizeInPixels(window, &w, &h);
+        VkExtent2D full = extent;
+        if (w > 0 && h > 0) full = { static_cast<uint32_t>(w), static_cast<uint32_t>(h) };
+        imageExtent = quarterTurn ? VkExtent2D{ full.height, full.width } : full;
+    }
+    if (rotate || Platform::Window::RenderScale() != 1.0f) {
+        // The frame is the engine's back buffer: the window's size in engine pixels (P7: times the
+        // render scale); the present pass scales it to the images when the two differ (present.h).
+        int w = 0;
+        int h = 0;
+        Platform::Window::Sdl::WindowSizeInEnginePixels(window, &w, &h);
         if (w > 0 && h > 0) frameExtent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h) };
-        imageExtent = quarterTurn ? VkExtent2D{ frameExtent.height, frameExtent.width } : frameExtent;
     }
 
     uint32_t imageCount = std::max(kFramesInFlight, surfaceCaps.minImageCount);
@@ -506,7 +515,7 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
     // The present pass's source follows the swap chain; at the device's first swap chain the resource
     // layer is not up yet, and CreateDevice configures it after DrawStartup.
     std::string presentWhy;
-    if (resourcesUp && !PresentConfigure(swapTransform, swapFormat, renderExtent, &presentWhy)) {
+    if (resourcesUp && !PresentConfigure(swapTransform, swapFormat, renderExtent, swapExtent, &presentWhy)) {
         std::fprintf(stderr, "[Vulkan] %s\n", presentWhy.c_str());
     }
     std::fprintf(stderr,
@@ -516,7 +525,7 @@ bool CreateSwapchain(SDL_Window* window, std::string* why) {
                  static_cast<int>(swapFormat),
                  static_cast<int>(presentMode), static_cast<unsigned>(ci.preTransform), static_cast<unsigned>(current),
                  surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height,
-                 PresentRotates() ? ", pre-rotated: the landscape frame is turned by the present pass" : "");
+                 PresentActive() ? ", the present pass draws the frame into the images (turned or scaled)" : "");
     return true;
 }
 
@@ -532,7 +541,7 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
     const int fs = cfg && cfg->fullscreen ? 1 : 0;
     int cw = 0;
     int ch = 0;
-    SDL_GetWindowSizeInPixels(w, &cw, &ch);
+    Platform::Window::Sdl::WindowSizeInEnginePixels(w, &cw, &ch);
     const bool fsFlip = lastFullscreen >= 0 && lastFullscreen != fs;
     lastFullscreen = fs;
     if (fsFlip || dev->backBufferWidth != cw || dev->backBufferHeight != ch) {
@@ -540,7 +549,7 @@ void ApplyEngineSettingsChange(Video::Device* dev) {
         const int wantH = dev->backBufferHeight;
         dev->AdjustDisplay();
         SDL_SyncWindow(w);
-        SDL_GetWindowSizeInPixels(w, &cw, &ch);
+        Platform::Window::Sdl::WindowSizeInEnginePixels(w, &cw, &ch);
         dev->backBufferWidth = cw;
         dev->backBufferHeight = ch;
         if (cfg && !fs) {
@@ -970,7 +979,7 @@ bool DeviceData::CreateDevice() {
     // 8 -- settle the window to the back buffer, then publish the real pixel size.
     dev->AdjustDisplay();
     SDL_SyncWindow(w);
-    SDL_GetWindowSizeInPixels(w, &dev->backBufferWidth, &dev->backBufferHeight);
+    Platform::Window::Sdl::WindowSizeInEnginePixels(w, &dev->backBufferWidth, &dev->backBufferHeight);
     lastFullscreen = cfg && cfg->fullscreen ? 1 : 0;
     StallDebug::Mark("  Vulkan AdjustDisplay (window sized)");
 
@@ -1075,9 +1084,11 @@ bool DeviceData::CreateDevice() {
     if (!PipelinesStartup(&why)) return Fail("Vulkan: " + why);
     if (!DrawStartup(&why)) return Fail("Vulkan: " + why);
     if (!PresentStartup(&why)) return Fail("Vulkan: " + why);
-    if (!PresentConfigure(swapTransform, swapFormat, renderExtent, &why)) return Fail("Vulkan: " + why);
-    if (PresentRotates()) {
-        std::fprintf(stderr, "[Vulkan] pre-rotated present: frame %ux%u turned into %ux%u (transform 0x%x)\n",
+    if (!PresentConfigure(swapTransform, swapFormat, renderExtent, swapExtent, &why)) {
+        return Fail("Vulkan: " + why);
+    }
+    if (PresentActive()) {
+        std::fprintf(stderr, "[Vulkan] present pass: frame %ux%u drawn into %ux%u (transform 0x%x)\n",
                      renderExtent.width, renderExtent.height, swapExtent.width, swapExtent.height,
                      static_cast<unsigned>(swapTransform));
     }
@@ -1348,7 +1359,7 @@ bool ContextData::BeginCommands() {
     FrameTarget target;
     target.cb = f.commands;
     target.slot = frameSlot;
-    if (PresentRotates()) {
+    if (PresentActive()) {
         // present.h: the frame renders into the landscape source; Finish turns it into the swap image.
         target.image = PresentSourceImage();
         target.view = PresentSourceView();
