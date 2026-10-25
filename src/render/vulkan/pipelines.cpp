@@ -247,10 +247,25 @@ std::vector<uint8_t> LoadCacheBlob() {
 
 void SaveCacheBlob() {
     if (!g_persist || !g_cache) return;
+    // P7: the warm-up worker may add a pipeline between the size query and the copy (the background
+    // write runs early in a session, while it still works); the copy then answers VK_INCOMPLETE. The
+    // pair is retried with a fresh size; a write that still fails says so.
+    std::vector<uint8_t> file;
     size_t size = 0;
-    if (vkGetPipelineCacheData(LiveDevice(), g_cache, &size, nullptr) != VK_SUCCESS || size == 0) return;
-    std::vector<uint8_t> file(sizeof(CacheHeader) + size);
-    if (vkGetPipelineCacheData(LiveDevice(), g_cache, &size, file.data() + sizeof(CacheHeader)) != VK_SUCCESS) return;
+    VkResult r = VK_INCOMPLETE;
+    for (int attempt = 0; attempt < 4 && r == VK_INCOMPLETE; ++attempt) {
+        size = 0;
+        r = vkGetPipelineCacheData(LiveDevice(), g_cache, &size, nullptr);
+        if (r != VK_SUCCESS) break;
+        if (size == 0) return;
+        size += size / 8 + 4096;   // room for what the worker adds meanwhile
+        file.assign(sizeof(CacheHeader) + size, 0);
+        r = vkGetPipelineCacheData(LiveDevice(), g_cache, &size, file.data() + sizeof(CacheHeader));
+    }
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[Vulkan] pipeline cache: not written (vkGetPipelineCacheData: %s)\n", ResultName(r));
+        return;
+    }
     file.resize(sizeof(CacheHeader) + size);
     CacheHeader h;
     FillHeader(&h);
