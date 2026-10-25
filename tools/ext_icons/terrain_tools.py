@@ -103,6 +103,15 @@ def undo_glyph(size=SIZE):
     return _finish(big, size)
 
 
+def plant_glyph(size=SIZE):
+    """A tree: a round crown on a short trunk, with a ground line."""
+    big, d = _canvas(size)
+    d.ellipse([_p(9), _p(4), _p(39), _p(30)], fill=255)
+    d.rectangle([_p(21), _p(28), _p(27), _p(40)], fill=255)
+    d.rectangle([_p(10), _p(39), _p(38), _p(43)], fill=255)
+    return _finish(big, size)
+
+
 GLYPHS = {
     "terrain_raise": raise_glyph,
     "terrain_lower": lower_glyph,
@@ -110,4 +119,5 @@ GLYPHS = {
     "terrain_mountain": mountain_glyph,
     "terrain_smooth": smooth_glyph,
     "terrain_undo": undo_glyph,
+    "terrain_plant": plant_glyph,
 }

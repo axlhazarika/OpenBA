@@ -134,7 +134,7 @@ const FieldDesc kButton[] = {
     F("", Ext), F("", Ext), F("", Ext), F("", Ext), F("_content", Ext),
     F("", UInt), F("", UInt), F("", UInt), F("", UInt),
 };
-const FieldDesc kCheck[] = { F("", Ext) };
+const FieldDesc kCheck[] = { F("_check", Ext) };   // the element drawn over the button while it is checked
 const FieldDesc kCombo[] = { F("", Ext), F("", Ext), F("_initialData", Ext) };
 const FieldDesc kTab[]   = { F("_button", Ext), F("_content", Ext) };
 const FieldDesc kTabDesc[] = {

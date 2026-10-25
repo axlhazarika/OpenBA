@@ -7,6 +7,7 @@
 // which also sets its size and strength.
 // ============================================================================
 
+#include "ext/terrain_edit/plant_math.h"
 #include "ext/terrain_edit/terrain_edit_math.h"
 
 #include <cstddef>
@@ -20,12 +21,23 @@ BrushState& State();
 // Installs the brush as the player's current tool (the Terrain page's mode buttons). Right click ends it.
 void StartBrush();
 bool BrushActive();
+// True from the moment the brush is installed until the player's tool changes (right click, or another
+// tool): the Terrain page keeps the button of the tool in use lit while it is.
+bool BrushRunning();
 
 // Reverses the most recent stroke (a held left button is one stroke): its heights, the terrain types it
 // changed, and the trees and rocks standing on the ground it moved. False when there is nothing to undo, or
 // when the world is not the one the strokes were painted on (a new game or a load): the strokes are then
 // dropped.
 bool UndoLast();
+// The resource tool's palette: the templates of the natural resources standing on the map (trees first, then
+// plants, then rocks and ore), by the order the Resource drop down lists them in. PlantSet picks the one a
+// Plant stroke places.
+int PlantCount();
+int PlantIndex();
+const char* PlantName();
+const char* PlantNameAt(int index);
+void PlantSet(int index);
 size_t UndoDepth();
 // True after an Undo that was refused because something was built on the stroke since (a building, a road, a
 // field, or a cell that no longer holds the type the stroke gave it): the Terrain page says so until the

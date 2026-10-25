@@ -25,6 +25,12 @@
 #include "Component/ComponentDescription.h"
 #include "Component/ModelComponent.h"
 #include "Component/NaturalResourceComponent.h"
+#include "Component/GrowthComponent.h"
+#include "Component/GrowthDescription.h"
+#include "Component/ModelDescription.h"
+#include "system/Filename.h"
+#include "object/External.h"
+#include "Game/exe_bodies.h"
 #include "ext/registry.h"
 #include "ext/rock_seat/rock_seat.h"
 #include "system/Value.h"                // RtSystem_Time_Ctor
@@ -49,6 +55,9 @@
 #include "Action/PathSearch.h"            // RawArray
 #include "system/MemoryAllocator.h"
 
+#include <algorithm>
+#include <string>
+#include <utility>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -112,6 +121,7 @@ const void* g_undoHeights = nullptr;
 int g_undoStride = 0;
 uint32_t g_undoEpoch = 0;
 bool g_undoRefused = false;   // the last Undo was refused (UndoRefused)
+bool g_toolRunning = false;    // the brush is the player's tool now (BrushRunning)
 
 // The world the undo steps and the water-quad cache belong to is the map, its height words and their
 // stride, and the lock epoch (a new game, a load or a reload takes a new one, so a world allocated at the
@@ -206,6 +216,7 @@ uint32_t DiscColor(Ext::TerrainEdit::Mode mode) {
         case Ext::TerrainEdit::Mode::Flatten:  return 0xA060E060u;   // green
         case Ext::TerrainEdit::Mode::Mountain: return 0xA0C07040u;   // rock brown
         case Ext::TerrainEdit::Mode::Smooth:   return 0xA0C070E0u;   // lilac
+        case Ext::TerrainEdit::Mode::Plant:    return 0xA0409040u;   // green
     }
     return 0xA0FFD000u;
 }
@@ -1025,6 +1036,146 @@ void RemoveNaturalResource(ComponentEntity* entity) {
     game->m_entityList->removalList.SetSize(game->m_entityList->removalList._size + 1, entity);
 }
 
+// ---- the resource tool: plant natural resources ---------------------------------------------------------
+// The Resource drop down lists the templates of the natural resources standing on the map (trees, plants,
+// rocks, ore): the distinct descriptions of the occupants that carry a NaturalResourceComponent, scanned
+// once for each world. A stroke fills the brush's disc up to the density (plant_math.h, PlantTarget and
+// PickCells) with the picked template, the way worldgen and the game's own CreateNaturalResource do
+// (starttown.cpp, Action/createnaturalresource.cpp), without the orchard parent that action wants.
+std::vector<ComponentDescription*> g_palette;
+std::vector<std::string> g_paletteNames;
+std::string g_plantName;               // the template the drop down shows, kept across worlds by name
+int g_plantIndex = 0;
+const void* g_paletteMap = nullptr;
+uint32_t g_paletteEpoch = 0;
+uint32_t g_plantSeed = 1u;
+
+void BuildPalette(Map* map) {
+    g_palette.clear();
+    g_paletteNames.clear();
+    g_paletteMap = map;
+    g_paletteEpoch = Ext::LockEpoch();
+    std::vector<ComponentDescription*> found;
+    std::vector<std::string> names;
+    std::set<ComponentDescription*> seen;
+    const int n = map->size * map->size;
+    for (int i = 0; i < n; ++i) {
+        ComponentEntity* e = map->cells.GetData()[i].occupant.Get();
+        if (e == nullptr || e->FindComponent<NaturalResourceComponent>() == nullptr) continue;
+        ComponentDescription* d = e->_description;
+        // a resource is made of its natural-resource and model components: a template without them
+        // cannot be placed
+        if (d == nullptr || d->FindDescription<ModelDescription>() == nullptr || !seen.insert(d).second) {
+            continue;
+        }
+        const System::Filename path = static_cast<const ::Object::External*>(d)->GetPath();
+        found.push_back(d);
+        names.push_back(Ext::TerrainEdit::ResourceShortName(path._data != nullptr ? path._data : ""));
+    }
+    for (const size_t i : Ext::TerrainEdit::ResourceOrder(names)) {
+        g_palette.push_back(found[i]);
+        g_paletteNames.push_back(names[i]);
+    }
+    g_plantIndex = 0;
+    for (size_t i = 0; i < g_paletteNames.size(); ++i) {
+        if (g_paletteNames[i] == g_plantName) g_plantIndex = static_cast<int>(i);
+    }
+    if (!g_paletteNames.empty()) g_plantName = g_paletteNames[static_cast<size_t>(g_plantIndex)];
+    std::fprintf(stderr, "[TerrainEdit] resources: %d template(s) on the map\n",
+                 static_cast<int>(g_palette.size()));
+}
+
+void EnsurePalette() {
+    GameUpdateLoop* game = GameUpdateLoop::_singleton;
+    if (game == nullptr || game->m_game == nullptr) return;
+    if (game->m_game != g_paletteMap || g_paletteEpoch != Ext::LockEpoch()) BuildPalette(game->m_game);
+}
+
+// A cell takes a resource when nothing stands on it, no road is on it and it is ordinary land (not a
+// mountain or water).
+bool CanPlantOn(const MapCell& cell) {
+    if (cell.occupant.Get() != nullptr || cell.blocker.Get() != nullptr || IsRoadCell(cell)) return false;
+    const uint8_t t = cell.terrainType;
+    return IsNaturalType(t) && t != 6 && t != 7 && t != 8;
+}
+
+// Plants the picked template on `cell` and returns the entity, or null when the cell does not take it.
+// Plants are made full size with their life ahead of them: SetProgress takes a fraction of the plant's
+// whole life (growth = fraction * growthScale; the plant dies when its growth passes growthScale,
+// GrowthComponent::Update), and a plant is full size at growth 1.0, so it starts at 1 / growthScale. A
+// growthScale of zero or less never dies. Rocks and ore have no GrowthComponent: worldgen leaves them at
+// the default mesh (starttown.cpp).
+ComponentEntity* PlantAt(Map* map, int cell) {
+    GameUpdateLoop* game = GameUpdateLoop::_singleton;
+    if (g_palette.empty() || cell < 0 || cell >= map->size * map->size) return nullptr;
+    if (!CanPlantOn(map->cells.GetData()[cell])) return nullptr;
+    ComponentDescription* desc = g_palette[static_cast<size_t>(g_plantIndex)];
+    void* mem = System::MemoryAllocator::MemAlloc(0x48, 8);
+    if (mem == nullptr) return nullptr;
+    ComponentEntity* entity = ::new (mem) ComponentEntity(desc);
+    NaturalResourceComponent* nr = entity->FindComponent<NaturalResourceComponent>();
+    GrowthComponent* growth = entity->FindComponent<GrowthComponent>();
+    ModelComponent* model = entity->FindComponent<ModelComponent>();
+    if (nr == nullptr || model == nullptr) return nullptr;   // the palette only holds templates with both
+    nr->PlaceAtCell(cell);
+    if (growth != nullptr) {
+        const float lifeScale = growth->growthScale;
+        growth->SetProgress(lifeScale > 1.0f ? 1.0f / lifeScale : 0.5f);
+        System::Random* random = game->m_random;
+        const uint32_t variant = random->Rand(model->MeshGroupCount());
+        const uint32_t sub = random->Rand(model->MeshCount(static_cast<int>(variant)));
+        model->SelectMesh(static_cast<uint16_t>(variant), static_cast<int16_t>(sub));
+    }
+    Object::InternalPtr<ComponentEntity> ref = entity;
+    game->m_entityList->RegisterEntity(&ref, static_cast<int>(desc->_category));
+    return entity;
+}
+
+// One frame of a resource stroke at `cell`: each free cell of the disc is decided once per stroke, and the
+// ones chosen get the picked resource. The stroke is one undo step (the entities it planted are
+// remembered).
+void PlantStroke(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
+    using namespace Ext::TerrainEdit;
+    int16_t* heights = terrain->_heights.data;
+    const int stride = terrain->_fieldD0;
+    if (heights == nullptr || stride <= 0) return;
+    EnsurePalette();
+    if (g_palette.empty()) return;
+    if (strokeStart || !g_undo.Open()) {
+        if (!SameWorld(map, heights, stride)) AdoptWorld(map, heights, stride);
+        g_undoRefused = false;
+        g_undo.BeginStroke();
+        g_plantSeed = static_cast<uint32_t>(cell) * 2654435761u + 0x1234567u;
+    }
+    // The density is how full the disc ends up, and what already stands in it counts: the disc's eligible
+    // cells are the free ones and those a natural resource stands on, and the stroke plants on enough free
+    // ones to bring the disc up to the density. A click on ground that is full enough plants nothing, and a
+    // held button stops adding once the disc is full, so repeated clicks over one place never go past the
+    // density.
+    const int size = map->size;
+    const MapCell* cells = map->cells.GetData();
+    std::vector<int> freeCells;
+    int eligible = 0;
+    int existing = 0;
+    for (const Cell& c : Disc(cell % size, cell / size, g_state.radius, size)) {
+        if (c.weight <= 0.0f) continue;
+        const int idx = c.row * size + c.col;
+        ComponentEntity* standing = cells[idx].occupant.Get();
+        if (standing != nullptr && standing->FindComponent<NaturalResourceComponent>() != nullptr) {
+            ++eligible;
+            ++existing;
+        } else if (CanPlantOn(cells[idx])) {
+            ++eligible;
+            freeCells.push_back(idx);
+        }
+    }
+    const int missing = PlantTarget(eligible, g_state.density) - existing;
+    for (const int idx : PickCells(freeCells, missing, g_plantSeed)) {
+        ComponentEntity* entity = PlantAt(map, idx);
+        if (entity != nullptr) g_undo.RecordPlanted(idx, reinterpret_cast<uintptr_t>(entity));
+    }
+}
+
 }  // namespace
 
 class TerrainBrushTool final : public Tool {
@@ -1034,8 +1185,11 @@ public:
     TerrainBrushTool() : Tool() {}
     ~TerrainBrushTool() override = default;
 
-    void Startup() override {}
+    void Startup() override {
+        g_toolRunning = true;
+    }
     void Shutdown() override {
+        g_toolRunning = false;
         FinishStroke();
         NotifyUndoChanged();
     }
@@ -1094,6 +1248,10 @@ private:
     // One frame of the brush at `cell`: change the heights, mark the chunks, classify the cells again.
     void Paint(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
         using namespace Ext::TerrainEdit;
+        if (g_state.mode == Ext::TerrainEdit::Mode::Plant) {
+            PlantStroke(map, terrain, cell, strokeStart);
+            return;
+        }
         int16_t* heights = terrain->_heights.data;
         if (heights == nullptr) return;
         const int size   = map->size;
@@ -1315,10 +1473,25 @@ bool UndoLast() {
     for (const int idx : cells) ReseatOccupant(map, map->cells.GetData()[idx].occupant.Get());
     if (stroke.hasBox) RefreshWaterAccess(map, stroke.boxMinX, stroke.boxMinY, stroke.boxMaxX,
         stroke.boxMaxY);
-    std::fprintf(stderr, "[TerrainEdit] undo: %zu height(s), %zu terrain type(s)\n",
-        stroke.heights.size(), stroke.types.size());
+    // The resources the stroke planted, while they still stand where it put them: one that was chopped,
+    // mined or replaced since is left alone.
+    size_t removedPlants = 0;
+    for (const PlantedResource& p : stroke.planted) {
+        if (p.cell < 0 || p.cell >= size * size) continue;
+        ComponentEntity* standing = map->cells.GetData()[p.cell].occupant.Get();
+        if (standing != nullptr && reinterpret_cast<uintptr_t>(standing) == p.entity) {
+            RemoveNaturalResource(standing);
+            ++removedPlants;
+        }
+    }
+    std::fprintf(stderr, "[TerrainEdit] undo: %zu height(s), %zu terrain type(s), %zu of %zu resource(s)\n",
+        stroke.heights.size(), stroke.types.size(), removedPlants, stroke.planted.size());
     NotifyUndoChanged();
     return true;
+}
+
+bool BrushRunning() {
+    return g_toolRunning;
 }
 
 bool UndoRefused() {
@@ -1332,6 +1505,34 @@ bool UndoRefused() {
         if (!here) g_undoRefused = false;
     }
     return g_undoRefused;
+}
+
+int PlantCount() {
+    EnsurePalette();
+    return static_cast<int>(g_palette.size());
+}
+
+int PlantIndex() {
+    EnsurePalette();
+    return g_plantIndex;
+}
+
+const char* PlantNameAt(int index) {
+    EnsurePalette();
+    return index >= 0 && index < static_cast<int>(g_paletteNames.size())
+               ? g_paletteNames[static_cast<size_t>(index)].c_str()
+               : "";
+}
+
+const char* PlantName() {
+    return PlantNameAt(PlantIndex());
+}
+
+void PlantSet(int index) {
+    EnsurePalette();
+    if (index < 0 || index >= static_cast<int>(g_palette.size())) return;
+    g_plantIndex = index;
+    g_plantName = g_paletteNames[static_cast<size_t>(index)];
 }
 
 bool BrushActive() {

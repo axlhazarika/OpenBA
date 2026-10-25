@@ -173,7 +173,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 61);
+    CHECK(strings && strings->blocks.size() == 69);
     if (strings) {
         // The Extensions dialog's two tab captions.
         int tabKeys = 0;
@@ -209,7 +209,8 @@ void CheckKnownTypes(const File& f, const char* file) {
                            o.type == "TextDescription" || o.type == "TabDescription" ||
                            o.type == "ButtonDescription" || o.type == "TableDescription" ||
                            o.type == "ContainerDescription" || o.type == "CheckDescription" ||
-                           o.type == "ImageDescription" || o.type == "SliderDescription";
+                           o.type == "ImageDescription" || o.type == "SliderDescription" ||
+                           o.type == "ComboDescription";
         CHECK(known);
         if (!known) std::printf("  %s:%s has type %s\n", file, o.name.c_str(), o.type.c_str());
     }
@@ -323,6 +324,15 @@ UNIT_TEST(ext_rsc_text_parse_terrain_edit_page) {
         && f.Find("buttonTerrainEditSmooth") && f.Find("buttonTerrainEditUndo"));
     CHECK(f.Find("imageTerrainEditRaise") && f.Find("imageTerrainEditUndo"));
     CHECK(f.Find("sliderTerrainEditSize") && f.Find("sliderTerrainEditStrength"));
+    // The six tools are check boxes (the one in use stays lit, with its own lit glyph as the check mark); Undo is
+    // a plain button.
+    const Object* raise = f.Find("buttonTerrainEditRaise");
+    CHECK(raise && raise->type == "CheckDescription" && raise->body.Find("_check") != nullptr);
+    const Object* plantButton = f.Find("buttonTerrainEditPlant");
+    CHECK(plantButton && plantButton->type == "CheckDescription" && plantButton->body.Find("_check") != nullptr);
+    CHECK(f.Find("imageTerrainEditLitRaise") && f.Find("imageTerrainEditLitPlant"));
+    const Object* undoButton = f.Find("buttonTerrainEditUndo");
+    CHECK(undoButton && undoButton->type == "ButtonDescription");
     CheckKnownTypes(f, "TerrainEditPage.rsc");
 }
 
