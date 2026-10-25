@@ -179,6 +179,8 @@ public:
     int ClassifyTerrain(int cellIndex);   // 0x14009e2c0 (Component/keystone_a_map.cpp)
     float* GetTerrainPos(float* outPos3, const float* inXY2, char flag, float* outTri);   // 0x14009f3e0 (Game/mapquery.cpp)
     uint64_t RemovePendingRoad(int param_2);   // 0x14009c700 (Player/keystone_a_removalcalcpath.cpp)
+    bool IsGroundClear(int x, int y, int w, int h) const;   // 0x14009d860 (Game/maparea.cpp)
+    bool IsAreaEmpty(int x, int y, int w, int h) const;     // 0x14009dac0 (Game/maparea.cpp)
     ComponentEntity** EntityAtCell(ComponentEntity** retIBP, int cellIndex) const;   // 0x1400a0280 (Player/tool_base_edit.cpp)
     bool TestPlacement(int param_2, int param_3, uint32_t param_4, float param_5, float param_6, float param_7, char param_8, char param_9, const ComponentDescription* param_10);   // 0x14009f5d0 (Player/tool_base_path.cpp)
     uint64_t FootprintValidity(int param_2, int param_3, int param_4, int param_5, unsigned int param_6, const CreatePlacedDescription* param_7, const System::String* param_8, float param_9, float param_10, float param_11, char param_12, const System::String* param_13, int param_14, const ComponentDescription* param_15);   // 0x14009d580 (Player/tool_base_tile.cpp)

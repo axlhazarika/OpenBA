@@ -9,6 +9,7 @@
 #include "unit.h"
 #include "ext/load_notice.h"
 #include "ext/resources/text_parser.h"
+#include "ext/resources/text_enums.h"
 #include "ext_rsc_text.h"
 
 #include <cstring>
@@ -37,12 +38,14 @@ bool ParseEmbedded(const char* path, File& f) {
 }  // namespace
 
 UNIT_TEST(ext_rsc_text_embedded_files) {
-    CHECK(kEmbeddedCount == 5);
+    CHECK(kEmbeddedCount == 7);
     CHECK(Embedded("Dialog/Extensions.rsc") != nullptr);
     CHECK(Embedded("Dialog/EnhancedOptions.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsStringTable.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsWindow.rsc") != nullptr);
     CHECK(Embedded("Dialog/RestrictedFoodsPage.rsc") != nullptr);
+    CHECK(Embedded("Dialog/ItemPriorityPage.rsc") != nullptr);
+    CHECK(Embedded("Dialog/TerrainEditPage.rsc") != nullptr);
 }
 
 UNIT_TEST(ext_rsc_text_parse_extensions) {
@@ -96,7 +99,50 @@ UNIT_TEST(ext_rsc_text_parse_extensions) {
         const Field* ov = notice->body.Find("_override");
         CHECK(ov && ov->blocks.size() == 3 && ov->blocks[1].fields.size() == 1);
     }
-    CHECK(f.objects.size() == 36);
+    // Two tabs, Optional first: each its own button and list, down to its own table (the controller finds
+    // tableOptional / tableDefault by name), all deriving from the bases the in-game pages share.
+    const Object* tabs = f.Find("tabExtensions");
+    CHECK(tabs && tabs->type == "TabDescription" && tabs->base == "Mod.rsc:tabMod");
+    if (tabs) {
+        const Field* list = tabs->body.Find("_tabs");
+        CHECK(list && list->isArray && list->blocks.size() == 2);
+        if (list && list->blocks.size() == 2) {
+            const Field* b0 = list->blocks[0].Find("_button");
+            const Field* c0 = list->blocks[0].Find("_content");
+            const Field* b1 = list->blocks[1].Find("_button");
+            const Field* c1 = list->blocks[1].Find("_content");
+            CHECK(b0 && b0->tokens[0].text == "tabButtonOptional" && c0 && c0->tokens[0].text == "entryListOptional");
+            CHECK(b1 && b1->tokens[0].text == "tabButtonDefault" && c1 && c1->tokens[0].text == "entryListDefault");
+        }
+    }
+    for (const char* half : { "Optional", "Default" }) {
+        const std::string h(half);
+        const Object* caption = f.Find(("tabCaption" + h).c_str());
+        CHECK(caption && caption->base == "tabCaption");
+        if (caption) {
+            const Field* text = caption->body.Find("_text");
+            CHECK(text && text->tokens[0].text == "ExtensionsTab" + h);
+        }
+        const Object* button = f.Find(("tabButton" + h).c_str());
+        CHECK(button && button->type == "ButtonDescription" && button->base == "tabButton");
+        const Object* entries = f.Find(("entryList" + h).c_str());
+        CHECK(entries && entries->base == "entryList");
+        if (entries) {
+            const Field* els = entries->body.Find("_elements");
+            CHECK(els && els->tokens.size() == 2 && els->tokens[1].text == "tableList" + h);
+        }
+        const Object* box = f.Find(("tableList" + h).c_str());
+        CHECK(box && box->type == "ContainerDescription" && box->base == "tableList");
+        if (box) {
+            const Field* content = box->body.Find("_content");
+            CHECK(content && content->tokens[0].text == "table" + h);
+        }
+        const Object* table = f.Find(("table" + h).c_str());
+        CHECK(table && table->type == "RibbonDescription" && table->base == "tableMods");
+    }
+    // The bases the in-game pages derive from (RestrictedFoodsPage.rsc, ItemPriorityPage.rsc) stay.
+    CHECK(f.Find("entryList") && f.Find("tableList") && f.Find("tableMods"));
+    CHECK(f.objects.size() == 46);
 }
 
 UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
@@ -122,8 +168,19 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 33);
-    if (strings && strings->blocks.size() == 33) {
+    CHECK(strings && strings->blocks.size() == 61);
+    if (strings) {
+        // The Extensions dialog's two tab captions.
+        int tabKeys = 0;
+        for (const auto& b : strings->blocks) {
+            const Field* n = b.Find("_name");
+            if (n && !n->tokens.empty() &&
+                (n->tokens[0].text == "ExtensionsTabOptional" || n->tokens[0].text == "ExtensionsTabDefault"))
+                ++tabKeys;
+        }
+        CHECK(tabKeys == 2);
+    }
+    if (strings) {
         // The load notice with two parameters (found by its text: the window and page keys sit before the
         // notices, so an index into the list moves whenever one is added).
         bool found = false;
@@ -146,7 +203,8 @@ void CheckKnownTypes(const File& f, const char* file) {
                            o.type == "RibbonDescription" || o.type == "LabelDescription" ||
                            o.type == "TextDescription" || o.type == "TabDescription" ||
                            o.type == "ButtonDescription" || o.type == "TableDescription" ||
-                           o.type == "ContainerDescription" || o.type == "CheckDescription";
+                           o.type == "ContainerDescription" || o.type == "CheckDescription" ||
+                           o.type == "ImageDescription" || o.type == "SliderDescription";
         CHECK(known);
         if (!known) std::printf("  %s:%s has type %s\n", file, o.name.c_str(), o.type.c_str());
     }
@@ -182,6 +240,85 @@ UNIT_TEST(ext_rsc_text_parse_restricted_foods_page) {
           f.Find("labelRestrictedFoodsRow") && f.Find("checkRestrictedFoodsRow") &&
           f.Find("checkRestrictedFoodsShowAll") && f.Find("textRestrictedFoodsHint"));
     CheckKnownTypes(f, "RestrictedFoodsPage.rsc");
+}
+
+UNIT_TEST(ext_rsc_text_parse_item_priority_page) {
+    File f;
+    CHECK(ParseEmbedded("Dialog/ItemPriorityPage.rsc", f));
+    CHECK(f.Find("resource") == nullptr);   // a page, not a dialog: the root object is pageItemPriority
+    const Object* page = f.Find("pageItemPriority");
+    CHECK(page && page->type == "RibbonDescription");
+    CHECK(f.Find("tableItemPriorityTool") && f.Find("tableItemPriorityFuel") &&
+          f.Find("tableItemPriorityClothing") && f.Find("tableItemPriorityHealth") &&
+          f.Find("ribbonItemPriorityCell") && f.Find("labelItemPriorityRow") &&
+          f.Find("checkItemPriorityRow") && f.Find("textItemPriorityRank") &&
+          f.Find("ribbonItemPriorityMoves") && f.Find("checkItemPriorityShowAll"));
+    // The category strip: one tab per category, each a button and its own list.
+    const Object* strip = f.Find("tabItemPriorityCategories");
+    CHECK(strip && strip->type == "TabDescription" && strip->base == "Mod.rsc:tabMod");
+    if (strip) {
+        const Field* tabs = strip->body.Find("_tabs");
+        CHECK(tabs && tabs->isArray && tabs->blocks.size() == 4);
+        if (tabs && tabs->blocks.size() == 4) {
+            CHECK(tabs->blocks[0].Find("_button") && tabs->blocks[0].Find("_content"));
+        }
+    }
+    const Object* up = f.Find("buttonItemPriorityUp");
+    CHECK(up && up->base == "Mod.rsc:buttonMod");
+    const Object* rank = f.Find("textItemPriorityRank");
+    CHECK(rank && rank->body.Find("_text"));
+    CheckKnownTypes(f, "ItemPriorityPage.rsc");
+}
+
+// The element flags our pages may set (`Flags _flags = ExpandWidth;`): the kit's names with the bits the engine
+// reads (Element.h: the stretch bits 0x4 / 0x8 the layouts test, the screen-size bits 0x10 / 0x20 GetPaddedSize
+// tests), and nothing the table does not know.
+UNIT_TEST(ext_rsc_text_element_flags) {
+    uint32_t v = 0;
+    CHECK(LookupEnum(kElementFlags, "Hidden", v) && v == 0x1);
+    CHECK(LookupEnum(kElementFlags, "NoMouseCapture", v) && v == 0x2);
+    CHECK(LookupEnum(kElementFlags, "ExpandWidth", v) && v == 0x4);
+    CHECK(LookupEnum(kElementFlags, "ExpandHeight", v) && v == 0x8);
+    CHECK(LookupEnum(kElementFlags, "FullHeight", v) && v == 0x10);
+    CHECK(LookupEnum(kElementFlags, "FullWidth", v) && v == 0x20);
+    CHECK(!LookupEnum(kElementFlags, "ExtendWidth", v));   // Options.rsc's spelling: not a name the kit knows
+    CHECK(!LookupEnum(kElementFlags, "PauseGame", v));     // a dialog flag, not an element's
+    CHECK(LookupEnum(kDialogFlags, "FirstDraw", v) && v == 0x10);
+
+    // The Foods cell lays itself across the column the controller gives it.
+    File f;
+    CHECK(ParseEmbedded("Dialog/RestrictedFoodsPage.rsc", f));
+    const Object* cell = f.Find("ribbonRestrictedFoodsCell");
+    CHECK(cell != nullptr);
+    if (cell) {
+        const Field* flags = cell->body.Find("_flags");
+        CHECK(flags && !flags->isArray && flags->tokens.size() == 1 && flags->tokens[0].text == "ExpandWidth");
+        CHECK(cell->body.Find("_minWidth") == nullptr);   // the width is the list's, not a constant
+    }
+    File p;
+    CHECK(ParseEmbedded("Dialog/ItemPriorityPage.rsc", p));
+    const Object* row = p.Find("ribbonItemPriorityCell");
+    CHECK(row && row->body.Find("_minWidth") == nullptr);
+    const Object* label = p.Find("labelItemPriorityRow");
+    CHECK(label && label->body.Find("_minWidth") == nullptr);
+}
+
+UNIT_TEST(ext_rsc_text_parse_terrain_edit_page) {
+    File f;
+    CHECK(ParseEmbedded("Dialog/TerrainEditPage.rsc", f));
+    CHECK(f.Find("resource") == nullptr);   // a page, not a dialog: the root object is pageTerrainEdit
+    const Object* page = f.Find("pageTerrainEdit");
+    CHECK(page && page->type == "RibbonDescription");
+    CHECK(f.Find("textTerrainEditHint") && f.Find("textTerrainEditHint2")
+        && f.Find("textTerrainEditHint3") && f.Find("textTerrainEditHint4") &&
+          f.Find("textTerrainEditStatus"));
+    CHECK(f.Find("rowTerrainEditModes") && f.Find("rowTerrainEditSize") && f.Find("rowTerrainEditStrength"));
+    CHECK(f.Find("buttonTerrainEditRaise") && f.Find("buttonTerrainEditLower")
+        && f.Find("buttonTerrainEditFlatten") && f.Find("buttonTerrainEditMountain")
+        && f.Find("buttonTerrainEditSmooth") && f.Find("buttonTerrainEditUndo"));
+    CHECK(f.Find("imageTerrainEditRaise") && f.Find("imageTerrainEditUndo"));
+    CHECK(f.Find("sliderTerrainEditSize") && f.Find("sliderTerrainEditStrength"));
+    CheckKnownTypes(f, "TerrainEditPage.rsc");
 }
 
 UNIT_TEST(ext_rsc_text_syntax_errors) {

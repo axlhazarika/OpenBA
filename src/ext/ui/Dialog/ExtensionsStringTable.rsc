@@ -15,7 +15,6 @@ StringTable resource
 		// the dialog's chrome
 		{ String _name = "ExtensionsTitle";			String _text = "Fixes and Extensions"; }
 		{ String _name = "ExtensionsProfile";		String _text = "(profile: @0)"; }
-		{ String _name = "ExtensionsTab";			String _text = "Fixes and extensions"; }
 		{ String _name = "ExtensionsHeaderName";	String _text = "Name"; }
 		{ String _name = "ExtensionsHeaderDesc";	String _text = "Description"; }
 		{ String _name = "ExtensionsHeaderOn";		String _text = "On/Off"; }
@@ -40,11 +39,42 @@ StringTable resource
 		{ String _name = "ExtensionsWindowTitle";	String _text = "Game extensions"; }
 		{ String _name = "ExtensionsWindowTip";		String _text = "Game extensions: the pages of the extensions active in this town."; }
 		{ String _name = "RestrictedFoodsTab";			String _text = "Foods"; }
+		// ext.terrain_edit's page in it (TerrainEditPage.rsc)
+		{ String _name = "TerrainEditTab";				String _text = "Terrain"; }
+		{ String _name = "TerrainEditHint";				String _text = "Pick a brush, then hold the left mouse button over the map."; }
+		{ String _name = "TerrainEditHint2";			String _text = "Lower digs lakes; Flatten levels ground to build on; Mountain raises peaks."; }
+		{ String _name = "TerrainEditHint3";			String _text = "Right click ends the brush. Undo reverses the last stroke."; }
+		{ String _name = "TerrainEditHint4";			String _text = "Undo does not bring back trees or rocks a lake covered."; }
+		{ String _name = "TerrainEditRaise";			String _text = "Raise"; }
+		{ String _name = "TerrainEditLower";			String _text = "Lower"; }
+		{ String _name = "TerrainEditFlatten";			String _text = "Flatten"; }
+		{ String _name = "TerrainEditMountain";			String _text = "Mountain"; }
+		{ String _name = "TerrainEditSmooth";			String _text = "Smooth"; }
+		{ String _name = "TerrainEditUndo";				String _text = "Undo"; }
+		{ String _name = "TerrainEditSizeLabel";			String _text = "Size"; }
+		{ String _name = "TerrainEditStrengthLabel";		String _text = "Strength"; }
+		{ String _name = "TerrainEditStatus";			String _text = "@0"; }
 		{ String _name = "RestrictedFoodsHint";			String _text = "Check a food to stop citizens eating it. It can still be stored, sold and cooked."; }
 		{ String _name = "RestrictedFoodsParam";			String _text = "@0"; }
 		{ String _name = "RestrictedFoodsCheckTip";		String _text = "Check to stop citizens eating this food."; }
 		{ String _name = "RestrictedFoodsShowAll";		String _text = "Show all foods"; }
 		{ String _name = "RestrictedFoodsShowAllTip";	String _text = "Unchecked: only foods your town has made or stored."; }
+
+		// ext.item_priority's page in it (ItemPriorityPage.rsc)
+		{ String _name = "ItemPriorityTab";			String _text = "Priority"; }
+		{ String _name = "ItemPriorityHint";		String _text = "Rank the items citizens take first. A citizen takes the best-ranked item the storages hold; items not ranked come last."; }
+		{ String _name = "ItemPriorityCatTool";		String _text = "Tools"; }
+		{ String _name = "ItemPriorityCatFuel";		String _text = "Fuel"; }
+		{ String _name = "ItemPriorityCatClothing";	String _text = "Clothing"; }
+		{ String _name = "ItemPriorityCatHealth";	String _text = "Health"; }
+		{ String _name = "ItemPriorityParam";		String _text = "@0"; }
+		{ String _name = "ItemPriorityCheckTip";	String _text = "Check to rank this item (it goes to the bottom of the ranking)."; }
+		{ String _name = "ItemPriorityTop";			String _text = "Top"; }
+		{ String _name = "ItemPriorityUp";			String _text = "Up"; }
+		{ String _name = "ItemPriorityDown";		String _text = "Down"; }
+		// the filter button names what a click does, under the key of the mode being shown
+		{ String _name = "ItemPriorityShowAll";	String _text = "Show all items"; }
+		{ String _name = "ItemPriorityShowAllTip";	String _text = "Unchecked: only items your town has made or stored, and the ranked ones."; }
 
 		// the load notices (Extensions.rsc:extension*, shown by SaveLoadDialog::DoLoad in place of
 		// retail's ModMissing): @0 name, @1 the save's `ext:<id>`, @2 the saved format version
@@ -55,5 +85,9 @@ StringTable resource
 		{ String _name = "LoadProgressMod";			String _text = "Loading mod @0 of @1"; }
 
 		{ String _name = "ExtensionTurnedOff";		String _text = "The following extension is turned off, but this save was made with it.~n~n@0 [@1]~nSaved with extension version @2~n~nA save keeps the extensions it was made with, so it will be turned on for this game. Do you still want to load the save game?"; }
+
+		// the Extensions dialog's two tabs (Extensions.rsc:tabCaptionOptional / tabCaptionDefault)
+		{ String _name = "ExtensionsTabOptional";	String _text = "Optional"; }
+		{ String _name = "ExtensionsTabDefault";		String _text = "Default"; }
 	]
 }

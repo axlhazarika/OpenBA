@@ -247,6 +247,8 @@ void InitText() {
     Register("Dialog/EnhancedOptions", &ProvideText, nullptr);
     Register("Dialog/ExtensionsWindow", &ProvideText, nullptr);
     Register("Dialog/RestrictedFoodsPage", &ProvideText, nullptr);
+    Register("Dialog/ItemPriorityPage", &ProvideText, nullptr);
+    Register("Dialog/TerrainEditPage", &ProvideText, nullptr);
 }
 
 int TextObjectCount() {

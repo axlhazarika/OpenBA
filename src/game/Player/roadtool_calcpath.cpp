@@ -283,6 +283,11 @@ bool RoadTool::CalcPath(int startCell, int endCell) {
                                         (uint64_t)ec, mapDescVal, roadDescExtra);
     }
 
+    // Retail 0x140104f7f (the call right after the PlaceRoadCell loop, 0x140104f61): the road mesh is built
+    // again once every cell is placed. A queued cell (state 0x80) is drawn by the mesh, translucent, until a
+    // builder finishes it; without this call the drawn road stays invisible until the first cell is finished
+    // (FinishRoadCell rebuilds the mesh).
+    decalMgr->RebuildRoadMesh(mapGrid);   // 0x1400af370
 
     return true;
 }
