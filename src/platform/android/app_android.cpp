@@ -98,7 +98,8 @@ void MirrorThread() {
 }
 
 // The phone defaults (docs/vulkan/PLAN.md §1, ruled 2026-10-24): MSAA off, the smallest shadow map,
-// the graphics extensions off. A first run on the phone (no settings.cfg in the user folder yet)
+// the graphics extensions off, ext.phone_menu on (the menu fitted to a landscape phone, the UI scale
+// slider down to 25 %; docs/extensions/handins/PHONEMENU.md). A first run on the phone (no settings.cfg in the user folder yet)
 // starts from a settings.cfg holding only those keys; everything else takes the game's own defaults,
 // and the player's later choices in Options are kept as on any platform (the file is never written
 // again here). Retail has no "shadows off": ShadowScalar 2 is its Low (the smallest sun map); a true
@@ -110,7 +111,8 @@ const char kPhoneSettings[] =
     "ext.better_trees=0\n"
     "ext.foliage_aa=0\n"
     "ext.billboard_shadow=0\n"
-    "ext.max_shadow_res=0\n";
+    "ext.max_shadow_res=0\n"
+    "ext.phone_menu=1\n";
 
 void SeedPhoneSettings(const std::string& userDir) {
     mkdir(userDir.c_str(), 0770);

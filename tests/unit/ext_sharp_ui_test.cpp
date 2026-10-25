@@ -197,6 +197,9 @@ UNIT_TEST(ext_sharp_ui_variant_pick) {
         bool keep = false;
         CHECK(Ext::SharpUI::PickFontHeight(24, 2.0f, 2.0f, &keep) == 48 && !keep);
         CHECK(Ext::SharpUI::PickFontHeight(24, 4.0f, 2.0f, &keep) == 24 && keep);
+        // ext.phone_menu's 25 % at 1x (ratio 4): beyond the compiled range, retail's quads.
+        CHECK(Ext::SharpUI::PickFontHeight(24, 4.0f, 1.0f, &keep) == 24 && keep);
+        CHECK(Ext::SharpUI::PickFontHeight(24, 1.0f, 1.0f, &keep) == 24 && !keep);
     }
 
     char path[64];

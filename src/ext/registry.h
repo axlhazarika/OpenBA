@@ -118,6 +118,7 @@ struct Extensions {
     bool visit_replay = false; // class A, next start: src/ext/visit_replay/, seam Object::ExternalFactory::_extVisitReplay (docs/extensions/handins/VISITREPLAY.md)
     bool find_fastpath = false; // class A, next start: src/ext/find_fastpath/, seam Object::ExternalFactory::_extFindFast (docs/extensions/handins/VISITREPLAY.md)
     bool heap_slack = false; // class A, next start: src/ext/heap_slack/, seam System::MemoryAllocator::_extCommitSeam (docs/extensions/handins/HEAPSLACK.md)
+    bool phone_menu = false; // class A, live: src/ext/phone_menu/, seam UI::UserInterface::_extDialogPlace + the Options UI-scale slider (docs/extensions/handins/PHONEMENU.md)
 #ifdef BANISHED_UNIT_TEST
     // tests/unit/ext_registry_test.cpp only: one extension per class, so the
     // lock semantics are tested before a real extension exists. Not in the exe.

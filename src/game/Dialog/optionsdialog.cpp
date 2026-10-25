@@ -50,6 +50,7 @@
 #include "io/Persistence.h"   // ENDGAME B.3.4 caller batch P
 #include "ext/enhanced_tab/enhanced_tab.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/AOMENU.md): the Enhanced tab
 #include "graphics/SunLight.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/FAA-MENU.md): ExtRequestMaxShadowResSync
+#include "ext/phone_menu/phone_menu.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): UI scale minimum
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -668,6 +669,9 @@ void OptionsDialog::OnOpened() {
         float uiScaleMin = 75.0f;
         float uiScaleMax = 150.0f;
         Platform::Display::UiScaleSliderRange(&uiScaleMin, &uiScaleMax);   // unchanged at density 1
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu lowers the
+        // minimum to 25 % (a UI four times larger than 100 %); retail's 75 with the row off.
+        uiScaleMin = Ext::PhoneMenu::UiScaleSliderMinimum(uiScaleMin);
         SetSliderRange(this->sliderUIScale, uiScaleMin, uiScaleMax);
         if (g_gameSettings != nullptr)
             SetSliderValue(this->sliderUIScale, (float)g_gameSettings->uiScale);

@@ -92,11 +92,15 @@ int PickRetinaVariantHeight(int baseHeight, float pxPerUnit);
 // (half size, letter-spaced by the layout advances).
 bool NativePickFitsRatio(int baseHeight, float pxPerUnit);
 
+// The highest device-pixel ratio retail's slider reaches (75 %, 1 / 0.75) plus a hair.
+constexpr float kRetailRatioMax = 4.0f / 3.0f + 0.01f;
+
 // The font height SelectFont draws with, and whether to keep retail's scaled
 // quads instead ("retail(range)"). At `density` <= 1 (every window that is not
-// high-density: Windows, Linux, non-Retina) this is exactly PickVariantHeight
-// and never keeps retail, i.e. upstream's selection. Only above 1 do the Retina
-// variants and the range check apply.
+// high-density: Windows, Linux, non-Retina) this is exactly PickVariantHeight,
+// i.e. upstream's selection, and keeps retail only for a ratio outside the
+// compiled range (reached only below the slider's retail 75 %, ext.phone_menu).
+// Only above 1 do the Retina variants apply.
 int PickFontHeight(int baseHeight, float pxPerUnit, float density, bool* keepRetail);
 
 // "Font/Sharp<baseName>_<height>.rsc" (baseName "Font", "FontSmall", ...).

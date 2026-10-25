@@ -62,6 +62,7 @@ set(UNIT_TREE_SRCS
   ${CMAKE_SOURCE_DIR}/src/ext/package_cache/index_codec.cpp      # ext_package_cache_test.cpp (PKGCACHE)
   ${CMAKE_SOURCE_DIR}/src/ext/menu_entry/fingerprint.cpp         # ext_menu_entry_test.cpp (MENUENTRY)
   ${CMAKE_SOURCE_DIR}/src/ext/sharp_ui/sharp_math.cpp
+  ${CMAKE_SOURCE_DIR}/src/ext/phone_menu/phone_math.cpp   # ext_phone_menu_test.cpp (PHONEMENU)
   ${CMAKE_SOURCE_DIR}/src/ext/resources/font_tables.cpp         # ext_font_raster_test.cpp (block RSCFONT)
   ${CMAKE_SOURCE_DIR}/src/platform/win/font_raster_win.cpp      #   the GDI rasteriser (the posix twin is FreeType over the next file)
   ${CMAKE_SOURCE_DIR}/src/platform/common/font_raster_freetype.cpp   #   the FreeType rasteriser (block FREETYPE; GDI comparison on Windows)
