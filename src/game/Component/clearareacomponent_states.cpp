@@ -9,10 +9,15 @@
 //   state 0  (default): enter=helper_7960, update=helper_7890, perFrame=helper_78f0
 //                       transitions -> {1, 3}
 //   state 0x15        : enter=&LAB_1177e0, update=helper_7770, perFrame=&LAB_1177d0
-//                       transitions -> {1, 3}   (a cancel/removal path — NOT reached
-//                       from the clear flow; registered for structural fidelity)
+//                       transitions -> {1, 3}
 //   state 1          : enter=helper_7820  transitions -> {2, 3}
 //   state 2          : enter=helper_77f0  transitions -> {3}
+//
+// State 0x15 is the crop field's re-clear: CropFieldComponent states 10 and 11 request
+// 21 when every slot is harvested, and 0x15 -> 1 -> 2 returns the field to its own
+// state 2 (the planting trigger). Its enter and per-frame are thunks onto state 0's
+// (0x1401177e0 JMP 0x140117960, 0x1401177d0 JMP 0x1401178f0); its update 0x140117770
+// is a second copy of 0x140117890.
 //
 // helper_7960 (state-0 ENTER) is the actual clearing dispatch:
 //   * (guarded) instant footprint sweep — only when the global instant bit
@@ -30,10 +35,7 @@
 // helper_7890 (state-0 UPDATE, on transition): stops the work slot when leaving.
 //
 // This is driven by the entity's StateMachineComponent, which links every owner
-// ControllerComponent's embedded state node (at comp+0x28) and ticks it. Opt-in via
-// BANISHED_LIVE_CLEARCTRL (or the global the global live-components switch) — default OFF =>
-// byte-for-byte unchanged run. Requires the StateMachineComponent to be live
-// (BANISHED_LIVE_STATEMACHINE) so the node is linked and ticked.
+// ControllerComponent's embedded state node (at comp+0x28) and ticks it.
 //
 // Faithful offset-by-offset port.
 
@@ -442,9 +444,12 @@ extern "C" void ClearAreaCtrl_PopulateTable() {
                        &CA_State0Update);
     TableAddTransition(t, 1, nullptr);
     TableAddTransition(t, 3, nullptr);
-    // state 0x15: cancel/removal path — not reached from the clear flow; register the
-    //             structure (ids + transitions) faithfully with null handlers.
-    TableRegisterState(t, 0x15, nullptr, nullptr, nullptr, nullptr);
+    // state 0x15: enter 0x1401177e0 JMP 0x140117960, per-frame 0x1401177d0 JMP
+    //             0x1401178f0, update 0x140117770 = a second copy of 0x140117890.
+    //             transitions -> {1, 3}.
+    TableRegisterState(t, 0x15, &CA_State0Enter,
+                       nullptr, &CA_State0PerFrame,
+                       &CA_State0Update);
     TableAddTransition(t, 1, nullptr);
     TableAddTransition(t, 3, nullptr);
     // state 1: model-finalize on entry (helper_7820: 8270 + request 1->2) -> {2, 3}.
