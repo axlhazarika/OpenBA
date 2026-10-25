@@ -1,7 +1,9 @@
 name: Release
 # Builds the release flavour on the three platforms, runs the unit tests on that flavour, packages
-# each platform (tools/release/package.sh; tools/macos/make_app.sh + make_release_zip.sh) and, on a
-# `v*` tag, publishes the GitHub release with the CHANGELOG.md section of that version as its notes.
+# each platform (tools/release/package.sh; tools/macos/make_app.sh + make_release_zip.sh), builds
+# and signs the Android apk (tools/android.sh build release + sign, the release key from the
+# repository's secrets) and, on a `v*` tag, publishes the GitHub release with the CHANGELOG.md
+# section of that version as its notes.
 #
 # Dry run: a manual dispatch (Actions > Release > Run workflow) runs every job but `release`; the
 # packages are the run's artifacts. Pull requests do not run it: release builds are for releases.
@@ -184,10 +186,98 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+  # The signed Android apk (docs/android/README.md "Release"). The pins are android/app/build.gradle's
+  # and docs/android/README.md's: NDK r30, the SDK's CMake 3.31.6, platform 35, build-tools 36.0.0
+  # (zipalign -P 16, apksigner); Gradle 8.12.1 comes from the wrapper, AGP 8.8.1 from android/.
+  # Signing is a step of its own, after the build: the keystore and its passwords never reach Gradle,
+  # the native build or the caches, and the build is the same command as on the maintainer's machine.
+  # The keystore is decoded to the runner's temp folder (outside the workspace, removed on exit); the
+  # passwords reach apksigner through the environment (`env:`), never a command line; the secrets are
+  # masked in the log and no step runs with `set -x`.
+  android:
+    name: Android arm64 apk (signed)
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ANDROID_NDK_PIN: "30.0.16248370"
+      ANDROID_CMAKE_PIN: "3.31.6"
+      ANDROID_BUILD_TOOLS: "36.0.0"
+      ANDROID_PLATFORM_PIN: "android-35"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ccache
+      # The runner image's SDK (ANDROID_HOME) with the pinned packages added; build.gradle names the
+      # NDK and CMake versions, so Gradle takes these and never the image's own.
+      - name: Android SDK packages
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;$ANDROID_PLATFORM_PIN" "build-tools;$ANDROID_BUILD_TOOLS" \
+            "ndk;$ANDROID_NDK_PIN" "cmake;$ANDROID_CMAKE_PIN" > /dev/null
+          ls "$ANDROID_HOME/ndk" "$ANDROID_HOME/cmake" "$ANDROID_HOME/build-tools"
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-release-android-${{ github.sha }}
+          restore-keys: ccache-release-android-
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-android-
+      - name: Build the apk (release = the perf flavour, unsigned)
+        run: tools/android.sh build release --jobs "$BUILD_JOBS" --ccache
+      - name: Sign (zipalign -P 16, apksigner, verify)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          OPENBA_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          OPENBA_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          OPENBA_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VER: ${{ needs.version.outputs.version }}
+        run: |
+          set +x
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$OPENBA_KEYSTORE_PASSWORD" ] || [ -z "$OPENBA_KEY_ALIAS" ] || \
+             [ -z "$OPENBA_KEY_PASSWORD" ]; then
+            echo "::error::the four ANDROID_* signing secrets are not all set"
+            exit 1
+          fi
+          umask 077
+          export OPENBA_KEYSTORE="$RUNNER_TEMP/openba-release.keystore"
+          trap 'rm -f "$OPENBA_KEYSTORE"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode --ignore-garbage > "$OPENBA_KEYSTORE"
+          unset KEYSTORE_BASE64
+          APK="OpenBA-v$VER-android-arm64.apk"
+          mkdir -p dist
+          tools/android.sh sign android/app/build/outputs/apk/release/app-release-unsigned.apk "dist/$APK"
+          (cd dist && sha256sum "$APK" > "$APK.sha256" && cat "$APK.sha256")
+      - name: ccache statistics
+        if: always()
+        run: ccache -s
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-android
+          path: |
+            dist/*.apk
+            dist/*.sha256
+          if-no-files-found: error
+
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [version, windows, linux, macos]
+    needs: [version, windows, linux, macos, android]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -207,4 +297,5 @@ jobs:
           ls -lR artifacts
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "OpenBA $TAG" --notes-file artifacts/release-notes/notes.md \
-            artifacts/package-windows/* artifacts/package-linux/* artifacts/package-macos/*
+            artifacts/package-windows/* artifacts/package-linux/* artifacts/package-macos/* \
+            artifacts/package-android/*
