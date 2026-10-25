@@ -102,6 +102,10 @@ struct RowState {
     int32_t pads[kMaxButtons][4] = {};            // the label's left / top / right / bottom padding
     UI::Font* smallFont = nullptr;                // Font/FontSmall.rsc, when the row needs it
     bool applied = false;
+    bool decided = false;                         // the row / column decision for width x height
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t versionHeight = -1;
 };
 RowState g_row;
 
@@ -331,16 +335,23 @@ void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, 
     VersionSize(dialog, versionW, versionH);
     const int32_t versionTop = VersionTop(width, height, versionH);
 
-    // The row on a screen wider than the backdrop, when it fits; retail's column otherwise.
-    g_rowActive = false;
-    if (wide && ApplyRow(root, width, height)) {
-        int32_t w = 0;
-        int32_t h = 0;
-        PaddedSize(root, w, h);
-        g_rowActive = RowFits(width, height, w, h, logoBottom, versionTop);
+    // The row on a screen wider than the backdrop, when it fits; retail's column otherwise. The
+    // shape stays on the instance, so it is only decided again when the layout size changes.
+    if (!g_row.decided || g_row.width != width || g_row.height != height || g_row.versionHeight != versionH) {
+        g_rowActive = false;
+        if (wide && ApplyRow(root, width, height)) {
+            int32_t w = 0;
+            int32_t h = 0;
+            PaddedSize(root, w, h);
+            g_rowActive = RowFits(width, height, w, h, logoBottom, versionTop);
+        }
+        if (!g_rowActive) Restore();
+        g_row.decided = true;
+        g_row.width = width;
+        g_row.height = height;
+        g_row.versionHeight = versionH;
+        LogDecision(wide, width, height);
     }
-    if (!g_rowActive) Restore();
-    LogDecision(wide, width, height);
 
     int32_t columnW = 0;
     int32_t columnH = 0;
@@ -361,7 +372,10 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         // Switched off while a menu is open: its retail values back before retail lays it out.
         // (A recorded menu at that address went through MenuOpened, which forgets the old one.)
         const bool menuNow = In(g_menus, dialog->_dialog) || In(g_pauses, dialog->_dialog);
-        if (point == UI::UserInterface::kExtPlaceLayout && menuNow && dialog == g_row.dialog) Restore();
+        if (point == UI::UserInterface::kExtPlaceLayout && menuNow && dialog == g_row.dialog) {
+            Restore();
+            g_row.decided = false;   // decided again when the row is switched back on
+        }
         return;
     }
     const bool menu = In(g_menus, dialog->_dialog);
