@@ -52,5 +52,7 @@ and relinks the exe. On Android the same static library is linked into `libmain.
 ## Not third-party code in the tree
 
 The FrancophilSans typeface (Manfred Klein) is kept unchanged under `tools/release/fonts/` with his
-notice (`FrancophilSans_README.txt`) and ships beside the exe in the release packages. It is not
+notice (`FrancophilSans_README.txt`) and ships beside the exe in the release packages. The Android
+apk carries the same three files unchanged as assets (`android/app/build.gradle` uses that folder in
+place), copied into the app's data folder at first start (`OpenBAActivity`). It is not
 part of OpenBA's code or of its GPL-3.0 licence; its terms are in `README.md`.

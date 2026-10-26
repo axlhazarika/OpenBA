@@ -1,7 +1,7 @@
 // android/app/src/main/java/org/openba/game/OpenBAActivity.java (docs/android/README.md)
 //
 // The app's one activity: SDL's SDLActivity (compiled from the pinned SDL submodule, see
-// android/app/build.gradle) with three changes.
+// android/app/build.gradle) with four changes.
 //
 //  * The native entry point is the game's own `main` (src/app/main.cpp, built into libmain.so),
 //    the same function Linux runs, not SDL's renamed SDL_main: main.cpp defines SDL_MAIN_HANDLED.
@@ -17,6 +17,14 @@
 //
 //  * The surface is OpenBASurface: SDL's, with the captured mouse's buttons and motion passed on
 //    (a camera-rotate drag's middle-button release was lost; OpenBASurface.java has the defect).
+//
+//  * The typeface. The apk carries FrancophilSans as assets (tools/release/fonts, the files the
+//    desktop packages put beside the exe; THIRD_PARTY_NOTICES.md). ext.sharp_ui's rasteriser reads
+//    the TTF from the app's data folder (src/platform/android/font_raster_android.cpp, the folder
+//    SDL_GetAndroidExternalStoragePath names = getExternalFilesDir(null)), so each file absent there
+//    is copied in before the native side starts. A file present is left alone (the player's own
+//    copy wins). Here rather than in the native boot: assets are a Java API, the native side
+//    would need the activity's AssetManager through JNI for the same three copies.
 package org.openba.game;
 
 import android.content.Context;
@@ -26,16 +34,27 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 
 public class OpenBAActivity extends SDLActivity {
     private static final String TAG = "OpenBA";
     private static final String FLAG_PREFIX = "BANISHED_";
+    // The apk's font assets (android/app/build.gradle: tools/release/fonts), copied as they are.
+    private static final String[] FONT_ASSETS = {
+        "FrancophilSans.ttf", "FrancophilSans-Bold.ttf", "FrancophilSans_README.txt",
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         applyLaunchEnvironment(getIntent());
+        copyFontAssets();
         super.onCreate(savedInstanceState);
     }
 
@@ -47,6 +66,38 @@ public class OpenBAActivity extends SDLActivity {
     @Override
     protected SDLSurface createSDLSurface(Context context) {
         return new OpenBASurface(context);
+    }
+
+    private void copyFontAssets() {
+        final File dataDir = getExternalFilesDir(null);
+        if (dataDir == null) {
+            Log.w(TAG, "font: no data folder, the font is not copied");
+            return;
+        }
+        for (String name : FONT_ASSETS) {
+            final File target = new File(dataDir, name);
+            if (target.isFile()) {
+                continue;
+            }
+            final File part = new File(dataDir, name + ".part");
+            try (InputStream in = getAssets().open(name); OutputStream out = new FileOutputStream(part)) {
+                final byte[] buffer = new byte[65536];
+                int n;
+                while ((n = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, n);
+                }
+            } catch (IOException e) {
+                Log.w(TAG, "font: copying " + name + " failed: " + e);
+                part.delete();
+                continue;
+            }
+            if (part.renameTo(target)) {
+                Log.i(TAG, "font: copied " + name + " to " + dataDir);
+            } else {
+                Log.w(TAG, "font: renaming " + part + " failed");
+                part.delete();
+            }
+        }
     }
 
     private static void applyLaunchEnvironment(Intent intent) {

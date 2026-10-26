@@ -9,9 +9,9 @@
 //   directories. In an app process the "exe" (/proc/self/exe) is /system/bin/app_process64, there
 //   is no per-user font directory, and the system's (/system/fonts) holds no FrancophilSans. The
 //   one place is the app's data folder (android_paths.h): the game directory, the folder the
-//   release packages put the TTF in beside OpenBA.exe / OpenBA. The player copies
-//   FrancophilSans.ttf there with the WinData packages (`tools/android.sh push-data` does it
-//   from tools/release/fonts; docs/android/README.md).
+//   release packages put the TTF in beside OpenBA.exe / OpenBA. The apk carries the font as assets
+//   (tools/release/fonts) and OpenBAActivity copies each file absent there at start (P9;
+//   docs/android/README.md), so the face is in place before this lookup runs.
 // Absent: "absent", and ext.sharp_ui keeps its retail(...) fallback, as everywhere.
 // ============================================================================
 #include "ext/resources/font_raster.h"
