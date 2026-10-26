@@ -38,7 +38,7 @@ bool ParseEmbedded(const char* path, File& f) {
 }  // namespace
 
 UNIT_TEST(ext_rsc_text_embedded_files) {
-    CHECK(kEmbeddedCount == 7);
+    CHECK(kEmbeddedCount == 8);
     CHECK(Embedded("Dialog/Extensions.rsc") != nullptr);
     CHECK(Embedded("Dialog/EnhancedOptions.rsc") != nullptr);
     CHECK(Embedded("Dialog/ExtensionsStringTable.rsc") != nullptr);
@@ -46,6 +46,7 @@ UNIT_TEST(ext_rsc_text_embedded_files) {
     CHECK(Embedded("Dialog/RestrictedFoodsPage.rsc") != nullptr);
     CHECK(Embedded("Dialog/ItemPriorityPage.rsc") != nullptr);
     CHECK(Embedded("Dialog/TerrainEditPage.rsc") != nullptr);
+    CHECK(Embedded("Dialog/TouchControls.rsc") != nullptr);
 }
 
 UNIT_TEST(ext_rsc_text_parse_extensions) {
@@ -162,7 +163,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(page && page->body.Find("_content") &&
           page->body.Find("_content")->tokens[0].text == "enhancedOptionsTable");
     const Object* table = e.Find("enhancedOptionsTable");
-    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 19);   // nine labels, ten controls (COMPRESSAO: the cache size and, under it, its button; TEXQUALITY: texture quality; P8: render scale, frame rate cap)
+    CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 21);   // ten labels, eleven controls (COMPRESSAO: the cache size and, under it, its button; TEXQUALITY: texture quality; P8: render scale, frame rate cap; TOUCHMODE: touch controls)
     // TEXQUALITY: the Texture quality combo offers Full / Half only (Quarter removed by the user's ruling).
     const Object* tqItems = e.Find("textureQualityItems");
     CHECK(tqItems && tqItems->body.Find("_strings") && tqItems->body.Find("_strings")->blocks.size() == 2);
@@ -337,6 +338,30 @@ UNIT_TEST(ext_rsc_text_parse_terrain_edit_page) {
     const Object* redoButton = f.Find("buttonTerrainEditRedo");
     CHECK(redoButton && redoButton->type == "ButtonDescription" && f.Find("imageTerrainEditRedo"));
     CheckKnownTypes(f, "TerrainEditPage.rsc");
+}
+
+// TOUCHMODE (docs/android/TOUCH_MODE.md): the cluster dialog. The controller finds the five holders and buttons
+// by name; every look is the game's own (the toolbar's raised button, SpriteSheet.rsc's glyphs).
+UNIT_TEST(ext_rsc_text_parse_touch_controls) {
+    File f;
+    CHECK(ParseEmbedded("Dialog/TouchControls.rsc", f));
+    const Object* dialog = f.Find("resource");
+    CHECK(dialog && dialog->type == "Dialog");
+    const char* names[] = {"Pad", "RotateLeft", "RotateRight", "ZoomIn", "ZoomOut"};
+    for (const char* n : names) {
+        const Object* holder = f.Find((std::string("holderTouch") + n).c_str());
+        const Object* button = f.Find((std::string("buttonTouch") + n).c_str());
+        CHECK(holder && holder->type == "GroupDescription");
+        CHECK(button && button->type == "ButtonDescription");
+    }
+    const Object* content = f.Find("groupTouchContent");
+    CHECK(content && content->type == "GroupDescription");
+    const Object* pad = f.Find("buttonTouchPad");
+    CHECK(pad && pad->base == "Toolbar.rsc:buttonToolbar");
+    const Object* arrow = f.Find("imageTouchArrow");
+    CHECK(arrow && arrow->body.Find("_spriteSheet") &&
+          arrow->body.Find("_spriteSheet")->tokens[0].text == "SpriteSheet.rsc");
+    CheckKnownTypes(f, "TouchControls.rsc");
 }
 
 UNIT_TEST(ext_rsc_text_syntax_errors) {

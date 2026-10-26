@@ -116,7 +116,8 @@ void MirrorThread() {
 // render scale at half the screen (ruled 2026-10-24; window_android.cpp RenderScale reads it). P8
 // (ruled 2026-10-25): the frame rate capped at 60 (ext.fps_cap: the frame limiter paces the menu and
 // the game; the S25's panel runs at 120 Hz, docs/android/P7_FIRST_PASS.md "The 60 fps question").
-// Both are rows of Options > Enhanced (Render scale, Frame rate cap).
+// Both are rows of Options > Enhanced (Render scale, Frame rate cap). P10 (ruled 2026-10-26): the touch
+// controls on, the toolbar at 200 % shrunk to fit beside them (ext.touch_mode, docs/android/TOUCH_MODE.md).
 const char kPhoneSettings[] =
     "GameEdgeScroll=false\n"
     "VideoRenderScale=50\n"
@@ -129,7 +130,9 @@ const char kPhoneSettings[] =
     "ext.max_shadow_res=0\n"
     "ext.phone_menu=1\n"
     "ext.fps_cap=1\n"
-    "ext.fps_cap_rate=60\n";
+    "ext.fps_cap_rate=60\n"
+    "ext.touch_mode=1\n"
+    "ext.touch_mode_toolbar_scale=200\n";
 
 void SeedPhoneSettings(const std::string& userDir) {
     mkdir(userDir.c_str(), 0770);

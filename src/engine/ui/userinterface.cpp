@@ -437,11 +437,23 @@ bool UI::UserInterface::PausesGame() const {
 // call is a pure re-evaluation — but it is a virtual into another lane's code,
 // and if some widget ever makes it stateful this site is where that surfaces.
 Object::InternalPtr<UI::DialogInstance>
-UI::UserInterface::GetFirstContainedDialog(int32_t x, int32_t y) const {
+UI::UserInterface::GetFirstContainedDialog(int32_t gx, int32_t gy) const {
     for (auto* node = _dialogs._tail; node; node = node->prev) {
         auto* dlg = node->element;
         const uint32_t flags = dlg->_flags;                            // +0x20
         if (flags & 0x4u) continue;
+
+        // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): a dialog with its own scale k is
+        // tested in its own units. Null seam: retail's point.
+        int32_t x = gx;
+        int32_t y = gy;
+        if (_extDialogScale != nullptr) {
+            const float k = _extDialogScale(dlg);
+            if (k != 1.0f) {
+                x = static_cast<int32_t>(static_cast<float>(gx) / k);
+                y = static_cast<int32_t>(static_cast<float>(gy) / k);
+            }
+        }
 
         bool hit;
         if (flags & 0x8u) {

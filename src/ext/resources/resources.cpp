@@ -249,6 +249,7 @@ void InitText() {
     Register("Dialog/RestrictedFoodsPage", &ProvideText, nullptr);
     Register("Dialog/ItemPriorityPage", &ProvideText, nullptr);
     Register("Dialog/TerrainEditPage", &ProvideText, nullptr);
+    Register("Dialog/TouchControls", &ProvideText, nullptr);
 }
 
 int TextObjectCount() {

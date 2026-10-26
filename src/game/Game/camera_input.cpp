@@ -51,6 +51,7 @@
 #include "ext/registry.h"             // EXT SEAM (NOT RETAIL, docs/extensions/handins/EYECAM.md, BETTERCAM.md): Ext::Ext()
 #include "ext/eye_camera/eye_camera.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/EYECAM.md): ext.eye_camera's zoom
 #include "ext/better_camera/better_camera.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/BETTERCAM.md): ext.better_camera's zoom range + steady tilt
+#include "ext/touch_mode/touch_mode.h"   // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): ext.touch_mode's camera controls
 
 extern "C" bool StartTown_GetSpawnTile(int* x, int* y);   // starttown.cpp (BANISHED_CAMERA_PIN=town)
 
@@ -171,6 +172,11 @@ void PlayerToolManager::UpdateCamera(int inputFlag, int64_t timeTicks) {
     } else {
         zoomDir = wheel;
     }
+    // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): ext.touch_mode's held control (pad, rotate,
+    // zoom) drives the same locals the keys above drive; a key that set one keeps it.
+    if (Ext::Ext().touch_mode || Ext::TouchMode::Shown())
+        Ext::TouchMode::CameraInput(dt, yaw, panX, panY, zoomDir);
+
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/EYECAM.md): while
     // ext.eye_camera follows a citizen the zoom moves the eye's own distance
     // and retail's zoom target (+0x3C) is left alone.
