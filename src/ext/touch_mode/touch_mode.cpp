@@ -170,8 +170,10 @@ public:
                 std::fprintf(stderr, "[TouchMode] %s / %s missing from %s\n", kHolders[i], kButtons[i], kClusterRsc);
                 continue;
             }
-            holder->_leftPad = r.x1;
-            holder->_topPad = r.y1;
+            // Relative to the cluster's box: the dialog's root sits at the box's corner (Place), so the
+            // dialog hit-tests (and takes the pointer from the world) over the box only.
+            holder->_leftPad = r.x1 - g_cluster.box.x1;
+            holder->_topPad = r.y1 - g_cluster.box.y1;
             holder->SetNeedsSizeCalc();
             button->_minWidth = r.Width();
             button->_minHeight = r.Height();
@@ -306,10 +308,10 @@ bool Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         return true;
     }
     if (dialog == g_open) {
-        // The cluster: the whole screen; its holders place the buttons (Shape).
+        // The cluster: its root at the box's upper-left; the holders place the buttons inside it (Shape).
         if (point == UI::UserInterface::kExtPlaceLayout) {
             g_open->Shape();
-            StoreRect(rect, 0, 0, width, height);
+            StoreRect(rect, g_cluster.box.x1, g_cluster.box.y1, width, height);
         }
         return true;
     }
