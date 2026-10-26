@@ -22,6 +22,7 @@
 
 #include "ext/phone_menu/phone_menu.h"
 #include "ext/phone_menu/phone_math.h"
+#include "ext/phone_menu/loading_screen.h"   // PlaceLoading (P9)
 #include "ext/registry.h"
 
 #include <atomic>
@@ -510,6 +511,8 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         }
         return;
     }
+    // P9: the loading screen (loading_screen.cpp): its picture's bottom border on the screen.
+    if (PlaceLoading(point, dialog, width, height, rect)) return;
     const bool menu = In(g_menus, dialog->_dialog);
     const bool pause = !menu && In(g_pauses, dialog->_dialog);
     const bool version = !menu && !pause && In(g_buildIds, dialog->_dialog);
