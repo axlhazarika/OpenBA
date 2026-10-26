@@ -336,6 +336,19 @@ setting; lift offset on, distance tuned on the phone; line and rectangle tools d
 start, drag preview, Confirm); edge auto-pan only in drag tools with a finger down; pick snap ~50 px + tap-to-cycle;
 last device wins (a pinch / spin ends on release, then the mouse or the D-pad takes over).
 
+**Next session (the owner's list after the P9 / P10 release-apk test, 2026-10-26 late), in this order:**
+1. **P11 touch pointer**: the placement tool / road tool changes and "clicking on things with a finger" per the
+   rulings above (`docs/android/TOUCH_PLACEMENT_IDEAS.md`): aim-then-Place, the action bar, retail's single-click mode
+   for line / rectangle tools, pick snap ~50 px + tap-to-cycle.
+2. **Touch-size pass on every control** (ext.phone_menu, extending the 2x close [x]): everything clickable gets about
+   the height of the [x] / camera buttons: the buttons at the top of a dialog (pin, follow, ...), the `>` buttons on the
+   citizens in a house, Ok / Accept / Cancel, the Options buttons and sliders.
+3. Bugs seen on the phone: the loading screen still shows a small sliver of the picture at the bottom where the
+   border strip sits too high (P9_LOADING_SCALE.md: the clean route keeps the menus' overlay sprite alive past the
+   menu loop); the toolbar tooltip pops up over the toolbar button ABOVE the one tapped (finger only); the version text
+   gets smaller when Options opens (the tall-dialog scale-down applies to the whole interface, P9_DIALOGS.md); the
+   in-game pause menu is no longer centred.
+
 Waiting, no action: the fifth CI check, a dispatch dry run of `release.yml`, the sun map at Shadow Quality None.
 
 ## 3. Rules that hold (do not relax)
