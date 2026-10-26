@@ -47,7 +47,7 @@ StringTable resource
 		{ String _name = "TerrainEditHeadingBrushes";		String _text = "Terrain Brushes"; }
 		{ String _name = "TerrainEditHeadingResources";		String _text = "Place Resources"; }
 		{ String _name = "TerrainEditHeadingShared";		String _text = "Both Tools"; }
-		{ String _name = "TerrainEditUndoNote";			String _text = "Undo reverses the last stroke of either tool."; }
+		{ String _name = "TerrainEditUndoNote";			String _text = "Undo and Redo work on either tool."; }
 		{ String _name = "TerrainEditHint4";			String _text = "Undo does not bring back trees or rocks a lake covered."; }
 		{ String _name = "TerrainEditPlantHint";			String _text = "Plant: pick a resource, press the tree, then hold the left mouse button."; }
 		{ String _name = "TerrainEditPlantHint2";			String _text = "Density is how full the area gets; resources already there count."; }
@@ -59,6 +59,7 @@ StringTable resource
 		{ String _name = "TerrainEditMountain";			String _text = "Mountain"; }
 		{ String _name = "TerrainEditSmooth";			String _text = "Smooth"; }
 		{ String _name = "TerrainEditUndo";				String _text = "Undo"; }
+		{ String _name = "TerrainEditRedo";				String _text = "Redo"; }
 		{ String _name = "TerrainEditSizeLabel";			String _text = "Size"; }
 		{ String _name = "TerrainEditStrengthLabel";		String _text = "Strength"; }
 		{ String _name = "TerrainEditStatus";			String _text = "@0"; }

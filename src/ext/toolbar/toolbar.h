@@ -63,6 +63,9 @@ struct Contribution {
     // a control of this page (local id `id`) was used: write the state now; false = not mine
     bool (*changed)(UI::Element* page, int32_t id);
     void (*close)();       // forget the element pointers
+    // optional: called every frame while the page is the one showing, so it can keep what it displays up to
+    // date when the player is busy with another tool
+    void (*tick)() = nullptr;
 };
 
 // The contributions (defined beside their extensions, src/ext/<id>/toolbar_page.cpp).

@@ -370,6 +370,102 @@ UNIT_TEST(ext_terrain_edit_undo_remembers_what_a_stroke_planted) {
     CHECK(s.heights.empty() && s.types.empty());
 }
 
+namespace {
+
+// A stroke that changed one height word, painted over the given cells.
+void PaintStroke(Ext::TerrainEdit::UndoStack& u, int firstCell, int frames, int vertex,
+                 bool keepRedo = false) {
+    u.BeginStroke(keepRedo);
+    u.RecordTool(2, "Oak");
+    for (int i = 0; i < frames; ++i) u.RecordFrame(firstCell + i, 3.0f, 1.5f, 0.5f);
+    u.RecordHeight(vertex, 100);
+    u.CommitStroke();
+}
+
+}  // namespace
+
+// A stroke remembers how it was painted, and an Undo can hand that to the redo list.
+UNIT_TEST(ext_terrain_edit_redo_gets_how_the_stroke_was_painted) {
+    using namespace Ext::TerrainEdit;
+    UndoStack u;
+    PaintStroke(u, 40, 3, 7);
+    Stroke s;
+    CHECK(u.Pop(s));
+    CHECK(s.replay.mode == 2 && s.replay.plant == "Oak" && s.replay.frames.size() == 3);
+    CHECK(s.replay.frames[0].cell == 40 && s.replay.frames[2].cell == 42);
+    CHECK(s.replay.frames[1].radius == 3.0f && s.replay.frames[1].strength == 1.5f &&
+          s.replay.frames[1].density == 0.5f);
+    u.PushRedo(std::move(s.replay));
+    CHECK(u.RedoDepth() == 1);
+    Replay r;
+    CHECK(u.PopRedo(r));
+    CHECK(r.frames.size() == 3 && r.mode == 2);
+    CHECK(u.RedoDepth() == 0 && !u.PopRedo(r));
+}
+
+// Redo is a fork in the road: a new stroke that changes something ends the way forward, a Redo's own stroke
+// and a stroke that changed nothing do not.
+UNIT_TEST(ext_terrain_edit_redo_list_ends_with_a_new_stroke) {
+    using namespace Ext::TerrainEdit;
+    UndoStack u;
+    PaintStroke(u, 10, 2, 1);
+    PaintStroke(u, 20, 2, 2);
+    for (int i = 0; i < 2; ++i) {
+        Stroke s;
+        CHECK(u.Pop(s));
+        u.PushRedo(std::move(s.replay));
+    }
+    CHECK(u.RedoDepth() == 2);
+    u.BeginStroke();            // a click that changed nothing
+    u.RecordFrame(30, 3.0f, 1.0f, 0.5f);
+    u.CommitStroke();
+    CHECK(u.RedoDepth() == 2);
+    Replay first;
+    CHECK(u.PopRedo(first));    // the Redo: paints its stroke again and keeps the rest
+    PaintStroke(u, first.frames[0].cell, 2, 3, true);
+    CHECK(u.RedoDepth() == 1 && u.Depth() == 1);
+    PaintStroke(u, 50, 1, 4);   // anything new
+    CHECK(u.RedoDepth() == 0);
+}
+
+// The strokes can be read from the top, and the version moves when they change.
+UNIT_TEST(ext_terrain_edit_undo_strokes_are_read_from_the_top_and_the_version_moves) {
+    using namespace Ext::TerrainEdit;
+    UndoStack u;
+    const uint32_t v0 = u.Version();
+    PaintStroke(u, 10, 1, 1);
+    PaintStroke(u, 20, 1, 2);
+    CHECK(u.Version() != v0);
+    CHECK(u.FromTop(0) && u.FromTop(0)->replay.frames[0].cell == 20);
+    CHECK(u.FromTop(1) && u.FromTop(1)->replay.frames[0].cell == 10);
+    CHECK(u.FromTop(2) == nullptr);
+    const uint32_t v1 = u.Version();
+    Stroke s;
+    CHECK(u.Pop(s));
+    CHECK(u.Version() != v1);
+    const uint32_t v2 = u.Version();
+    u.Clear();
+    CHECK(u.Version() != v2);
+}
+
+UNIT_TEST(ext_terrain_edit_redo_list_is_cleared_with_the_world_and_capped) {
+    using namespace Ext::TerrainEdit;
+    UndoStack u;
+    Replay empty;
+    u.PushRedo(std::move(empty));   // a stroke with no frames cannot be painted again
+    CHECK(u.RedoDepth() == 0);
+    for (size_t i = 0; i < kMaxUndoStrokes + 5; ++i) {
+        Replay r;
+        r.frames.push_back(ReplayFrame{ static_cast<int>(i), 1.0f, 1.0f, 0.5f });
+        u.PushRedo(std::move(r));
+    }
+    CHECK(u.RedoDepth() == kMaxUndoStrokes);
+    Replay top;
+    CHECK(u.PopRedo(top) && top.frames[0].cell == static_cast<int>(kMaxUndoStrokes + 4));
+    u.Clear();
+    CHECK(u.RedoDepth() == 0);
+}
+
 UNIT_TEST(ext_terrain_edit_undo_is_last_in_first_out_and_skips_empty_strokes) {
     using namespace Ext::TerrainEdit;
     UndoStack u;
