@@ -51,17 +51,28 @@ int NearestItem(int percent) {
     return 2;
 }
 
+// The UserInterface the page's dialog is in: only a dialog's root element carries its
+// DialogInstance (dialog_create.cpp), so the page's parents are walked up to it.
+UI::UserInterface* DialogUi(UI::Element* e) {
+    for (int depth = 0; e != nullptr && depth < 16; ++depth) {
+        if (e->_dialogParent != nullptr) return e->_dialogParent->_ui;
+        e = e->_parent;
+    }
+    return nullptr;
+}
+
 void Open(UI::Element* page) {
     g_combo = FindElement<UI::ComboElement>(page, "comboRenderScale");
-    g_ui = (page != nullptr && page->_dialogParent != nullptr) ? page->_dialogParent->_ui : nullptr;
+    g_ui = DialogUi(page);
     const bool adjustable = Platform::Window::RenderScaleAdjustable();
     g_openItem = NearestItem(CurrentPercent());
     if (g_combo != nullptr) {
         g_combo->SetCurrentItem(g_openItem);
         if (!adjustable) g_combo->Enable(false);
     }
-    std::fprintf(stderr, "[RenderScale] combo=%p item=%d (%d %%)%s\n", static_cast<void*>(g_combo), g_openItem,
-                 CurrentPercent(), adjustable ? "" : ", fixed on this platform");
+    std::fprintf(stderr, "[RenderScale] combo=%p ui=%p item=%d (%d %%)%s\n", static_cast<void*>(g_combo),
+                 static_cast<void*>(g_ui), g_openItem, CurrentPercent(),
+                 adjustable ? "" : ", fixed on this platform");
 }
 
 void Apply() {
