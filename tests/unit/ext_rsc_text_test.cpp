@@ -173,7 +173,7 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
     CHECK(ParseEmbedded("Dialog/ExtensionsStringTable.rsc", s));
     CHECK(s.objects.size() == 1 && s.objects[0].type == "StringTable" && s.objects[0].name == "resource");
     const Field* strings = s.objects[0].body.Find("_strings");
-    CHECK(strings && strings->blocks.size() == 69);
+    CHECK(strings && strings->blocks.size() == 70);   // 70 with NextStartSuffix (P8)
     if (strings) {
         // The Extensions dialog's two tab captions.
         int tabKeys = 0;
