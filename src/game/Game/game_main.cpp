@@ -616,7 +616,8 @@ int RunGameMain(void* platformHandle, const char* cmdLine) {
                         // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): ext.load_progress
                         // shows the Loading screen on the outer loader loops' frames while mods load.
                         if (loadingLoop)
-                            Ext::LoadProgress::BootBegin(loadingLoop->_dialogExternal);
+                            Ext::LoadProgress::BootBegin(loadingLoop->_dialogExternal,
+                                                         g_gameSettings->uiScale);
 
                         // ARM MenuDLT's scene load; do NOT run it here.
                         //

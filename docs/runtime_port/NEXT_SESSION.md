@@ -298,6 +298,46 @@ Next session, in the owner's order:
 - Ruled 2026-10-26: the rotate drag is good on the real KVM mouse (centre jump and speed: closed). Waiting, no action:
   the fifth CI check, a dispatch dry run of `release.yml`, the sun map still allocated at Shadow Quality None.
 
+### 2.9 Android P9 outcome (2026-10-26, run as five opus worktree agents + one research agent) and what is next
+
+Every §2.8 item is DONE on `android/p9` (session docs `docs/android/P9_DIALOGS.md`, `P9_LOADING_SCALE.md`, `P9_RENDER.md`,
+`P9_ASSETS.md`): Texture Filter note removed; AO-changes-mip NOT a sampling defect (RULED: AO identical to DX11 on every
+platform); loading screen fitted under ext.phone_menu; scroll bars 4x and close buttons 2x; render scale / UI scale
+coupled (the setting is in screen pixels at Full; `src/platform/common/ui_render_scale.h`); tall dialogs scale the
+interface down while open (Options 44 %, Fixes and Extensions 52 % at UI 40); icons for every row (a unit test now
+fails a row without one); pause menu rows above the version line, both torn borders drawn (new engine seam
+`kExtPlaceBackdropLower`); FrancophilSans in the apk, copied to the data folder at first start (`push-data` no longer
+pushes it).
+
+Rulings taken during the session: loading picture's TOP border is the one cut on 19.5:9 (keep); no migration for a
+settings.cfg saved at Half / Quarter before the coupling (desktops are always 100).
+
+Open after P9 (follow-ups, not blockers):
+- At render scale Quarter with UI 42 the Options text squashes (sharp_ui rasterises at ~0.6 size in a 585x270 buffer).
+- While Options is shown scaled down, Apply on the UI-scale slider saves the value but the dialog keeps its fitted size
+  until closed; the scale-down is per interface, not per dialog (the engine has one scale per interface).
+- The 4x scroll bars stretch retail's 12 px bar art (the thumb reads as a wide rounded block; no wider art exists).
+- Tutorial glow ring around a toolbar button is drawn at the unscaled place while ext.touch_mode is on (tutorial only).
+- The Enhanced tab is now 11 rows on a dialog that is already tall on the phone.
+
+**P10 touch mode (RULED 2026-10-26, built on `android/p10-touch`, `docs/android/TOUCH_MODE.md`, handin TOUCHMODE.md):**
+`ext.touch_mode` class A, Android seed only: bottom-left D-pad (pan) + rotate L/R + zoom in/out in the toolbar's own
+frame, the toolbar as one bar beside it, scaled independently (`ext.touch_mode_toolbar_scale`, requested value then
+SHRUNK TO FIT beside the cluster: ~1.49x on the S25); per-dialog scale seam `UI::UserInterface::_extDialogScale` (RULED,
+null in faithful); a press captures the control it started on until release (RULED). Rulings owed: a pressed look for
+the D-pad; the empty corner above the zoom buttons.
+
+**P11 touch pointer (RULED 2026-10-26 from `docs/android/TOUCH_PLACEMENT_IDEAS.md`, all nine recommendations
+accepted, NOT built):** one class A `touch_pointer` ext, Android seed only, reading SDL finger events through the pump
+hook and injecting pointer / button edges after the poll (tools untouched): one finger AIMS while a tool is active
+(retail's hover shows the ghost), pan = D-pad or two fingers, PINCH = zoom, two-finger SPIN = rotate (through
+touch_mode's camera hold hook); Place / Rotate / Flip / Cancel action bar on the right above the toolbar; tap-twice as a
+setting; lift offset on, distance tuned on the phone; line and rectangle tools drive retail's single-click mode (tap
+start, drag preview, Confirm); edge auto-pan only in drag tools with a finger down; pick snap ~50 px + tap-to-cycle;
+last device wins (a pinch / spin ends on release, then the mouse or the D-pad takes over).
+
+Waiting, no action: the fifth CI check, a dispatch dry run of `release.yml`, the sun map at Shadow Quality None.
+
 ## 3. Rules that hold (do not relax)
 
 - CLAUDE.md's hard rules: no null guard on a faithful crash (find what handed us the null); no `getenv`, flags through

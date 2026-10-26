@@ -55,6 +55,7 @@
 #include "system/Timer.h"   // ENDGAME B.3.9 SS2: System::Timer::_ticksPerSecond
 #include "load_time.h"   // [LoadTime] stamps (NOT RETAIL, print-only; block LOADSTAMP)
 #include "ext/registry.h"                     // EXT SEAM (NOT RETAIL, docs/extensions/handins/SPLASH.md): Ext::Ext().quick_screens
+#include "ext/phone_menu/loading_screen.h"   // EXT SEAM (P9): LoadingUiScale
 #include "ext/quick_screens/quick_screens.h"  // EXT SEAM (NOT RETAIL, docs/extensions/handins/SPLASH.md): Ext::QuickScreens::SplashWorkDone
 #include "ext/load_progress/load_progress.h"  // EXT SEAM (NOT RETAIL, docs/extensions/handins/LOADPROGRESS.md): BootEnd
 
@@ -292,7 +293,11 @@ void GameLoadDialogLoopT::Startup() {
     //      CVTTSS2SI, / 100.0f. It overwrites the settings scale step 1 wrote.
     const float heightRatio =
         900.0f / static_cast<float>(::Video::Device::_singleton->backBufferHeight);
-    _ui._uiScale = static_cast<float>(static_cast<int32_t>(heightRatio * 100.0f)) / 100.0f;
+    // EXT SEAM (NOT RETAIL, P9, docs/android/P9_LOADING_SCALE.md §1): with ext.phone_menu on, the
+    // loading group keeps the Options UI scale step 1 wrote (the owner's ruling); retail's otherwise.
+    const float settingsScale = _ui._uiScale;
+    _ui._uiScale = Ext::PhoneMenu::LoadingUiScale(
+        static_cast<float>(static_cast<int32_t>(heightRatio * 100.0f)) / 100.0f, settingsScale);
 }
 
 void GameLoadDialogLoopT::Shutdown() {

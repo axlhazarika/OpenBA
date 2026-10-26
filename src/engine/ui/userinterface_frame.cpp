@@ -201,6 +201,8 @@ const bool* UI::UserInterface::_extFixScaleLayout = nullptr;   // fix.ui_scale_l
 void (*UI::UserInterface::_extDialogPlace)(int32_t, const UI::DialogInstance*, int32_t, int32_t,
                                            int32_t*) = nullptr;   // ext.phone_menu seam
 float (*UI::UserInterface::_extDialogScale)(const UI::DialogInstance*) = nullptr;   // ext.touch_mode seam
+bool (*UI::UserInterface::_extBackdropOver)(const UI::DialogInstance*, int32_t, int32_t, int32_t*,
+                                            int32_t*) = nullptr;   // ext.phone_menu seam (P9)
 
 int32_t UI::UserInterface::Update(const System::Time& timeRef) {
     // 0x1801213ef — _mouseCaptured = 0, BEFORE anything else.

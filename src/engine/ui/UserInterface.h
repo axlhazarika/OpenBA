@@ -442,6 +442,14 @@ public:
     // _uiScale / k (Update: the layout rectangle and the mouse divided by k; Draw: the quads scaled
     // by k through the context's world transform). src/engine never includes src/ext.
     static float (*_extDialogScale)(const DialogInstance* dialog);
+    // EXT SEAM (NOT RETAIL, P9, docs/extensions/handins/PHONEMENU.md §3): ext.phone_menu. Null by
+    // default (always under the faithful profile). Draw, just AFTER a dialog's backdrop: `rect` holds
+    // the backdrop's {x1, y1, x2, y2} as drawn; a true answer draws the backdrop's sprite once more
+    // at the answered `rect`, over it and before the dialog's elements, clipped to `clip` {x, y, w, h}
+    // (layout units, the SpriteContext scissor; w <= 0: no clip). The loading screen's picture,
+    // bottom-aligned and clipped to its torn bottom border.
+    static bool (*_extBackdropOver)(const DialogInstance* dialog, int32_t width, int32_t height,
+                                    int32_t* rect, int32_t* clip);
 
 protected:
     // RULE B5-4 / B6-4.5: NOT retail's ctor (that is the door, see banner). It
