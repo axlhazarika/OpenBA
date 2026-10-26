@@ -181,14 +181,23 @@ public:
             }
             // Relative to the cluster's box: the dialog's root sits at the box's corner (Place), so the
             // dialog hit-tests (and takes the pointer from the world) over the box only.
-            holder->_leftPad = r.x1 - g_cluster.box.x1;
-            holder->_topPad = r.y1 - g_cluster.box.y1;
+            holder->_leftPad = r.x1 - g_cluster.box.x1 - g_cluster.frame;
+            holder->_topPad = r.y1 - g_cluster.box.y1 - g_cluster.frame;
             holder->SetNeedsSizeCalc();
             button->_minWidth = r.Width();
             button->_minHeight = r.Height();
             button->SetNeedsSizeCalc();
             // The pad's tooltip off: a finger left on it after a pan is a parked cursor.
             if (i == kPad) button->SetFlagsOnOff(0, UI::kElementFlagToolTipValid);
+        }
+        // The content inside the frame: inset by the cluster's frame on every side, so the frame (the toolbar's
+        // borders, which fill the root) wraps the controls with the toolbar's margin.
+        if (UI::Element* content = FindElement(System::String("groupTouchContent")).Get()) {
+            content->_leftPad = g_cluster.frame;
+            content->_topPad = g_cluster.frame;
+            content->_rightPad = g_cluster.frame;
+            content->_bottomPad = g_cluster.frame;
+            content->SetNeedsSizeCalc();
         }
         const Rect& pad = g_cluster.control[kPad];
         if (UI::Element* arrows = FindElement(System::String("groupTouchPadArrows")).Get()) {

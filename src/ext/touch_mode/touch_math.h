@@ -15,10 +15,14 @@
 namespace Ext {
 namespace TouchMode {
 
-// The cluster's cell (a D-pad third, a button's side) and gap as fractions of the short edge,
-// the D-pad's dead zone as a fraction of its side, the margin used without ext.phone_menu.
+// The cluster's cell (a D-pad third, a button's side), the gap between its buttons and the frame
+// around them as fractions of the short edge, the D-pad's dead zone as a fraction of its side, the
+// margin used without ext.phone_menu. The gap and the frame match the toolbar's look on the S25 at
+// UI 40 (Toolbar.rsc: 4-unit cells, a 9-unit content pad, at k ~1.5): one frame around the group
+// (the owner, 2026-10-26).
 constexpr float kCellFraction = 0.11f;
-constexpr float kGapFraction = 0.02f;
+constexpr float kGapFraction = 0.014f;
+constexpr float kFrameFraction = 0.03f;
 constexpr float kDeadZoneFraction = 0.15f;
 constexpr float kDesktopMarginFraction = 0.02f;
 
@@ -50,9 +54,10 @@ enum Control : int32_t {
 struct Cluster {
     int32_t cell = 0;
     int32_t gap = 0;
+    int32_t frame = 0;    // the frame's inset around the controls
     int32_t margin = 0;
     Rect control[kControlCount] = {};
-    Rect box = {};        // all the controls
+    Rect box = {};        // the frame around all the controls (the dialog's root)
     Rect barRegion = {};  // where the toolbar may sit: right of the cluster, to the safe right edge
 };
 
@@ -61,8 +66,8 @@ struct Cluster {
 int32_t Margin(int32_t width, int32_t height, int32_t phoneMargin);
 
 // The cluster on a width x height layout screen, `margin` in from the edges (TOUCH_MODE.md §3):
-// the D-pad bottom-left (3 cells square), the two rotate buttons above it, the two zoom buttons
-// right of it, the bar region right of everything.
+// one frame (`frame` inset) around the D-pad bottom-left (3 cells square), the two rotate buttons
+// above it and the two zoom buttons right of it; the bar region right of the frame.
 Cluster LayoutCluster(int32_t width, int32_t height, int32_t margin);
 
 // The toolbar's own scale: `requested` (1.0 .. 2.0), shrunk so a bar `ownWidth` wide in its own

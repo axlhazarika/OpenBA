@@ -18,7 +18,20 @@ Dialog resource		// the dialog object: Dialog/TouchControls.rsc
 	ElementDescription _rootElement = "touchRoot";
 }
 
+// One frame around the whole group, the toolbar's own (Toolbar.rsc:toolBar: SharedElements.rsc's dialogBorder and
+// sunkenBorderPad6 around the content); the controller pads the content by the cluster's frame inset.
 GroupDescription touchRoot
+{
+	Alignment _alignment = TopLeft;
+	ElementDescription _elements
+	[
+		"SharedElements.rsc:dialogBorder"
+		"SharedElements.rsc:sunkenBorderPad6"
+		"groupTouchContent"
+	]
+}
+
+GroupDescription groupTouchContent
 {
 	Alignment _alignment = TopLeft;
 	ElementDescription _elements

@@ -50,14 +50,15 @@ bool Inside(const Rect& inner, const Rect& outer) {
 UNIT_TEST(ext_touch_mode_cluster_layout_s25) {
     const Cluster c = LayoutCluster(2340, 1080, 49);
     CHECK(c.cell == 119);
-    CHECK(c.gap == 22);
-    CHECK(Same(c.control[kPad], 49, 674, 406, 1031));
-    CHECK(Same(c.control[kRotateLeft], 49, 557, 216, 652));
-    CHECK(Same(c.control[kRotateRight], 239, 557, 406, 652));
-    CHECK(Same(c.control[kZoomIn], 428, 674, 595, 841));
-    CHECK(Same(c.control[kZoomOut], 428, 864, 595, 1031));
-    CHECK(Same(c.box, 49, 557, 595, 1031));
-    CHECK(c.barRegion.x1 == 639);
+    CHECK(c.gap == 15);
+    CHECK(c.frame == 32);
+    CHECK(Same(c.control[kPad], 81, 642, 438, 999));
+    CHECK(Same(c.control[kRotateLeft], 81, 532, 252, 627));
+    CHECK(Same(c.control[kRotateRight], 267, 532, 438, 627));
+    CHECK(Same(c.control[kZoomIn], 453, 642, 620, 813));
+    CHECK(Same(c.control[kZoomOut], 453, 828, 620, 999));
+    CHECK(Same(c.box, 49, 500, 652, 1031));
+    CHECK(c.barRegion.x1 == 682);
     CHECK(c.barRegion.x2 == 2291);
     CHECK(c.barRegion.y2 == 1031);
     // No two controls overlap.
@@ -121,8 +122,8 @@ UNIT_TEST(ext_touch_mode_hit_control) {
     CHECK(HitControl(c, 100, 600) == kRotateLeft);
     CHECK(HitControl(c, 300, 600) == kRotateRight);
     CHECK(HitControl(c, 500, 700) == kZoomIn);
-    CHECK(HitControl(c, 500, 1000) == kZoomOut);
-    CHECK(HitControl(c, 220, 600) == kNone);   // the gap between the rotate buttons
+    CHECK(HitControl(c, 500, 950) == kZoomOut);
+    CHECK(HitControl(c, 259, 600) == kNone);   // the gap between the rotate buttons
     CHECK(HitControl(c, 1200, 500) == kNone);  // the game view
 }
 
@@ -174,13 +175,13 @@ UNIT_TEST(ext_touch_mode_capture) {
     CHECK(cap.Step(c, true, 200, 850) == kRotateLeft);     // onto the pad: still rotating
     CHECK(cap.Step(c, false, 200, 850) == kNone);
     CHECK(cap.Step(c, true, 500, 700) == kZoomIn);
-    CHECK(cap.Step(c, true, 500, 1000) == kZoomIn);        // onto Zoom out: still zooming in
-    CHECK(cap.Step(c, false, 500, 1000) == kNone);
+    CHECK(cap.Step(c, true, 500, 950) == kZoomIn);        // onto Zoom out: still zooming in
+    CHECK(cap.Step(c, false, 500, 950) == kNone);
     CHECK(cap.Step(c, true, 1200, 500) == kNone);          // a press in the game view
     CHECK(cap.Step(c, true, 200, 850) == kNone);           // dragged onto the pad: nothing
     CHECK(cap.Step(c, true, 500, 700) == kNone);
     CHECK(cap.Step(c, false, 500, 700) == kNone);
-    CHECK(cap.Step(c, true, 220, 600) == kNone);           // a press in the gap between controls
+    CHECK(cap.Step(c, true, 259, 600) == kNone);           // a press in the gap between controls
     CHECK(cap.Step(c, true, 100, 600) == kNone);
 }
 

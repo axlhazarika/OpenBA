@@ -354,6 +354,8 @@ UNIT_TEST(ext_rsc_text_parse_touch_controls) {
         CHECK(holder && holder->type == "GroupDescription");
         CHECK(button && button->type == "ButtonDescription");
     }
+    const Object* content = f.Find("groupTouchContent");
+    CHECK(content && content->type == "GroupDescription");
     const Object* pad = f.Find("buttonTouchPad");
     CHECK(pad && pad->base == "Toolbar.rsc:buttonToolbar");
     const Object* arrow = f.Find("imageTouchArrow");

@@ -33,11 +33,12 @@ Cluster LayoutCluster(int32_t width, int32_t height, int32_t margin) {
     const float s = static_cast<float>(shortEdge);
     c.cell = Round(s * kCellFraction);
     c.gap = Round(s * kGapFraction);
+    c.frame = Round(s * kFrameFraction);
     c.margin = margin;
 
     const int32_t padSide = 3 * c.cell;
-    const int32_t padX = margin;
-    const int32_t padY = height - margin - padSide;
+    const int32_t padX = margin + c.frame;
+    const int32_t padY = height - margin - c.frame - padSide;
     c.control[kPad] = Make(padX, padY, padSide, padSide);
 
     // The rotate pair above the pad: two halves of its width, 0.8 of a cell tall.
@@ -54,7 +55,7 @@ Cluster LayoutCluster(int32_t width, int32_t height, int32_t margin) {
     c.control[kZoomIn] = Make(zoomX, padY, zoomW, zoomH);
     c.control[kZoomOut] = Make(zoomX, padY + padSide - zoomH, zoomW, zoomH);
 
-    c.box = Rect{padX, rotateY, zoomX + zoomW, padY + padSide};
+    c.box = Rect{padX - c.frame, rotateY - c.frame, zoomX + zoomW + c.frame, padY + padSide + c.frame};
     c.barRegion = Rect{c.box.x2 + 2 * c.gap, margin, width - margin, height - margin};
     return c;
 }
