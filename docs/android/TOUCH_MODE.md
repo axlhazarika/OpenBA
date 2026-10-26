@@ -261,3 +261,85 @@ if (Ext::Ext().touch_mode || Ext::TouchMode::Shown())
   emulation, behind the platform twins.
 - A cluster on the right for left-handed players, a mirrored layout (a value key).
 - The cluster's own size as a value key if 0.11 S proves wrong in the hand.
+
+## 9. Session log (phase 2, 2026-10-26, lane p10touch)
+
+Branch `worktree-agent-a60153362df7a69d4` on main `14415217e`. Built with `--jobs 2`; Windows DX11 debug and the
+Android debug apk (Vulkan).
+
+**As built: what differs from §1-§7.**
+- **Two later owner rulings (2026-10-26).** (1) The capture rule (`touch_math.h Capture`). A press that starts on a
+  control owns the pointer until it is released. While the finger is down that control, and only that control, acts
+  wherever the finger moves, so sliding over Rotate, Zoom, the toolbar or the world triggers nothing else. A press
+  that starts anywhere else captures nothing. A captured D-pad keeps panning from the finger's direction relative to
+  the pad's centre, even off the pad (the dead zone still applies near the centre). The input no longer reads
+  `_mouseDownX/Y`. (2) One frame around the group, the toolbar's own: `SharedElements.rsc:dialogBorder` and
+  `sunkenBorderPad6`, as in `Toolbar.rsc:toolBar`. The cluster's math has a frame inset of 0.03 S and a gap of
+  0.014 S, which match the toolbar's look at k of about 1.5. On the S25 (UI 100 layout = px): pad 81..438 x
+  642..999, rotate 81..252 / 267..438 x 532..627, zoom 453..620 x 642..813 / 828..999, frame (the dialog's root)
+  49..652 x 500..1031, bar region 682..2291.
+- **The toolbar dialog is identified per game.** `Dialog/Toolbar.rsc` is resolved again for each
+  `GameUpdateLoop` instance, because a load gives the resource a new address. The first phone build cached the front
+  end's copy, and the row never engaged (`phone_row_not_applied_first_build.png`). Touch mode acts only on the game's
+  own `UserInterface`: the loading screens have a second UI at another scale.
+- **Buttons inherit `Toolbar.rsc:buttonToolbar`.** `SharedElements.rsc:raisedButton` is not a compiled object of its
+  own in the packages (`[ExtRes] ... the base Dialog/SharedElements.rsc:raisedButton did not load`). Each button is
+  `TopLeft` inside a holder group whose padding places it: a group gives every child its whole rectangle. The pad's
+  tooltip is switched off (`kElementFlagToolTipValid`). Rotate and zoom keep the Input tab's names ("Rotate View
+  Left", "Zoom View In").
+- **Glyphs.** Rotate buttons show `ArrowLeft` / `ArrowRight` beside the toolbar's `ToolCamera` icon (no rotate sprite
+  exists). Zoom shows `Plus` / `Minus`. The pad shows the four `Arrow*` sprites at 0.75 of a cell.
+- **Event notices.** Retail keeps the ribbon hidden behind the toolbar while it has nothing to show, and slides it
+  out left by the root's right padding. The same padding now lifts it from behind the bar's left end to just above
+  it (fully out at retail's 44-unit base), so the right-hand strip stays free.
+- **The cluster's root sits at the frame's corner.** It takes the pointer from the world over the frame only (a
+  dialog hit-tests its root's rectangle), not over the whole left of the screen.
+- **Not built.** The tutorial glow-ring mapping (a known effect, `docs/extensions/handins/TOUCHMODE.md`).
+
+**Verification.**
+- **Unit** (`tools/build.sh unit --jobs 2`): 1507 tests, 0 failures, 1 skipped (the kit cross-check: this worktree has
+  no `build/ext_resources`). New cases:
+  - `ext_touch_mode_*` (cluster on the S25, other screens, render-scale invariance, toolbar fit, hit test, pad
+    sectors, capture, zoom repeat, unit mappings, registry row and scale key);
+  - `ext_rsc_text_parse_touch_controls`;
+  - counts updated in `ext_values_table_shape` and `ext_rsc_text_*`.
+- **S25** (debug apk; the owner's settings: UI 42, render scale Full, phone_menu on; the seed appended
+  `ext.touch_mode=1`, `ext.touch_mode_toolbar_scale=200`):
+  - `[TouchMode] toolbar k=1.489 (requested 2.00, fit 1.489): 454x58 own units` once the frame was in (1.531
+    before it).
+  - Held touches (`adb shell input swipe x y x y <ms>`):
+    - **Pad right** (1.5 s): the target moved 7.4,-25.2 -> 23.0,-11.6.
+    - **Rotate left** (1.38 s): yaw 27 -> -99, about 91 deg/s.
+    - **Zoom** (the owner's own presses, logged): distance stepped and repeated.
+    - **Pad dragged across the whole toolbar** (2.5 s): kept panning, and no toolbar button fired.
+    - **A drag from the game view onto the pad**: nothing.
+    - **Rotate slid onto Zoom**: kept rotating.
+  - A tap on Houses opened its sub-toolbar centred on the button, inside the bar region. The tooltip of a toolbar
+    button appeared at the finger.
+  - **Render scale Half** (`VideoRenderScale=50`): k 1.269, so the bar keeps its on-screen width. The cluster has
+    the same physical size.
+- **Windows** (DX11, functional dir, a 2340x1080 window at UI 40, phone_menu + touch_mode on, autostart): k 1.416,
+  the cluster in its frame beside the bar, the same layout as the phone.
+- **Screenshots** (session scratchpad `android-touch/`):
+  - `phone_cluster.png`;
+  - `phone_subtoolbar.png`;
+  - `phone_tooltip.png`;
+  - `phone_final.png`;
+  - `phone_capture_slide.png`;
+  - `phone_half.png`;
+  - `phone_frame.png` (the final look);
+  - `win_touch_frame.png`.
+- **Not run.** The DX11 gate and the resave check (the coordinator's). The faithful profile (the seam is null there
+  by `Sync`). A live row toggle in game. A real finger on the phone, beyond the owner's own taps.
+
+**Trap (phone).** `adb shell sed -i` on the app's `settings.cfg` replaces the file with one the shell owns. The app
+cannot read it and writes a fresh default file. The owner's file was restored from a copy, written back into the
+app-owned file with `cat copy > settings.cfg`. To edit a key, write an edited copy into the existing file the same
+way, never `sed -i` and never `mv`.
+
+**Opens.**
+- The tutorial glow ring under touch mode.
+- The empty corner above the zoom buttons inside the frame.
+- Whether the pad should have a press-state look of its own (retail's button only lights while the finger is on it).
+- The Enhanced tab gains an 11th row on a dialog that is already too tall on the phone (P9's tall-dialog work).
+- `tools/ext_resources.sh` was not re-run in this worktree: re-run it before the merge for the sheet cross-check.
