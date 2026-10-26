@@ -200,6 +200,7 @@ static_assert(sizeof(Node) == 0x18, "MemAlloc(0x18, 8) in the drain");
 const bool* UI::UserInterface::_extFixScaleLayout = nullptr;   // fix.ui_scale_layout seam
 void (*UI::UserInterface::_extDialogPlace)(int32_t, const UI::DialogInstance*, int32_t, int32_t,
                                            int32_t*) = nullptr;   // ext.phone_menu seam
+float (*UI::UserInterface::_extDialogScale)(const UI::DialogInstance*) = nullptr;   // ext.touch_mode seam
 
 int32_t UI::UserInterface::Update(const System::Time& timeRef) {
     // 0x1801213ef — _mouseCaptured = 0, BEFORE anything else.
@@ -325,18 +326,27 @@ int32_t UI::UserInterface::Update(const System::Time& timeRef) {
         layoutW = static_cast<int32_t>(static_cast<float>(vdev->backBufferWidth) * _uiScale);
         layoutH = static_cast<int32_t>(static_cast<float>(vdev->backBufferHeight) * _uiScale);
     }
-    if (_extDialogPlace == nullptr) {
+    if (_extDialogPlace == nullptr && _extDialogScale == nullptr) {
         for (Node* n = _dialogs._head; n; n = n->next) {
             n->element->ComputeLayout(0, 0, layoutW, layoutH);
         }
     } else {
         // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu may lay a
         // dialog out inside a safe area; retail's rectangle otherwise.
+        // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): ext.touch_mode lays a dialog with its
+        // own scale k out in its own units (the placed rectangle divided by k).
         for (Node* n = _dialogs._head; n; n = n->next) {
             int32_t rect[4] = {0, 0, layoutW, layoutH};
-            _extDialogPlace(kExtPlaceLayout, n->element, layoutW, layoutH, rect);
+            if (_extDialogPlace != nullptr)
+                _extDialogPlace(kExtPlaceLayout, n->element, layoutW, layoutH, rect);
+            const float k = _extDialogScale != nullptr ? _extDialogScale(n->element) : 1.0f;
+            if (k != 1.0f) {
+                for (int32_t& v : rect)
+                    v = static_cast<int32_t>(static_cast<float>(v) / k);
+            }
             n->element->ComputeLayout(rect[0], rect[1], rect[2], rect[3]);
-            _extDialogPlace(kExtPlaceAfterLayout, n->element, layoutW, layoutH, rect);
+            if (_extDialogPlace != nullptr)
+                _extDialogPlace(kExtPlaceAfterLayout, n->element, layoutW, layoutH, rect);
         }
     }
 
@@ -398,7 +408,26 @@ int32_t UI::UserInterface::Update(const System::Time& timeRef) {
                 // Element::UpdateState&)` (0x180113980) — non-virtual member of
                 // the real class (block B), which spells the state as its
                 // address; it WRITES BACK into `st`.
-                dlg->Update(timeRef, this, st);                     // 0x18012176a
+                // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): a dialog with its own scale k
+                // hit-tests the mouse in its own units; the shared state keeps the global ones.
+                const float k = _extDialogScale != nullptr ? _extDialogScale(dlg) : 1.0f;
+                if (k == 1.0f) {
+                    dlg->Update(timeRef, this, st);                 // 0x18012176a
+                } else {
+                    const int32_t gx = st.mouseX;
+                    const int32_t gy = st.mouseY;
+                    const int32_t gdx = st.dragDx;
+                    const int32_t gdy = st.dragDy;
+                    st.mouseX = static_cast<int32_t>(static_cast<float>(gx) / k);
+                    st.mouseY = static_cast<int32_t>(static_cast<float>(gy) / k);
+                    st.dragDx = static_cast<int32_t>(static_cast<float>(gdx) / k);
+                    st.dragDy = static_cast<int32_t>(static_cast<float>(gdy) / k);
+                    dlg->Update(timeRef, this, st);
+                    st.mouseX = gx;
+                    st.mouseY = gy;
+                    st.dragDx = gdx;
+                    st.dragDy = gdy;
+                }
             }
             if ((dlg->_flags >> 1) & 1u) break;
             n = n->prev;
