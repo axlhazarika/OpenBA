@@ -571,6 +571,7 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
 void Sync() {
     const bool faithful = CurrentProfile() == Profile::Faithful;
     UI::UserInterface::_extDialogPlace = faithful ? nullptr : &Place;
+    UI::UserInterface::_extBackdropOver = faithful ? nullptr : &BackdropOver;   // P9 (loading_screen.h)
 }
 
 void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause) {

@@ -1,7 +1,7 @@
 // ============================================================================
 // src/ext/phone_menu/loading_screen.cpp -- ext.phone_menu: the loading screen (P9)
 // ============================================================================
-// NOT RETAIL. loading_screen.h has the contract, loading_math.h the rule.
+// NOT RETAIL. loading_screen.h has the contract, loading_math.h the look.
 //
 // Which dialogs: Dialog/Loading.rsc is opened by every GameLoadDialogLoopT (the boot's Loading
 // splash, a new game, a load, the tutorial transitions) and by ext.load_progress's boot screen, as
@@ -13,10 +13,12 @@
 
 #include "ext/phone_menu/loading_screen.h"
 #include "ext/phone_menu/loading_math.h"
+#include "ext/registry.h"
 
 #include <atomic>
 #include <cstring>
 
+#include "ui/Dialog.h"
 #include "ui/DialogInstance.h"
 #include "ui/Element.h"
 #include "ui/UserInterface.h"
@@ -85,22 +87,46 @@ bool Recognise(const UI::DialogInstance* dialog) {
 bool PlaceLoading(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32_t height,
                   int32_t* rect) {
     (void)width;
+    (void)height;
     if (dialog == nullptr) return false;
     if (point == UI::UserInterface::kExtPlaceLayout) {
         // Retail's rectangle: `main` bottom-centred on the screen's bottom, in the bottom border.
         return Recognise(dialog);
     }
+    if (!Recorded(dialog->_dialog)) return false;
     if (point == UI::UserInterface::kExtPlaceBackdrop) {
-        if (!Recorded(dialog->_dialog)) return false;
-        const Rect r = BottomOnBottom(Rect{rect[0], rect[1], rect[2], rect[3]}, height);
+        // The menus' fit: the picture's top on the screen's top (its top border whole).
+        const Rect r = LogoTop(Rect{rect[0], rect[1], rect[2], rect[3]});
         rect[0] = r.x1;
         rect[1] = r.y1;
         rect[2] = r.x2;
         rect[3] = r.y2;
         return true;
     }
-    if (point == UI::UserInterface::kExtPlaceAfterLayout) return Recorded(dialog->_dialog);
-    return false;
+    return point == UI::UserInterface::kExtPlaceAfterLayout ||
+           point == UI::UserInterface::kExtPlaceBackdropLower;
+}
+
+bool BackdropOver(const UI::DialogInstance* dialog, int32_t width, int32_t height, int32_t* rect,
+                  int32_t* clip) {
+    if (!Ext().phone_menu || dialog == nullptr || !Recorded(dialog->_dialog)) return false;
+    const Rect lower = LowerCopy(Rect{rect[0], rect[1], rect[2], rect[3]}, height);
+    if (lower.x2 <= lower.x1) return false;
+    const int32_t stripTop = BorderStripTop(height, lower.y2 - lower.y1);
+    rect[0] = lower.x1;
+    rect[1] = lower.y1;
+    rect[2] = lower.x2;
+    rect[3] = lower.y2;
+    clip[0] = 0;
+    clip[1] = stripTop;
+    clip[2] = width;
+    clip[3] = height - stripTop;
+    return true;
+}
+
+float LoadingUiScale(float retailScale, float settingsScale) {
+    if (!Ext().phone_menu || settingsScale <= 0.0f) return retailScale;
+    return settingsScale;
 }
 
 }  // namespace PhoneMenu
