@@ -48,7 +48,8 @@ void NoteTextureFilterNextStart(UI::ComboElement* filter) {
     const UI::StringTable* table = Object::ExternalFactory::_singleton->FindOrLoadAs<UI::StringTable>(
         System::Filename(kStringTableRsc));
     if (!Object::IsDerivedFromNullSafe(table, UI::StringTable::TypeId())) {
-        std::fprintf(stderr, "[EnhancedTab] %s missing: the Texture Filter combo stays retail's\n", kStringTableRsc);
+        std::fprintf(stderr, "[EnhancedTab] %s missing: the Texture Filter combo stays retail's\n",
+                     kStringTableRsc);
         return;
     }
     const System::String suffix = table->GetText(System::String(kKeySuffix));
@@ -66,7 +67,8 @@ void NoteTextureFilterNextStart(UI::ComboElement* filter) {
                  marked, count, suffix._data, g_bootFilter);
     // The closed combo shows its current item's text: refresh it from the edited list (SetCurrentItem
     // returns early on the same index).
-    filter->UpdateText();}
+    filter->UpdateText();
+}
 
 }  // namespace EnhancedTab
 }  // namespace Ext
