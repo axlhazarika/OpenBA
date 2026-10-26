@@ -141,6 +141,13 @@ sign)
     : "${OPENBA_KEYSTORE_PASSWORD:?OPENBA_KEYSTORE_PASSWORD: the keystore password}"
     : "${OPENBA_KEY_PASSWORD:?OPENBA_KEY_PASSWORD: the key password}"
     [ -f "$OPENBA_KEYSTORE" ] || { echo "no keystore at OPENBA_KEYSTORE" >&2; exit 1; }
+    # Git Bash: zipalign and apksigner are Windows programs and take Windows paths (a POSIX
+    # "/c/Users/..." keystore path is "file not found" to Java).
+    if command -v cygpath >/dev/null 2>&1; then
+        in="$(cygpath -m "$in")"
+        out="$(cygpath -m "$out")"
+        OPENBA_KEYSTORE="$(cygpath -m "$OPENBA_KEYSTORE")"
+    fi
     zipalign="$(build_tool zipalign)"
     apksigner="$(build_tool apksigner)"
     aligned="$out.aligned"
