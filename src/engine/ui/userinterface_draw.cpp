@@ -446,6 +446,25 @@ void UI::UserInterface::Draw(Video::Context& context) {
                         sd.rotation    = 0.0f;
                         sd.color       = tint;
                         sd.isLine      = 0;
+                        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu
+                        // may draw the menus' backdrop once more BEFORE retail's draw, bottom-aligned,
+                        // so its bottom border shows under the moved picture (retail's draw then covers
+                        // the extra copy's top with its own opaque top border). The hook gets retail's
+                        // rectangle and answers the extra draw's; none unless it is non-empty. Null
+                        // pointer: retail's one draw.
+                        if (_extDialogPlace != nullptr) {
+                            int32_t lower[4] = {x1, y1, x2, y2};
+                            _extDialogPlace(kExtPlaceBackdropLower, d, width, height, lower);
+                            if (lower[2] > lower[0] && lower[3] > lower[1] &&
+                                (lower[0] != x1 || lower[1] != y1 || lower[2] != x2 || lower[3] != y2)) {
+                                SpriteDraw extra = sd;
+                                extra.x1 = lower[0];
+                                extra.y1 = lower[1];
+                                extra.x2 = lower[2];
+                                extra.y2 = lower[3];
+                                sc->AddSpriteDraw(extra);
+                            }
+                        }
                         sc->AddSpriteDraw(sd);          // dialog backdrop
                     }
                 }
