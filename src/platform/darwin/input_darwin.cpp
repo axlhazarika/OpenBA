@@ -31,8 +31,8 @@ namespace {
 uint16_t g_mouseModifiers = 0;
 
 // macOS window chord: Control+Command+F toggles native full screen (a Space), the system's
-// own shortcut. Session only: the persistent setting is Options > fullscreen, which
-// Video::Device::AdjustDisplay turns into a borderless window pinned to the monitor. The
+// own shortcut. Session only: the persistent setting is Options > fullscreen, which the
+// Metal backend (backend.mm, this fork) also makes native full screen at boot and on Apply. The
 // resize the toggle causes reaches the engine as the usual SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
 // -> WM_SIZE -> Video::Device::SizeWindow. Returns true when the event was the chord (the
 // game sees no key for it).

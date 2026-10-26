@@ -979,6 +979,16 @@ bool DeviceData::CreateDevice() {
         layer.displaySyncEnabled = !Opt().stress;
         SDL_ShowWindow(w);
         Platform::Window::ConfigureBackgroundWindow(w);
+        // NOT RETAIL (fork): Options > Fullscreen opens in native macOS full screen (its own Space, no menu bar or
+        // title bar). The window above was sized to the usable screen and nothing made it borderless at boot, so a
+        // saved fullscreen started as a framed window. The back buffer follows the full-screen pixel size.
+        if (cfg && cfg->fullscreen && !Opt().background) {
+            SDL_SetWindowFullscreen(w, true);
+            SDL_SyncWindow(w);
+            SDL_GetWindowSizeInPixels(w, &_owner->backBufferWidth, &_owner->backBufferHeight);
+            fprintf(stderr, "[Metal] native full screen at boot: %dx%d px\n", _owner->backBufferWidth,
+                    _owner->backBufferHeight);
+        }
         _owner->settingsChanged = 0;
         fprintf(stderr, "[Metal] device %s created\n", gpu.name.UTF8String);
         // NOT RETAIL (ext.create_on_demand): objects waiting for their first use are made on this device.
@@ -1126,12 +1136,23 @@ static void ApplyEngineSettingsChange(Video::Context* ctx, Video::Device* dev) {
     g_lastFullscreen = fs;
     if (fsFlip || dev->backBufferWidth != cw || dev->backBufferHeight != ch) {
         int wantW = dev->backBufferWidth, wantH = dev->backBufferHeight;
-        dev->AdjustDisplay();
+        // NOT RETAIL (fork): Fullscreen is native macOS full screen, not AdjustDisplay's borderless window. Turning
+        // the option off leaves full screen first; a full screen entered with Control+Command+F while the option is
+        // off is the player's, so it is kept (and its size is not saved as the window size).
+        if (fs) {
+            if (!(SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN)) SDL_SetWindowFullscreen(w, true);
+        } else {
+            if (fsFlip && (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN)) {
+                SDL_SetWindowFullscreen(w, false);
+                SDL_SyncWindow(w);
+            }
+            if (!(SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN)) dev->AdjustDisplay();
+        }
         SDL_SyncWindow(w);
         SDL_GetWindowSizeInPixels(w, &cw, &ch);
         dev->backBufferWidth = cw;
         dev->backBufferHeight = ch;
-        if (cfg && !fs) {
+        if (cfg && !fs && !(SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN)) {
             cfg->windowWidth = cw;
             cfg->windowHeight = ch;
         }
