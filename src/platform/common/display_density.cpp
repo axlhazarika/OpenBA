@@ -9,6 +9,7 @@
 
 #include "display_density.h"
 #include "platform_window_hooks.h"
+#include "ui_render_scale.h"   // P9: the UI scale in screen units (pure)
 
 namespace Platform {
 namespace Display {
@@ -22,8 +23,18 @@ float Density() {
 
 int FirstRunUiScalePercent(int defaultPercent) {
     const float d = Density();
-    if (d <= 1.0f) return defaultPercent;
-    return static_cast<int>(static_cast<float>(defaultPercent) / d + 0.5f);
+    int percent = defaultPercent;
+    if (d > 1.0f) percent = static_cast<int>(static_cast<float>(defaultPercent) / d + 0.5f);
+    // P9: the setting is in screen units; the game's default is in back-buffer units.
+    return FirstRunPercentAt(percent, RenderPercent());
+}
+
+int RenderPercent() {
+    return static_cast<int>(Window::RenderScale() * 100.0f + 0.5f);
+}
+
+float UiScaleRatio(int uiPercent) {
+    return UiScaleRatioAt(uiPercent, RenderPercent());
 }
 
 void UiScaleSliderRange(float* minPercent, float* maxPercent) {

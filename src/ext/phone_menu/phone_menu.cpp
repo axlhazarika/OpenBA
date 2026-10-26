@@ -22,6 +22,9 @@
 
 #include "ext/phone_menu/phone_menu.h"
 #include "ext/phone_menu/phone_math.h"
+#include "ext/phone_menu/loading_screen.h"   // PlaceLoading (P9)
+#include "ext/phone_menu/touch_fit.h"
+#include "ext/phone_menu/touch_math.h"
 #include "ext/registry.h"
 
 #include <atomic>
@@ -37,6 +40,8 @@
 #include "ui/SpriteSheet.h"
 #include "ui/UserInterface.h"
 #include "video/Device.h"   // Video::Device::_singleton: the back buffer the UI scale floor is for
+#include "platform/common/display_density.h"   // Platform::Display::RenderPercent (P9)
+#include "platform/common/ui_render_scale.h"   // ScreenExtent: the floor is in screen units (P9)
 
 namespace Ext {
 namespace PhoneMenu {
@@ -57,6 +62,7 @@ std::atomic<const UI::Dialog*> g_buildIds[kMaxDialogs] = {};
 // after it). Main thread only.
 bool g_rowActive = false;
 bool g_versionAside = false;
+bool g_versionLow = false;    // P9: the backdrop's bottom border is drawn, the version line sits in it
 int32_t g_versionWidth = -1;
 
 void Record(std::atomic<const UI::Dialog*>* set, const UI::Dialog* dialog) {
@@ -469,7 +475,8 @@ void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, 
     int32_t versionW = -1;
     int32_t versionH = -1;
     VersionSize(dialog, versionW, versionH);
-    const int32_t versionTop = VersionTop(width, height, versionH);
+    g_versionLow = wide;
+    const int32_t versionTop = wide ? LowVersionTop(height, versionH) : VersionTop(width, height, versionH);
 
     // The rows on a screen wider than the backdrop, when they fit; retail's column otherwise. The
     // shape stays on the instance, so it is only decided again when the layout size changes.
@@ -498,6 +505,8 @@ void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, 
 void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32_t height,
            int32_t* rect) {
     if (dialog == nullptr) return;
+    // P9: scroll bars, close buttons and a dialog larger than the safe area (touch_fit.h).
+    TouchFrame(point, dialog, width, height, rect);
     if (!Ext().phone_menu) {
         // Switched off while a menu is open: its retail values back before retail lays it out.
         // (A recorded menu at that address went through MenuOpened, which forgets the old one.)
@@ -508,6 +517,8 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         }
         return;
     }
+    // P9: the loading screen (loading_screen.cpp): its picture's bottom border on the screen.
+    if (PlaceLoading(point, dialog, width, height, rect)) return;
     const bool menu = In(g_menus, dialog->_dialog);
     const bool pause = !menu && In(g_pauses, dialog->_dialog);
     const bool version = !menu && !pause && In(g_buildIds, dialog->_dialog);
@@ -518,6 +529,11 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         // Retail's fit for every other backdrop.
         if (!menu && !pause) return;
         Store(LogoTop(Rect{rect[0], rect[1], rect[2], rect[3]}), rect);
+        return;
+    }
+    if (point == UI::UserInterface::kExtPlaceBackdropLower) {
+        // P9: the menus' backdrop's bottom border, drawn again at the screen's bottom (touch_fit.h).
+        if (menu || pause) BackdropLowerDraw(width, height, rect);
         return;
     }
     if (point == UI::UserInterface::kExtPlaceAfterLayout) {
@@ -532,8 +548,11 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         return;
     }
     if (version) {
-        Store(g_versionAside ? VersionAsideLayout(width, height, g_versionWidth) : InsetLayout(width, height),
-              rect);
+        if (g_versionAside) {
+            Store(VersionAsideLayout(width, height, g_versionWidth), rect);
+            return;
+        }
+        Store(g_versionLow ? LowVersionLayout(width, height) : InsetLayout(width, height), rect);
         return;
     }
     // Every other dialog: the in-game HUD, its panels, tooltips, drop-downs and the front
@@ -552,6 +571,7 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
 void Sync() {
     const bool faithful = CurrentProfile() == Profile::Faithful;
     UI::UserInterface::_extDialogPlace = faithful ? nullptr : &Place;
+    UI::UserInterface::_extBackdropOver = faithful ? nullptr : &BackdropOver;   // P9 (loading_screen.h)
 }
 
 void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause) {
@@ -561,6 +581,7 @@ void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause) {
     g_row = RowState();
     g_rowActive = false;
     g_versionAside = false;
+    g_versionLow = false;
     g_versionWidth = -1;
     std::fprintf(stderr, "[PhoneMenu] %s %p buildId %p recorded (row %s)\n", pause ? "pause menu" : "menu",
                  (const void*)menu, (const void*)buildId, Ext().phone_menu ? "on" : "off");
@@ -574,9 +595,13 @@ float UiScaleSliderMinimum(float platformMinPercent) {
 int32_t UiScaleFloorNow() {
     const ::Video::Device* device = ::Video::Device::_singleton;
     if (device == nullptr) return 0;
-    // The menus' backdrop is the 16:9 overlay (Dialog/MainMenu.rsc, Dialog/Pause.rsc).
-    return UiScaleFloor(device->backBufferWidth, device->backBufferHeight, PauseMenuMetrics(), 16, 9,
-                        kVersionHeight);
+    // The menus' backdrop is the 16:9 overlay (Dialog/MainMenu.rsc, Dialog/Pause.rsc). P9: the UI
+    // scale is in screen units (ui_render_scale.h), so the floor is taken on the screen the back
+    // buffer stands for: 35 on the S25 at every render scale.
+    const int32_t render = Platform::Display::RenderPercent();
+    return UiScaleFloor(Platform::Display::ScreenExtent(device->backBufferWidth, render),
+                        Platform::Display::ScreenExtent(device->backBufferHeight, render), PauseMenuMetrics(),
+                        16, 9, kVersionHeight);
 }
 
 int32_t ClampUiScale(int32_t percent) {

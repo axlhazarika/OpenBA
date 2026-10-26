@@ -415,17 +415,35 @@ public:
     static const bool* _extFixScaleLayout;
 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md; DESIGN.md hook rule 5): ext.phone_menu.
-    // Null by default (always under the faithful profile). One pointer, three call points:
+    // Null by default (always under the faithful profile). One pointer, four call points:
     //   kExtPlaceLayout      Update, before a dialog's ComputeLayout: `rect` holds {0, 0, w, h}
     //                        (retail's call) and may come back inset (a safe area);
     //   kExtPlaceAfterLayout Update, after that ComputeLayout (`rect` as laid out; ignored on
     //                        return): the ext may move elements of the laid-out tree;
     //   kExtPlaceBackdrop    Draw, after the backdrop's cover fit: `rect` holds retail's
     //                        {x1, y1, x2, y2} and may come back moved.
+    //   kExtPlaceBackdropLower Draw, just before the backdrop is drawn (P9): `rect` holds the
+    //                        backdrop's {x1, y1, x2, y2} (after kExtPlaceBackdrop); a different
+    //                        non-empty answer is drawn first, under it (the menus' backdrop's bottom
+    //                        border on a wide screen).
     // `width` / `height` are the layout-space screen. src/engine never includes src/ext.
-    enum : int32_t { kExtPlaceLayout = 0, kExtPlaceBackdrop = 1, kExtPlaceAfterLayout = 2 };
+    enum : int32_t {
+        kExtPlaceLayout = 0,
+        kExtPlaceBackdrop = 1,
+        kExtPlaceAfterLayout = 2,
+        kExtPlaceBackdropLower = 3
+    };
     static void (*_extDialogPlace)(int32_t point, const DialogInstance* dialog, int32_t width,
                                    int32_t height, int32_t* rect);
+
+    // EXT SEAM (NOT RETAIL, P9, docs/extensions/handins/PHONEMENU.md §3): ext.phone_menu. Null by
+    // default (always under the faithful profile). Draw, just AFTER a dialog's backdrop: `rect` holds
+    // the backdrop's {x1, y1, x2, y2} as drawn; a true answer draws the backdrop's sprite once more
+    // at the answered `rect`, over it and before the dialog's elements, clipped to `clip` {x, y, w, h}
+    // (layout units, the SpriteContext scissor; w <= 0: no clip). The loading screen's picture,
+    // bottom-aligned and clipped to its torn bottom border.
+    static bool (*_extBackdropOver)(const DialogInstance* dialog, int32_t width, int32_t height,
+                                    int32_t* rect, int32_t* clip);
 
 protected:
     // RULE B5-4 / B6-4.5: NOT retail's ctor (that is the door, see banner). It

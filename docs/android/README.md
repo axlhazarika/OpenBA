@@ -7,7 +7,8 @@ Only new Adreno parts are in scope; a mouse and a keyboard are how the game is p
 mouse clicks).
 
 No game data is in the tree, the build directory or the apk. The player copies the `WinData` packages of
-their own Banished install into the app's data folder (below).
+their own Banished install into the app's data folder (below). The apk does carry one third-party file
+set, the FrancophilSans typeface with its notice (below, `THIRD_PARTY_NOTICES.md`).
 
 ## Layout
 
@@ -58,7 +59,7 @@ modules because SDL's Java glue calls into them at startup. The renderer is the 
 
 ```bash
 tools/android.sh install debug            # adb install -r -d (a debug apk replaces any debuggable build)
-tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg + the FrancophilSans files -> the phone (once)
+tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg -> the phone (once; the font comes with the apk)
 tools/android.sh run                      # launch to the main menu
 tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
                      BANISHED_PAUSEMENU_BUTTON=6   # new game, then Quit Game from the pause menu
@@ -73,7 +74,7 @@ tools/android.sh stop
 | On the phone | What |
 |---|---|
 | `files/WinData/*.pkg` | The retail packages, pushed by the player. Only the top-level `*.pkg` are pushed; parked mods and other subfolders stay home. |
-| `files/FrancophilSans.ttf`, `FrancophilSans-Bold.ttf`, `FrancophilSans_README.txt` | The typeface `ext.sharp_ui` rasterises its fonts from at a UI scale other than 100 % (below). Pushed by `push-data`. |
+| `files/FrancophilSans.ttf`, `FrancophilSans-Bold.ttf`, `FrancophilSans_README.txt` | The typeface `ext.sharp_ui` rasterises its fonts from at a UI scale other than 100 % (below). Carried by the apk as assets and copied here by the app at start when absent (P9); a file already there is left alone. |
 | `files/OpenBA` | Does not exist: it is the "exe path" the engine is told (`file_android.cpp`), so the game directory is `files/`. |
 | `files/standalone_debug.log`, `standalone_error.log`, `standalone_crash.log`, `standalone_hang.log`, `standalone_boot_state.txt` | The same files as beside `OpenBA.exe` on Windows. |
 | `files/Documents/Banished/` | The per-user folder: `settings.cfg`, `Save/`, `Cache/` (the derived-data cache: SPIR-V, `vulkan_pipelines.bin` / `.txt`). |
@@ -89,10 +90,15 @@ game's typeface, FrancophilSans, at the pixel height the screen needs (FreeType,
 installed or beside the exe, where the release packages put it. On Android the one place is the data folder
 (`src/platform/android/font_raster_android.cpp`): the app looks for `files/FrancophilSans.ttf` and nowhere
 else. The typeface is Manfred Klein's, kept unchanged with his notice in `tools/release/fonts/` and shipped
-beside the exe in the desktop packages (`THIRD_PARTY_NOTICES.md`); `tools/android.sh push-data` pushes the
-same three files. Without the file the text keeps the game's own glyph sheets (`[ExtRes] font variants off:
-typeface FrancophilSans absent` in `standalone_error.log`); with it, a UI scale other than 100 shows
-`[ExtRes] font <Kit> at <px> px: ... glyphs rasterised`. The apk carries no font.
+beside the exe in the desktop packages (`THIRD_PARTY_NOTICES.md`). The apk carries the same three files
+(P9, ruled 2026-10-26): `android/app/build.gradle` adds `tools/release/fonts` as an assets folder in place
+(nothing is copied into `android/`), and `OpenBAActivity.onCreate` copies each file absent from the data
+folder before the native side starts (written to `<name>.part`, then renamed; logcat `font: copied ...`).
+The copy is on the Java side because assets are a Java API; the native side would need the activity's
+`AssetManager` through JNI for the same three files. `push-data` no longer pushes them. Without the file
+the text keeps the game's own glyph sheets (`[ExtRes] font variants off: typeface FrancophilSans absent`
+in `standalone_error.log`); with it, a UI scale other than 100 shows `[ExtRes] font <Kit> at <px> px: ...
+glyphs rasterised`.
 
 **Harness flags.** The game reads its `BANISHED_*` flags once at boot from the process environment
 (`src/app/options.cpp`; `src/app/options.h` is the inventory). On Android the launch intent is the
@@ -117,8 +123,17 @@ across the middle (owner's ruling, P8 round 2), inside a 4.5 % safe area clear o
 rounded corners and the camera cut-out, the in-game interface (the toolbar and event notices bottom-right,
 the panels at their default top-left, tooltips, drop-downs) is kept inside the same safe area, and Options >
 User interface scale goes down to 25 % (the UI four times larger than 100 %;
-`docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
-100. Options changes are kept as anywhere else.
+`docs/extensions/handins/PHONEMENU.md`). The loading screen looks like the pause menu: its picture top-aligned at
+the menus' scale plus its torn bottom border drawn again at the screen's bottom, the spinner and
+"Loading..." in that border at the Options UI scale (P9). The first-run UI scale is the game's own
+100 in back-buffer pixels, stored in screen units: 50 at the seeded Half (P9, below). Options changes are
+kept as anywhere else.
+
+**Dialogs for a finger** (P9, same row). Scroll bars are four times thicker, dialog close buttons twice
+the size, a dialog larger than the safe area (Options and Fixes and Extensions below about UI 45 at render
+scale Full) is shown whole at a fitted UI scale while it is open, and the main and pause menus show the
+backdrop's bottom border with the version line inside it (`docs/extensions/handins/PHONEMENU.md` §2,
+`docs/android/P9_DIALOGS.md`).
 
 **Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
 window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
@@ -127,8 +142,14 @@ Options > Enhanced "Render scale" (Full / Half / Quarter = 100 / 50 / 25) change
 (`SetRenderScale`, then `Video::Device::settingsChanged`: the Vulkan backend rebuilds the back buffer, the
 targets and the swap chain at the next frame) and records the key. Desktops answer 1.0 and show the row
 disabled. The SDL layer hands the engine the scaled size and pixel density, so taps land where they are
-drawn. The UI is laid out in engine pixels, so it grows as the scale shrinks (known_port_issues). The MSAA
-default stays off: the numbers are in `P7_FIRST_PASS.md`.
+drawn. The MSAA default stays off: the numbers are in `P7_FIRST_PASS.md`.
+
+**UI scale in screen units** (P9, `docs/android/P9_LOADING_SCALE.md` §2). User interface scale
+(`GameUIScale`) is the UI scale at Full render scale: the interface is applied at `_uiScale = UIScale /
+render percent` (`src/platform/common/ui_render_scale.h`), so it keeps its size on the screen at Full,
+Half and Quarter; changing the render scale re-derives `_uiScale` and never rewrites the setting. The
+slider's range and `ext.phone_menu`'s floor (35 on the S25) are in the same units and do not move with the
+render scale. At render scale 100 (every desktop) this is retail's `UIScale / 100`.
 
 **Frame rate cap** (P8). Options > Enhanced "Frame rate cap" (Off / 30 / 60 / 90 / 120) is the class A row
 `ext.fps_cap` with `ext.fps_cap_rate`: `src/app/frame_limiter.h` paces the menu and the game to it (the

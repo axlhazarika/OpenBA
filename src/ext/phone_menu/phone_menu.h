@@ -21,7 +21,10 @@
 //       notice, the panels, tooltips and drop-downs, the front end's other dialogs) is kept
 //       inside the same safe area: an edge or corner anchor moves in by the margin, a dialog
 //       put at a screen point stays there unless the point is inside the margin, a centred
-//       dialog does not move (phone_math.h SafeArea).
+//       dialog does not move (phone_math.h SafeArea);
+//   (e) P9, for a finger (touch_fit.h): scroll bars four times thicker, close buttons twice the
+//       size, a dialog larger than the safe area shown whole at a fitted UI scale while it is open,
+//       the menus' backdrop's bottom border drawn back and the version line moved into it.
 // Default OFF on a desktop; the Android first run switches it on (src/platform/android/
 // app_android.cpp). Live: every hook reads the row each time. Under the faithful profile the
 // engine seam stays null.
@@ -52,7 +55,8 @@ void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause);
 float UiScaleSliderMinimum(float platformMinPercent);
 
 // The lowest UI scale (percent, a multiple of 5) at which the menus still fit as rows of squares
-// on the current back buffer (phone_math.h UiScaleFloor); 0 before the video device exists or
+// on the screen the current back buffer stands for (phone_math.h UiScaleFloor; P9: in screen units,
+// platform/common/ui_render_scale.h); 0 before the video device exists or
 // on a screen not wider than the backdrop.
 int32_t UiScaleFloorNow();
 

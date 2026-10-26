@@ -35,7 +35,6 @@
 #include "ext/ui/find_element.h"   // Ext::FindElement<T>: the contributions find their elements by name
 
 namespace UI {
-class ComboElement;
 class TabElement;
 }
 
@@ -82,11 +81,6 @@ void Close(const void* dialog);
 // A button click the dialog does not own (OptionsDialog::OnElementEvent, event 0x12): true when a
 // contribution's button took it. False for any other dialog.
 bool OnButton(const void* dialog, int32_t elementId);
-
-// OptionsDialog::PopulateFilterCombo, after retail filled the Texture Filter combo (P8, owner ruling):
-// while Offered(), every choice other than the filter the textures were made with gets "(next start)"
-// (texture_filter_note.cpp). Retail's combo under the faithful profile. Null is ignored.
-void NoteTextureFilterNextStart(UI::ComboElement* filter);
 
 }  // namespace EnhancedTab
 }  // namespace Ext

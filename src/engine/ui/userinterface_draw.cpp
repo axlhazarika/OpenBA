@@ -446,7 +446,56 @@ void UI::UserInterface::Draw(Video::Context& context) {
                         sd.rotation    = 0.0f;
                         sd.color       = tint;
                         sd.isLine      = 0;
+                        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu
+                        // may draw the menus' backdrop once more BEFORE retail's draw, bottom-aligned,
+                        // so its bottom border shows under the moved picture (retail's draw then covers
+                        // the extra copy's top with its own opaque top border). The hook gets retail's
+                        // rectangle and answers the extra draw's; none unless it is non-empty. Null
+                        // pointer: retail's one draw.
+                        if (_extDialogPlace != nullptr) {
+                            int32_t lower[4] = {x1, y1, x2, y2};
+                            _extDialogPlace(kExtPlaceBackdropLower, d, width, height, lower);
+                            if (lower[2] > lower[0] && lower[3] > lower[1] &&
+                                (lower[0] != x1 || lower[1] != y1 || lower[2] != x2 || lower[3] != y2)) {
+                                SpriteDraw extra = sd;
+                                extra.x1 = lower[0];
+                                extra.y1 = lower[1];
+                                extra.x2 = lower[2];
+                                extra.y2 = lower[3];
+                                sc->AddSpriteDraw(extra);
+                            }
+                        }
                         sc->AddSpriteDraw(sd);          // dialog backdrop
+                        // EXT SEAM (NOT RETAIL, P9, docs/extensions/handins/PHONEMENU.md §3):
+                        // ext.phone_menu may draw the backdrop once more over it, clipped (the
+                        // loading picture's torn bottom border). Null pointer: retail's one draw.
+                        if (_extBackdropOver != nullptr) {
+                            int32_t r[4] = {x1, y1, x2, y2};
+                            int32_t clip[4] = {0, 0, 0, 0};
+                            if (_extBackdropOver(d, width, height, r, clip) && r[2] > r[0] && r[3] > r[1]) {
+                                SpriteDraw over = sd;
+                                over.x1 = r[0];
+                                over.y1 = r[1];
+                                over.x2 = r[2];
+                                over.y2 = r[3];
+                                if (clip[2] > 0 && clip[3] > 0) {
+                                    Video::Viewport v;
+                                    v.x = clip[0];
+                                    v.y = clip[1];
+                                    v.width = clip[2];
+                                    v.height = clip[3];
+                                    // A scissor change flushes and forgets the batch's sheet:
+                                    // the sheet is bound again on each side of the clipped draw.
+                                    const Video::Viewport saved = sc->SetScissor(v);
+                                    selectSheet(sheet);
+                                    sc->AddSpriteDraw(over);
+                                    (void)sc->SetScissor(saved);
+                                    selectSheet(sheet);
+                                } else {
+                                    sc->AddSpriteDraw(over);
+                                }
+                            }
+                        }
                     }
                 }
 

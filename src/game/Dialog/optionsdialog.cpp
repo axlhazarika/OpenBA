@@ -178,7 +178,9 @@ void GameContainer::ApplyKeyMapToUI(UI::UserInterface* userInterface) {
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu raises a UI scale
     // below the lowest at which its menus fit (a settings.cfg written before that floor existed).
     g_gameSettings->uiScale = Ext::PhoneMenu::ClampUiScale(g_gameSettings->uiScale);
-    userInterface->_uiScale = (float)g_gameSettings->uiScale / 100.0f;   // [0x1401c3de0], 0x1400992ba
+    // NOT RETAIL (P9, ui_render_scale.h): the setting is in screen units; at render scale 100 (every
+    // desktop) this is retail's uiScale / 100.0f ([0x1401c3de0], 0x1400992ba).
+    userInterface->_uiScale = Platform::Display::UiScaleRatio(g_gameSettings->uiScale);
 }
 
 // Helper: get input key name as UI::String (replaces FUN_140099c20)
@@ -338,9 +340,6 @@ void OptionsDialog::PopulateFilterCombo() {
     else selIdx = (filterVal >> 1) + 2;
 
     comboFilter->SetCurrentItem(selIdx);
-    // EXT SEAM (NOT RETAIL, docs/android/P8_VULKAN.md §7.2): the choices that apply at the next start
-    // say so; retail's combo under the faithful profile.
-    Ext::EnhancedTab::NoteTextureFilterNextStart(comboFilter);
 }
 
 // ============================================================
@@ -855,7 +854,8 @@ void OptionsDialog::ApplyGameSettings() {
     g_gameContainer->ApplyKeyMapToUI(userInterface);   // = the inline of 0x140099260's body
 
     // Set UI scale: uiScale is a percentage, divide by 100.0f to get the ratio
-    userInterface->_uiScale = (float)gs->uiScale / 100.0f;
+    // (P9: in screen units, Platform::Display::UiScaleRatio; retail's division at render scale 100)
+    userInterface->_uiScale = Platform::Display::UiScaleRatio(gs->uiScale);
 
     // Notify game world of settings change (virtual call at vtable+0x18)
     GameUpdateLoop* gameWorld = GameUpdateLoop::_singleton;
