@@ -118,6 +118,15 @@ P8 (2026-10-25; `docs/android/P8_VULKAN.md`):
   - `kMappingVersion` 5;
   - the pipeline-cache magic `OBAVKPC2`;
   - the AO pass keeps separate bindings.
+- **The sampler key rule** (P9, `docs/android/P9_RENDER.md`). The sampler cache (`GetSampler`) is keyed by the
+  whole `SamplerDesc` (filters, compare, address modes, anisotropy, `maxLod`), and every other
+  `VkSamplerCreateInfo` field is a constant there: `mipLodBias` 0, `minLod` 0, the border colour. A field that
+  ever varies goes into `SamplerDesc`, never into `GetSampler` as a constant or a global read, so equal keys
+  always mean equal samplers and a shared `VkSampler` (the game's, the AO pass's, the present pass's) is safe.
+  A texture's two samplers are made when it is created (DX11's rule). A combined descriptor takes the sampler
+  of the image bound at the pair's slot (`TextureSampler`). After the AO pass, `ResetCommandState` makes the
+  next draw push its sets again from `g_bound`. Measured on the S25 and on Windows: AO on / off or changed
+  live leaves every texel AO does not darken bit-identical.
 
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan
