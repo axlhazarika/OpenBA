@@ -262,6 +262,38 @@ the phone the column returns (a third row or a smaller logo if ever wanted); the
 art; "Anisotropic 16x (next start)" touches the combo's drop arrow at UI 100; the fifth CI check; a dispatch dry run
 of `release.yml`; whether the apk bundles the font; the sun map still allocated at Shadow Quality None (unmeasured).
 
+### 2.8 Android P9 (the owner's rulings after the P8 release-apk test, 2026-10-26)
+
+Rulings on the P8 opens: the citizen shadow flicker is GONE on the final P8 build (no further work); the enlarged
+16 px icons in the phone menu squares are fine for now; PR #53 merged as is.
+
+Next session, in the owner's order:
+- **Texture Filter drop-down:** REMOVE the "(next start)" suffix again (`src/ext/enhanced_tab/texture_filter_note.cpp`
+  and its string-table entry, the `OptionsDialog::PopulateFilterCombo` seam).
+- **AO setting changes the mipmap level:** on the S25 adjusting the AO quality / strength visibly changes texture
+  mip selection. Find why (the AO pass's sampler state leaking into the main pass's samplers under the
+  combined-sampler conversion? the texture_quality Half path? a sampler cache keyed without the anisotropy / LOD
+  bias?) and fix it; compare DX11.
+- **Loading screen:** the bottom black edging image sits too low / off-screen on the phone, and the "Loading" text is
+  drawn over the rendered scene / loading image instead of over the black edging as the Banished logo is. Fit both
+  under ext.phone_menu (same backdrop rule as the logo).
+- **Scroll bars about 4x wider on the phone** (finger scrolling), under ext.phone_menu: lists in Options, Fixes and
+  Extensions, Mods, the in-game panels.
+- **Render scale and UI scale coupled:** changing the render scale must re-derive the UI scale value so the interface
+  keeps the same size on screen (UI scale is in render pixels today: Half -> the UI doubles). Keep the slider floor
+  rule in step.
+- **Options and Fixes and Extensions dialogs cut off at the top** below UI 45 at render scale Full (35 at Half): the
+  tab row and the top of the list go off-screen, and in Options the other buttons become unreachable. A phone layout
+  for the tall dialogs: cap the dialog to the safe height (scroll the list, keep the tab row and the button row on
+  screen), or scale the dialog down to fit.
+- **Icons for the new extension rows** (`fps_cap`, and any row added in P8 without one) in the Extensions sprite
+  sheet (`src/ext/ui/`, `tools/ext_resources.sh` recompiles the kit output; the sheet cross-check unit test).
+- **In-game version text overlaps the bottom row of buttons** at render scale Full, UI 40 on the S25 (the pause menu's
+  two rows vs the version line: the rows must be placed above the version line, or the version line hidden when the
+  rows need the space), and the black fringe image is missing there too.
+- Still open from P8: a real-KVM check of the rotate drag (centre jump, speed); the fifth CI check; a dispatch dry run
+  of `release.yml`; whether the apk bundles the font; the sun map still allocated at Shadow Quality None.
+
 ## 3. Rules that hold (do not relax)
 
 - CLAUDE.md's hard rules: no null guard on a faithful crash (find what handed us the null); no `getenv`, flags through
