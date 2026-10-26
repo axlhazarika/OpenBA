@@ -335,7 +335,43 @@ UNIT_TEST(ext_phone_menu_safe_area_keeps_retail_for_big_dialogs) {
 }
 
 UNIT_TEST(ext_phone_menu_slider_minimum) {
-    CHECK(Ext::PhoneMenu::SliderMinimum(75.0f) == 25.0f);   // retail's 75 at density 1
-    CHECK(Ext::PhoneMenu::SliderMinimum(38.0f) == 25.0f);   // a Retina window's 38
-    CHECK(Ext::PhoneMenu::SliderMinimum(19.0f) == 19.0f);   // a platform answer already lower is kept
+    // A screen not wider than the menus' backdrop (no floor): 25, or the platform's lower answer.
+    CHECK(Ext::PhoneMenu::SliderMinimum(75.0f, 0) == 25.0f);   // retail's 75 at density 1
+    CHECK(Ext::PhoneMenu::SliderMinimum(38.0f, 0) == 25.0f);   // a Retina window's 38
+    CHECK(Ext::PhoneMenu::SliderMinimum(19.0f, 0) == 19.0f);   // a platform answer already lower is kept
+    // A floor: the slider stops there.
+    CHECK(Ext::PhoneMenu::SliderMinimum(75.0f, 35) == 35.0f);
+    CHECK(Ext::PhoneMenu::SliderMinimum(19.0f, 35) == 35.0f);
+}
+
+UNIT_TEST(ext_phone_menu_ui_scale_floor) {
+    const Ext::PhoneMenu::RowMetrics pause = Ext::PhoneMenu::PauseMenuMetrics();
+    CHECK(pause.count == 10);
+    CHECK(pause.contentSide == 68 + 2 * Ext::PhoneMenu::kSquareInset);
+    // The S25 at render scale 100 (2340x1080): the pause menu's two small-font rows fit from 33 %
+    // (a 772x356 layout), not at 32 %: the floor rounds up to 35.
+    CHECK(Ext::PhoneMenu::UiScaleFloor(2340, 1080, pause, 16, 9, Ext::PhoneMenu::kVersionHeight) == 35);
+    CHECK(Ext::PhoneMenu::PlanRows(772, 356, pause, 95, 284).rows == 2);
+    CHECK(Ext::PhoneMenu::PlanRows(748, 345, pause, 92, 273).rows == 0);
+    // At render scale 50 (1170x540) the same layout needs twice the percent: 66, rounded to 70.
+    CHECK(Ext::PhoneMenu::UiScaleFloor(1170, 540, pause, 16, 9, Ext::PhoneMenu::kVersionHeight) == 70);
+    // A 16:10 desktop screen is not wider than the backdrop: no floor (the rows never apply).
+    CHECK(Ext::PhoneMenu::UiScaleFloor(1920, 1200, pause, 16, 9, Ext::PhoneMenu::kVersionHeight) == 0);
+    // The floor is a multiple of 5.
+    CHECK(Ext::PhoneMenu::UiScaleFloor(2528, 1345, pause, 16, 9, Ext::PhoneMenu::kVersionHeight) % 5 == 0);
+}
+
+UNIT_TEST(ext_phone_menu_icon_side) {
+    // A 78-unit square (the S25 at UI 35) holding a label 32 tall with its 16-unit icon: 0.45 of
+    // the side is 35, which leaves the text and the 5-unit inset inside the square; rounded down to
+    // twice the sprite, 32.
+    CHECK(Ext::PhoneMenu::IconSide(78, 32, 16) == 32);
+    // Little room: the text and the inset come first, and the icon never shrinks below its sprite.
+    CHECK(Ext::PhoneMenu::IconSide(40, 32, 16) == 16);   // room for 14 only
+    CHECK(Ext::PhoneMenu::IconSide(30, 32, 16) == 16);
+    CHECK(Ext::PhoneMenu::IconSide(0, 32, 16) == 16);
+    // A large square (108, the S25 at UI 100 / render scale 50): 49, three times the sprite: 48.
+    CHECK(Ext::PhoneMenu::IconSide(108, 32, 16) == 48);
+    // A sprite of another size scales by whole multiples of its own size.
+    CHECK(Ext::PhoneMenu::IconSide(78, 30, 12) == 24);   // 35 rounded down to twice 12
 }

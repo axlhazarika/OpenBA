@@ -161,7 +161,45 @@ Rect SafeArea(int32_t width, int32_t height, int32_t upperLeftX, int32_t upperLe
     return r;
 }
 
-float SliderMinimum(float platformMinPercent) {
+int32_t IconSide(int32_t side, int32_t labelHeight, int32_t iconHeight) {
+    if (side <= 0 || labelHeight <= 0 || iconHeight <= 0) return iconHeight;
+    const int32_t room = side - 2 * kSquareInset - (labelHeight - iconHeight);
+    int32_t icon = static_cast<int32_t>(static_cast<float>(side) * kIconFraction + 0.5f);
+    if (icon > room) icon = room;
+    // A whole multiple of the sprite: every sprite pixel covers the same number of layout units,
+    // so the scaled-up 16-pixel icons keep even edges instead of uneven blocks.
+    icon = icon / iconHeight * iconHeight;
+    return icon > iconHeight ? icon : iconHeight;
+}
+
+RowMetrics PauseMenuMetrics() {
+    RowMetrics m;
+    m.count = 10;
+    m.contentSide = 68 + 2 * kSquareInset;
+    m.outerWidth = 16;
+    m.outerHeight = 16;
+    m.buttonPadWidth = 4;
+    m.buttonPadHeight = 4;
+    m.spacing = 2;
+    return m;
+}
+
+int32_t UiScaleFloor(int32_t backBufferWidth, int32_t backBufferHeight, const RowMetrics& menu,
+                     int32_t spriteW, int32_t spriteH, int32_t versionHeight) {
+    if (!WiderThanBackdrop(backBufferWidth, backBufferHeight, spriteW, spriteH)) return 0;
+    for (int32_t percent = 1; percent <= 100; ++percent) {
+        // UserInterface::Update's layout size: (int)(back buffer * _uiScale), _uiScale = percent / 100.
+        const float scale = static_cast<float>(percent) / 100.0f;
+        const int32_t w = static_cast<int32_t>(static_cast<float>(backBufferWidth) * scale);
+        const int32_t h = static_cast<int32_t>(static_cast<float>(backBufferHeight) * scale);
+        const int32_t logo = LogoBottom(BackdropHeight(w, h, spriteW, spriteH));
+        if (PlanRows(w, h, menu, logo, VersionTop(w, h, versionHeight)).rows > 0) return (percent + 4) / 5 * 5;
+    }
+    return 100;
+}
+
+float SliderMinimum(float platformMinPercent, int32_t floorPercent) {
+    if (floorPercent > 0) return static_cast<float>(floorPercent);
     if (platformMinPercent < kUiScaleMinPercent) return platformMinPercent;
     return kUiScaleMinPercent;
 }

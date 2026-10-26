@@ -175,6 +175,9 @@ void GameContainer::ApplyKeyMapToUI(UI::UserInterface* userInterface) {
         UI::Sprite sprite = spriteWhite;
         userInterface->SetFullscreenFadeSprite(&sprite);
     }
+    // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu raises a UI scale
+    // below the lowest at which its menus fit (a settings.cfg written before that floor existed).
+    g_gameSettings->uiScale = Ext::PhoneMenu::ClampUiScale(g_gameSettings->uiScale);
     userInterface->_uiScale = (float)g_gameSettings->uiScale / 100.0f;   // [0x1401c3de0], 0x1400992ba
 }
 
@@ -676,8 +679,9 @@ void OptionsDialog::OnOpened() {
         float uiScaleMin = 75.0f;
         float uiScaleMax = 150.0f;
         Platform::Display::UiScaleSliderRange(&uiScaleMin, &uiScaleMax);   // unchanged at density 1
-        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu lowers the
-        // minimum to 25 % (a UI four times larger than 100 %); retail's 75 with the row off.
+        // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md): ext.phone_menu moves the
+        // minimum to the lowest scale at which its menus fit on this screen (35 % on the S25), or to
+        // 25 % on a screen narrower than the menus' backdrop; retail's 75 with the row off.
         uiScaleMin = Ext::PhoneMenu::UiScaleSliderMinimum(uiScaleMin);
         SetSliderRange(this->sliderUIScale, uiScaleMin, uiScaleMax);
         if (g_gameSettings != nullptr)

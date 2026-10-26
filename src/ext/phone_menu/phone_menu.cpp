@@ -36,6 +36,7 @@
 #include "ui/RibbonElement.h"
 #include "ui/SpriteSheet.h"
 #include "ui/UserInterface.h"
+#include "video/Device.h"   // Video::Device::_singleton: the back buffer the UI scale floor is for
 
 namespace Ext {
 namespace PhoneMenu {
@@ -105,6 +106,7 @@ struct RowState {
     uint32_t mode[kMaxButtons] = {};              // the icon's side of the text (_mode)
     UI::Font* font[kMaxButtons] = {};
     int32_t pads[kMaxButtons][4] = {};            // the label's left / top / right / bottom padding
+    int32_t iconSize[kMaxButtons][2] = {};        // the label's icon size override (_iconWidth / _iconHeight)
     UI::Font* smallFont = nullptr;                // Font/FontSmall.rsc, when the row needs it
     bool applied = false;
     bool decided = false;                         // the row / column decision for width x height
@@ -178,6 +180,8 @@ void Capture(const UI::DialogInstance* dialog, UI::Element* root) {
         g_row.pads[n][1] = label->_topPad;
         g_row.pads[n][2] = label->_rightPad;
         g_row.pads[n][3] = label->_bottomPad;
+        g_row.iconSize[n][0] = label->_iconWidth;
+        g_row.iconSize[n][1] = label->_iconHeight;
     }
     g_row.ribbon = ribbon;
     g_row.vertical = ribbon->_vertical;
@@ -211,6 +215,8 @@ void Restore() {
         label->_topPad = g_row.pads[i][1];
         label->_rightPad = g_row.pads[i][2];
         label->_bottomPad = g_row.pads[i][3];
+        label->_iconWidth = g_row.iconSize[i][0];
+        label->_iconHeight = g_row.iconSize[i][1];
         label->SetNeedsSizeCalc();
     }
     g_row.ribbon->SetNeedsSizeCalc();
@@ -237,10 +243,32 @@ void Shape(UI::Font* font, int32_t side) {
         label->_topPad = 0;
         label->_rightPad = 0;
         label->_bottomPad = 0;
+        label->_iconWidth = g_row.iconSize[i][0];   //   its icon at the sprite's size until ScaleIcons
+        label->_iconHeight = g_row.iconSize[i][1];
         label->SetNeedsSizeCalc();
     }
     g_row.ribbon->SetNeedsSizeCalc();
     g_row.applied = true;
+}
+
+// The icons drawn larger once the square's side is known (phone_math.h IconSide): about
+// kIconFraction of the side, the text and the frame's inset still inside the square, the
+// sprite scaled up (its aspect kept). The square does not grow: the label stays under its side.
+void ScaleIcons(int32_t side) {
+    for (int32_t i = 0; i < g_row.count; ++i) {
+        UI::LabelElement* label = g_row.labels[i];
+        if (!Visible(i) || label->_sprite.spriteIndex < 0) continue;
+        const int32_t spriteW = label->_sprite.Width();
+        const int32_t spriteH = label->_sprite.Height();
+        if (spriteW <= 0 || spriteH <= 0) continue;
+        label->ComputeSize();
+        const int32_t h = IconSide(side, label->_layoutHeight, spriteH);
+        int32_t w = spriteW * h / spriteH;
+        if (w > side - 2 * kSquareInset) w = side - 2 * kSquareInset;
+        label->_iconWidth = w;
+        label->_iconHeight = h;
+        label->SetNeedsSizeCalc();
+    }
 }
 
 // Two rows out of the one row Shape made. The ribbon still lays its children out left to right;
@@ -320,6 +348,7 @@ bool ShapeRows(UI::Element* root, UI::Font* font, int32_t width, int32_t height,
     if (plan.rows == 0) return false;
     Shape(font, plan.side);
     if (plan.rows == 2) ShapeTwoRows(plan);
+    ScaleIcons(plan.side);
     g_row.plan = plan;
     return true;
 }
@@ -539,7 +568,24 @@ void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause) {
 
 float UiScaleSliderMinimum(float platformMinPercent) {
     if (!Ext().phone_menu) return platformMinPercent;
-    return SliderMinimum(platformMinPercent);
+    return SliderMinimum(platformMinPercent, UiScaleFloorNow());
+}
+
+int32_t UiScaleFloorNow() {
+    const ::Video::Device* device = ::Video::Device::_singleton;
+    if (device == nullptr) return 0;
+    // The menus' backdrop is the 16:9 overlay (Dialog/MainMenu.rsc, Dialog/Pause.rsc).
+    return UiScaleFloor(device->backBufferWidth, device->backBufferHeight, PauseMenuMetrics(), 16, 9,
+                        kVersionHeight);
+}
+
+int32_t ClampUiScale(int32_t percent) {
+    if (!Ext().phone_menu) return percent;
+    const int32_t floor = UiScaleFloorNow();
+    if (floor <= 0 || percent >= floor) return percent;
+    std::fprintf(stderr, "[PhoneMenu] UI scale %d %% raised to %d %%, the lowest at which the menus fit\n",
+                 percent, floor);
+    return floor;
 }
 
 }  // namespace PhoneMenu

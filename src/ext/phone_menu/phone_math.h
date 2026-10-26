@@ -197,11 +197,42 @@ int32_t VersionTop(int32_t width, int32_t height, int32_t versionHeight);
 Rect SafeArea(int32_t width, int32_t height, int32_t upperLeftX, int32_t upperLeftY, int32_t lastWidth,
               int32_t lastHeight);
 
-// ---- the Options slider -----------------------------------------------------
+// ---- the icons in the squares ----------------------------------------------------
 
-// The slider minimum with the row on: the lower of the platform's answer
-// (Platform::Display::UiScaleSliderRange) and kUiScaleMinPercent.
-float SliderMinimum(float platformMinPercent);
+// The icon's share of the square's side (owner's ruling, P8 round 4: "the icons could be a bit
+// larger in mobile mode"); the label's text stays under it.
+constexpr float kIconFraction = 0.45f;
+
+// The icon height for a square of `side` holding a label `labelHeight` tall whose icon is
+// `iconHeight` (both with the icon at its sprite size, icon above text): kIconFraction of the
+// side, but no taller than leaves the text and kSquareInset on both sides inside the square,
+// rounded down to a whole multiple of the sprite's size (the icons are 16-pixel sprites; a whole
+// multiple scales every sprite pixel alike), and never smaller than the sprite's own size. <= 0
+// inputs: `iconHeight`.
+int32_t IconSide(int32_t side, int32_t labelHeight, int32_t iconHeight);
+
+// ---- the Options slider and the UI scale floor ----------------------------------------
+
+// The pause menu (the menu with the most buttons) as measured on the S25 in the small font: ten
+// buttons, "Achievements" 68 wide plus kSquareInset on both sides, the ribbon's 8-unit padding,
+// 2-unit button padding, 2 units between squares. Numbers about the user's own data.
+RowMetrics PauseMenuMetrics();
+
+// The version line's padded height (Dialog/BuildId.rsc: a 48-unit logo plus 8 under it).
+constexpr int32_t kVersionHeight = 56;
+
+// The lowest UI scale (percent) at which the pause menu still fits as rows of squares (PlanRows,
+// in the small font) on a back buffer `backBufferWidth` x `backBufferHeight` (the render scale's
+// size) under a backdrop of aspect spriteW : spriteH, rounded UP to a multiple of 5 (owner's
+// ruling, P8 round 4: the slider stops there instead of letting the menus fall back to a column
+// that runs off the screen). 0 when the screen is not wider than the backdrop (the rows never
+// apply there; the slider keeps kUiScaleMinPercent). 100 when nothing below fits.
+int32_t UiScaleFloor(int32_t backBufferWidth, int32_t backBufferHeight, const RowMetrics& menu,
+                     int32_t spriteW, int32_t spriteH, int32_t versionHeight);
+
+// The slider minimum with the row on: `floorPercent` when there is one (> 0), else the lower of
+// the platform's answer (Platform::Display::UiScaleSliderRange) and kUiScaleMinPercent.
+float SliderMinimum(float platformMinPercent, int32_t floorPercent);
 
 }  // namespace PhoneMenu
 }  // namespace Ext
