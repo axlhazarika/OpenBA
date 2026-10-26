@@ -343,3 +343,14 @@ way, never `sed -i` and never `mv`.
 - Whether the pad should have a press-state look of its own (retail's button only lights while the finger is on it).
 - The Enhanced tab gains an 11th row on a dialog that is already too tall on the phone (P9's tall-dialog work).
 - `tools/ext_resources.sh` was not re-run in this worktree: re-run it before the merge for the sheet cross-check.
+
+**Round 2 (owner rulings, 2026-10-26).**
+- **The empty corner above the zoom buttons stays** (ruled fine).
+- **A held control keeps its pressed look until the lift, even off the button** (`Capture::ShowsPressed`).
+  Retail's `ButtonElement::Update` shows the pressed state (state 3, the toolbar's held art) only while the pointer
+  is over the button. Each frame, after the UI's update and before the draw, `ClusterDialog::ShowPressed` puts the
+  captured button back in state 3, the same steps retail takes on a state change (the state child laid out over the
+  button, the label's colour). On the lift the next UI update returns it to retail's state.
+- **Tests and checks.** Unit 1507 / 0 / 1 skipped (the capture test now checks the pressed look, held off the pad
+  and gone on the lift). On the S25 a 4 s swipe from the pad to x = 900 kept the pad pressed with the finger well
+  off it (`phone_pad_held.png`), and the normal art came back after the lift (`phone_pad_released.png`).
