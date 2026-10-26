@@ -90,13 +90,25 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
   `EventNotify.rsc` (bottom-right), `AutoSave.rsc` (top-left); front end: `ShiningRock.rsc`,
   `Loading.rsc`, `NewGame.rsc`. Known effect: a panel dragged out of the corner moves once the cursor
   has passed the margin (`docs/known_port_issues.md` row 1336).
+* **Loading screen** (P9, `src/ext/phone_menu/loading_screen.cpp`, `loading_math.h`;
+  `docs/android/P9_LOADING_SCALE.md` §1): `Dialog/Loading.rsc` is a 16:9 picture with torn black borders
+  top and bottom and one bottom-centred group (`main`: the spinner, "Loading...", the tip line). On a
+  screen wider than the picture retail's cover fit pushes the bottom border off the screen and the group
+  lands on the picture. With the row on, the picture's bottom goes on the screen's bottom
+  (`BottomOnBottom`, the logo rule mirrored: the border that carries the text is whole, the cut moves to
+  the top border) and the group keeps retail's bottom-centred rectangle (no safe-area inset; bottom centre
+  is clear of the corners and the cut-out). A loading screen is recognised at its first layout by its
+  `loadingImage` element (the Shining Rock splash has none and keeps retail's fit); ext.load_progress's
+  boot screen is the same dialog and gets the same fit.
 * **UI scale slider**: Options > User interface scale goes below retail's 75 %. On a screen wider than
   the menus' backdrop the minimum is the lowest scale at which both menus still fit as rows of
   squares (P8 round 4, owner's ruling): `UiScaleFloor` runs `PlanRows` for the pause menu (the menu
   with the most buttons; `PauseMenuMetrics`, its small-font measurements) on the current back buffer
-  at every percent and rounds the first that fits UP to a multiple of 5. On the S25 that is 35 at
-  render scale 100 (the rows fit from 33) and 70 at render scale 50 (the layout is half the size).
-  It is computed, not a constant: it follows the screen and the render scale; it does not follow a
+  at every percent and rounds the first that fits UP to a multiple of 5. On the S25 that is 35 (the
+  rows fit from 33). Since P9 the UI scale is in screen units (`src/platform/common/ui_render_scale.h`)
+  and the floor is taken on the screen the back buffer stands for (`ScreenExtent`), so it is 35 at every
+  render scale (before P9: 70 at Half, 100 capped at Quarter, on the back buffer).
+  It is computed, not a constant: it follows the screen; it does not follow a
   translation's label widths (the measurements are retail's English labels). A `settings.cfg` holding
   less (written before the floor, or by hand) is raised at every loop's start
   (`GameContainer::ApplyKeyMapToUI`, `Ext::PhoneMenu::ClampUiScale`, one `[PhoneMenu] UI scale ...
