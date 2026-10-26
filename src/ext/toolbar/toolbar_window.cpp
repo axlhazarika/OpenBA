@@ -290,6 +290,12 @@ public:
     void OnUpdate(const System::Time& time) override {
         UI::DialogInstance::OnUpdate(time);
         RecordShownPage();
+        if (_tabs != nullptr) {
+            const int32_t showing = _tabs->GetActiveTab();
+            for (const OpenPage& p : _pages) {
+                if (p.tab == showing && p.contribution->tick != nullptr) p.contribution->tick();
+            }
+        }
         if (!_dragging || Input::Configuration::_singleton == nullptr) {
             return;
         }

@@ -97,7 +97,7 @@ TextDescription textTerrainEditUndoNote : "Extensions.rsc:textProfile"
 RibbonDescription rowTerrainEditUndo
 {
 	Alignment _alignment = MidLeft; int _cellPad = 4;
-	ElementDescription _elements [ "buttonTerrainEditUndo" "textTerrainEditUndoNote" ]
+	ElementDescription _elements [ "buttonTerrainEditUndo" "buttonTerrainEditRedo" "textTerrainEditUndoNote" ]
 }
 
 // A label and a slider; the controller sets the slider's range and value when the page opens, and reads it back.
@@ -286,6 +286,17 @@ RibbonDescription rowTerrainEditPlant
 ImageDescription imageTerrainEditUndo : "Mod.rsc:imageIcon"
 {
 	SpriteSheet _spriteSheet = "ExtensionsSprites.rsc"; String _spriteName = "ExtensionsGlyph_terrain_undo";
+}
+
+ImageDescription imageTerrainEditRedo : "Mod.rsc:imageIcon"
+{
+	SpriteSheet _spriteSheet = "ExtensionsSprites.rsc"; String _spriteName = "ExtensionsGlyph_terrain_redo";
+}
+
+ButtonDescription buttonTerrainEditRedo : "ToolBar.rsc:buttonToolbar"
+{
+	ElementDescription _content = "imageTerrainEditRedo";
+	Dialog _toolTipDialog = "ToolTip.rsc"; StringTable _toolTipStringTable = "ExtensionsStringTable.rsc"; String _toolTipText = "TerrainEditRedo";
 }
 
 ButtonDescription buttonTerrainEditUndo : "ToolBar.rsc:buttonToolbar"

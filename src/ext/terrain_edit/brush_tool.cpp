@@ -57,6 +57,7 @@
 #include "system/MemoryAllocator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <utility>
 #include <cmath>
@@ -122,7 +123,12 @@ const void* g_undoHeights = nullptr;
 int g_undoStride = 0;
 uint32_t g_undoEpoch = 0;
 bool g_undoRefused = false;   // the last Undo was refused (UndoRefused)
+bool g_redoBuilt = false;     // the next Redo's ground has something built on it
+const char* g_redoNote = "";  // why else the last Redo did nothing (RedoNote); a string literal, or empty
 bool g_toolRunning = false;    // the brush is the player's tool now (BrushRunning)
+bool g_replaying = false;      // a Redo is painting a stroke again (it keeps the rest of the redo list)
+uint32_t g_paintSeed = 1u;     // the stroke's noise seed (mountain)
+float g_flattenTarget = 0.0f;  // world height flatten aims for, taken under the cursor when the stroke starts
 
 // The world the undo steps and the water-quad cache belong to is the map, its height words and their
 // stride, and the lock epoch (a new game, a load or a reload takes a new one, so a world allocated at the
@@ -140,6 +146,8 @@ void ForgetWorld() {
     g_waterQuads.clear();
     g_waterQuadsValid = false;
     g_undoRefused = false;   // a refusal belongs to the stroke it refused, which is gone
+    g_redoBuilt = false;
+    g_redoNote = "";
 }
 
 void AdoptWorld(const void* map, const void* heights, int stride) {
@@ -179,7 +187,8 @@ bool VertexTouchesBlocker(Map* map, int vx, int vy, int offset) {
 // them has something built on it since: a vertex that touches a blocker or a road, or a cell that is blocked,
 // is a road or no longer holds the type the stroke gave it. A part of it would leave the water mesh and the
 // ground texture, which an Undo cuts back and restores whole, out of step with the heights that stayed.
-bool UndoWouldSkip(Map* map, const Ext::TerrainEdit::Stroke& stroke, int stride, int offset) {
+bool UndoWouldSkip(Map* map, const Ext::TerrainEdit::Stroke& stroke, int stride, int offset,
+                   bool typesMustMatch = true) {
     const int size = map->size;
     for (const auto& entry : stroke.heights) {
         const int vx = entry.first % stride;
@@ -191,8 +200,10 @@ bool UndoWouldSkip(Map* map, const Ext::TerrainEdit::Stroke& stroke, int stride,
         if (entry.first < 0 || entry.first >= size * size) continue;
         const MapCell& cell = map->cells.GetData()[entry.first];
         const auto wrote = stroke.written.find(entry.first);
-        if (cell.blocker.Get() != nullptr || IsRoadCell(cell) || wrote == stroke.written.end() ||
-            cell.terrainType != wrote->second) {
+        if (cell.blocker.Get() != nullptr || IsRoadCell(cell)) return true;
+        // A stroke further down the list finds its cells retyped by the strokes above it, which are undone
+        // first and put the types back, so only the top stroke is held to the type it wrote.
+        if (typesMustMatch && (wrote == stroke.written.end() || cell.terrainType != wrote->second)) {
             return true;
         }
     }
@@ -1164,9 +1175,13 @@ void PlantStroke(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
     if (strokeStart || !g_undo.Open()) {
         if (!SameWorld(map, heights, stride)) AdoptWorld(map, heights, stride);
         g_undoRefused = false;
-        g_undo.BeginStroke();
+        g_redoBuilt = false;
+        g_redoNote = "";
+        g_undo.BeginStroke(g_replaying);
+        g_undo.RecordTool(static_cast<int>(g_state.mode), g_plantName);
         g_plantSeed = static_cast<uint32_t>(cell) * 2654435761u + 0x1234567u;
     }
+    g_undo.RecordFrame(cell, g_state.radius, g_state.strength, g_state.density);
     // The density is how full the disc ends up, and what already stands in it counts: the disc's eligible
     // cells are the free ones and those a natural resource stands on, and the stroke plants on enough free
     // ones to bring the disc up to the density. A click on ground that is full enough plants nothing, and a
@@ -1261,12 +1276,11 @@ public:
 
 private:
     bool  _wasHeld = false;
-    uint32_t _seed = 1u;           // the stroke's noise seed (mountain)
-    // world height flatten aims for, taken at the vertex under the cursor when the stroke starts
-    float _flattenTarget = 0.0f;
 
-    // One frame of the brush at `cell`: change the heights, mark the chunks, classify the cells again.
-    void Paint(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
+public:
+    // One frame of the brush at `cell`: change the heights, mark the chunks, classify the cells again. Static
+    // so a Redo can paint a stroke again without the tool running.
+    static void Paint(Map* map, WorldGeometry* terrain, int cell, bool strokeStart) {
         using namespace Ext::TerrainEdit;
         if (g_state.mode == Ext::TerrainEdit::Mode::Plant) {
             PlantStroke(map, terrain, cell, strokeStart);
@@ -1282,16 +1296,20 @@ private:
                 AdoptWorld(map, heights, stride);   // another world: the old strokes do not belong to it
             }
             g_undoRefused = false;
-            g_undo.BeginStroke();
+            g_redoBuilt = false;
+            g_redoNote = "";
+            g_undo.BeginStroke(g_replaying);
+            g_undo.RecordTool(static_cast<int>(g_state.mode), g_plantName);
             g_box = StrokeBox();
         }
+        g_undo.RecordFrame(cell, g_state.radius, g_state.strength, g_state.density);
         if (strokeStart) {
             // the mountain noise differs from stroke to stroke
-            _seed = static_cast<uint32_t>(cell) * 2654435761u + 0x1234567u;
+            g_paintSeed = static_cast<uint32_t>(cell) * 2654435761u + 0x1234567u;
             const int cx = cell % size + offset;
             const int cy = cell / size + offset;
             if (cx >= 0 && cy >= 0 && cx < stride && cy < stride) {
-                _flattenTarget = FlattenTarget(heights[static_cast<int64_t>(stride) * cy + cx]);
+                g_flattenTarget = FlattenTarget(heights[static_cast<int64_t>(stride) * cy + cx]);
             }
         }
         const int centreCol = cell % size;
@@ -1315,12 +1333,12 @@ private:
             // a building stands at one of its corners
             if (VertexTouchesBlocker(map, vx, vy, offset)) continue;
             int16_t& word = heights[static_cast<int64_t>(stride) * vy + vx];
-            float target = _flattenTarget;
+            float target = g_flattenTarget;
             if (g_state.mode == Mode::Mountain) {
                 const float dx = static_cast<float>(c.col - centreCol);
                 const float dy = static_cast<float>(c.row - centreRow);
                 target = MountainHeight(std::sqrt(dx * dx + dy * dy), g_state.radius, g_state.strength,
-                    vx, vy, _seed);
+                    vx, vy, g_paintSeed);
             }
             if (g_state.mode == Mode::Smooth) target = averages[thisIndex];
             const int next = NextWord(word, g_state.mode, c.weight, g_state.strength, target);
@@ -1391,16 +1409,60 @@ void StartBrush() {
     if (game->m_worldGeometry != nullptr) LogWaterMesh(game->m_worldGeometry);
 }
 
-size_t UndoDepth() {
-    // The strokes were painted on one world; after a new game or a load there are none to undo.
+// How many strokes of a list an Undo or a Redo can reach: from the next one down to the first with something
+// built on its ground (they go in order, so the ones under it cannot be reached). One state per list, and the
+// strokes are read again when the list changes and then at most twice a second: `skips(i, ...)` is the
+// list's own test of stroke i, `blocked` is the list's "the next one cannot go" flag.
+struct Recount {
+    uint32_t version = 0;
+    size_t   reachable = 0;
+    bool     valid = false;
+    std::chrono::steady_clock::time_point at;
+};
+
+template <class Skips>
+size_t CountReachable(Recount& r, size_t depth, uint32_t version, Skips skips, bool& blocked) {
     GameUpdateLoop* game = GameUpdateLoop::_singleton;
-    if (g_undo.Depth() > 0 && !g_undo.Open()) {
-        const bool here = game != nullptr && game->m_game != nullptr && game->m_worldGeometry != nullptr &&
-                          SameWorld(game->m_game, game->m_worldGeometry->_heights.data,
-                                    game->m_worldGeometry->_fieldD0);
-        if (!here) ForgetWorld();
+    if (depth == 0) {
+        r.reachable = 0;
+        r.version = version;
+        r.valid = true;
+        blocked = false;
+        return 0;
     }
-    return g_undo.Depth();
+    if (g_undo.Open()) return r.reachable;
+    // The strokes were painted on one world; after a new game or a load there are none.
+    const bool here = game != nullptr && game->m_game != nullptr && game->m_worldGeometry != nullptr &&
+                      SameWorld(game->m_game, game->m_worldGeometry->_heights.data,
+                                game->m_worldGeometry->_fieldD0);
+    if (!here) {
+        ForgetWorld();
+        r.reachable = 0;
+        return 0;
+    }
+    const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    const bool due = !r.valid || r.version != version || now - r.at >= std::chrono::milliseconds(500);
+    if (due) {
+        r.at = now;
+        r.version = version;
+        r.valid = true;
+        const int stride = game->m_worldGeometry->_fieldD0;
+        const int offset = game->m_game->size >> 1;
+        r.reachable = 0;
+        while (r.reachable < depth && !skips(r.reachable, game->m_game, stride, offset)) ++r.reachable;
+        blocked = r.reachable == 0;   // the next stroke has something built on its ground
+    }
+    return r.reachable;
+}
+
+size_t UndoDepth() {
+    static Recount recount;
+    return CountReachable(
+        recount, g_undo.Depth(), g_undo.Version(),
+        [](size_t i, Map* map, int stride, int offset) {
+            return UndoWouldSkip(map, *g_undo.FromTop(i), stride, offset, i == 0);
+        },
+        g_undoRefused);
 }
 
 void SetUndoChangedHook(void (*hook)()) {
@@ -1409,6 +1471,26 @@ void SetUndoChangedHook(void (*hook)()) {
 
 void SetFrameHook(void (*hook)()) {
     g_frameHook = hook;
+}
+
+// A Redo paints a stroke again through the brush, which leaves alone every vertex that touches a building or
+// a road, so a stroke painted over ground that has been built on since would come out different. Like an
+// Undo, it is refused as a whole then: when a vertex the stroke changed touches a blocker or a road, or a
+// cell it retyped is blocked or a road. Building anywhere else does not matter.
+static bool RedoWouldSkip(Map* map, const Ext::TerrainEdit::Replay& replay, int stride, int offset) {
+    const int size = map->size;
+    for (const int index : replay.vertices) {
+        const int vx = index % stride;
+        const int vy = index / stride;
+        if (vy >= stride) continue;
+        if (VertexTouchesBlocker(map, vx, vy, offset)) return true;
+    }
+    for (const int index : replay.cells) {
+        if (index < 0 || index >= size * size) continue;
+        const MapCell& cell = map->cells.GetData()[index];
+        if (cell.blocker.Get() != nullptr || IsRoadCell(cell)) return true;
+    }
+    return false;
 }
 
 bool UndoLast() {
@@ -1435,6 +1517,8 @@ bool UndoLast() {
         return false;
     }
     g_undoRefused = false;
+    g_redoBuilt = false;
+    g_redoNote = "";
     Stroke stroke;
     if (!g_undo.Pop(stroke)) return false;
     std::unordered_set<int> cells;   // the cells whose trees and rocks follow the ground
@@ -1506,6 +1590,113 @@ bool UndoLast() {
     }
     std::fprintf(stderr, "[TerrainEdit] undo: %zu height(s), %zu terrain type(s), %zu of %zu resource(s)\n",
         stroke.heights.size(), stroke.types.size(), removedPlants, stroke.planted.size());
+    // the ground the stroke changed, for the Redo to look at
+    for (const auto& entry : stroke.heights) {
+        stroke.replay.vertices.push_back(entry.first);
+    }
+    for (const auto& entry : stroke.types) {
+        stroke.replay.cells.push_back(entry.first);
+    }
+    g_undo.PushRedo(std::move(stroke.replay));
+    NotifyUndoChanged();
+    return true;
+}
+
+size_t RedoDepth() {
+    static Recount recount;
+    return CountReachable(
+        recount, g_undo.RedoDepth(), g_undo.RedoVersion(),
+        [](size_t i, Map* map, int stride, int offset) {
+            return RedoWouldSkip(map, *g_undo.RedoFromTop(i), stride, offset);
+        },
+        g_redoBuilt);
+}
+
+const char* RedoNote() {
+    // The next Redo's ground has something built on it, or why the last Redo did nothing.
+    if (g_redoBuilt) return "Cannot redo: something was built on this stroke";
+    return g_redoNote;
+}
+
+// Selects the resource of the name, as BuildPalette keeps the choice across worlds; false when not listed.
+static bool SelectPlantByName(const std::string& name) {
+    for (size_t i = 0; i < g_paletteNames.size(); ++i) {
+        if (g_paletteNames[i] == name) {
+            g_plantIndex = static_cast<int>(i);
+            g_plantName = name;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool RedoLast() {
+    GameUpdateLoop* game = GameUpdateLoop::_singleton;
+    if (game == nullptr || game->m_game == nullptr || game->m_worldGeometry == nullptr) return false;
+    Map* map = game->m_game;
+    WorldGeometry* terrain = game->m_worldGeometry;
+    int16_t* heights = terrain->_heights.data;
+    const int stride = terrain->_fieldD0;
+    if (heights == nullptr || stride <= 0) return false;
+    FinishStroke();   // a stroke still being painted counts first (and ends the redo list)
+    if (!SameWorld(map, heights, stride)) {
+        ForgetWorld();
+        return false;
+    }
+    if (g_undo.RedoDepth() == 0) return false;
+    g_redoNote = "";
+    const Replay* next = g_undo.RedoFromTop(0);
+    if (next != nullptr && RedoWouldSkip(map, *next, stride, map->size >> 1)) {   // built on since the undo
+        g_redoBuilt = true;
+        std::fprintf(stderr, "[TerrainEdit] redo refused: something was built on this stroke\n");
+        NotifyUndoChanged();
+        return false;
+    }
+    // A planting needs its resource in the list. Looked at before the stroke is taken off the list, as the
+    // built-on test is, so a refusal leaves the list as it was.
+    EnsurePalette();
+    const bool planting = next != nullptr && static_cast<Mode>(next->mode) == Mode::Plant;
+    bool listed = false;
+    if (planting) {
+        for (const std::string& name : g_paletteNames) {
+            if (name == next->plant) listed = true;
+        }
+    }
+    if (planting && !listed) {
+        g_redoNote = "Cannot redo: that resource is not on the map any more";
+        std::fprintf(stderr, "[TerrainEdit] redo refused: %s is not in the resource list\n",
+                     next->plant.c_str());
+        NotifyUndoChanged();
+        return false;
+    }
+    Replay replay;
+    if (!g_undo.PopRedo(replay)) return false;
+    const BrushState savedState = g_state;
+    const std::string savedPlant = g_plantName;
+    if (planting) SelectPlantByName(replay.plant);
+    const uint32_t versionBefore = g_undo.Version();
+    size_t painted = 0;
+    g_replaying = true;
+    for (const ReplayFrame& frame : replay.frames) {
+        g_state.mode = static_cast<Mode>(replay.mode);
+        g_state.radius = frame.radius;
+        g_state.strength = frame.strength;
+        g_state.density = frame.density;
+        TerrainBrushTool::Paint(map, terrain, frame.cell, painted == 0);
+        ++painted;
+    }
+    FinishStroke();
+    g_replaying = false;
+    g_state = savedState;
+    // the palette may have been scanned again (a stroke's start does), so the choice comes back by name
+    SelectPlantByName(savedPlant);
+    g_undoRefused = false;
+    if (g_undo.Version() == versionBefore) {
+        // the frames changed nothing (a planting whose disc has grown back to its density): the stroke is gone
+        // from the redo list and was not committed, so the player is told
+        g_redoNote = "Redo changed nothing: the ground already has what that stroke made";
+    }
+    std::fprintf(stderr, "[TerrainEdit] redo: %zu frame(s) painted again\n", painted);
     NotifyUndoChanged();
     return true;
 }
