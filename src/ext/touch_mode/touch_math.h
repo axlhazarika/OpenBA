@@ -72,10 +72,22 @@ float ToolbarScale(float requested, int32_t regionWidth, int32_t ownWidth);
 // The control under (x, y), or kNone.
 Control HitControl(const Cluster& c, int32_t x, int32_t y);
 
-// The D-pad's 8-way direction at (x, y): dx / dy in -1 .. 1 (right / down positive), both 0 in
-// the dead zone or outside the pad. An axis counts when its offset exceeds tan(22.5 deg) of the
-// other's, so the corners give the diagonals.
+// The D-pad's 8-way direction at (x, y): dx / dy in -1 .. 1 (right / down positive), from the pad's
+// centre, both 0 in the dead zone. A point outside the pad still gives its direction (a finger that
+// started on the pad and slid off keeps panning that way: the owner's capture rule, 2026-10-26). An
+// axis counts when its offset exceeds tan(22.5 deg) of the other's, so the corners give the diagonals.
 void PadDirection(const Rect& pad, int32_t x, int32_t y, int32_t& dx, int32_t& dy);
+
+// The capture rule (owner, 2026-10-26): a press that STARTS on a control captures the pointer until it
+// is released; while down, that control and only that control acts, wherever the pointer moves (no
+// hand-off by sliding onto a neighbour, the toolbar or the world). A press that starts anywhere else
+// captures nothing, and sliding onto the cluster then does nothing. Step(cluster, down, x, y) once per
+// frame: the control acting this frame, or kNone.
+struct Capture {
+    Control control = kNone;
+    bool wasDown = false;
+    Control Step(const Cluster& c, bool down, int32_t x, int32_t y);
+};
 
 // The zoom buttons' repeat: Step(held, dt) returns the zoom steps this frame (0 or 1): one when
 // the button goes down, then one every kZoomRepeat seconds after kZoomDelay; none after release.

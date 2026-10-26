@@ -151,8 +151,37 @@ UNIT_TEST(ext_touch_mode_pad_direction) {
     CHECK(dx == 1 && dy == 0);
     PadDirection(pad, 150 + 100, 150 + 43, dx, dy);   // 23.3 deg
     CHECK(dx == 1 && dy == 1);
-    PadDirection(pad, 400, 150, dx, dy);   // outside the pad
-    CHECK(dx == 0 && dy == 0);
+    // Outside the pad (a captured finger slid off): still its direction from the centre.
+    PadDirection(pad, 400, 150, dx, dy);
+    CHECK(dx == 1 && dy == 0);
+    PadDirection(pad, -500, 900, dx, dy);
+    CHECK(dx == -1 && dy == 1);
+}
+
+// The owner's capture rule (2026-10-26): the control a press starts on holds until the release; sliding never
+// hands off to a neighbour, the toolbar or the world; a press that starts elsewhere captures nothing.
+UNIT_TEST(ext_touch_mode_capture) {
+    const Cluster c = LayoutCluster(2340, 1080, 49);
+    Capture cap;
+    CHECK(cap.Step(c, false, 200, 850) == kNone);          // up: nothing
+    CHECK(cap.Step(c, true, 200, 850) == kPad);            // press on the pad
+    CHECK(cap.Step(c, true, 100, 600) == kPad);            // slid over Rotate left: still the pad
+    CHECK(cap.Step(c, true, 500, 700) == kPad);            // over Zoom in: still the pad
+    CHECK(cap.Step(c, true, 1500, 950) == kPad);           // over the toolbar: still the pad
+    CHECK(cap.Step(c, false, 1500, 950) == kNone);         // released
+    CHECK(cap.Step(c, true, 100, 600) == kRotateLeft);     // a fresh press on Rotate left
+    CHECK(cap.Step(c, true, 300, 600) == kRotateLeft);     // slid onto Rotate right: no hand-off
+    CHECK(cap.Step(c, true, 200, 850) == kRotateLeft);     // onto the pad: still rotating
+    CHECK(cap.Step(c, false, 200, 850) == kNone);
+    CHECK(cap.Step(c, true, 500, 700) == kZoomIn);
+    CHECK(cap.Step(c, true, 500, 1000) == kZoomIn);        // onto Zoom out: still zooming in
+    CHECK(cap.Step(c, false, 500, 1000) == kNone);
+    CHECK(cap.Step(c, true, 1200, 500) == kNone);          // a press in the game view
+    CHECK(cap.Step(c, true, 200, 850) == kNone);           // dragged onto the pad: nothing
+    CHECK(cap.Step(c, true, 500, 700) == kNone);
+    CHECK(cap.Step(c, false, 500, 700) == kNone);
+    CHECK(cap.Step(c, true, 220, 600) == kNone);           // a press in the gap between controls
+    CHECK(cap.Step(c, true, 100, 600) == kNone);
 }
 
 UNIT_TEST(ext_touch_mode_zoom_repeat) {

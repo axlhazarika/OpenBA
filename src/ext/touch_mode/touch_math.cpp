@@ -79,7 +79,6 @@ Control HitControl(const Cluster& c, int32_t x, int32_t y) {
 void PadDirection(const Rect& pad, int32_t x, int32_t y, int32_t& dx, int32_t& dy) {
     dx = 0;
     dy = 0;
-    if (!pad.Contains(x, y)) return;
     const float side = static_cast<float>(pad.Width() < pad.Height() ? pad.Width() : pad.Height());
     const float ox = static_cast<float>(x) - 0.5f * static_cast<float>(pad.x1 + pad.x2);
     const float oy = static_cast<float>(y) - 0.5f * static_cast<float>(pad.y1 + pad.y2);
@@ -90,6 +89,20 @@ void PadDirection(const Rect& pad, int32_t x, int32_t y, int32_t& dx, int32_t& d
     const float ay = std::fabs(oy);
     if (ax > tan22 * ay) dx = ox > 0.0f ? 1 : -1;
     if (ay > tan22 * ax) dy = oy > 0.0f ? 1 : -1;
+}
+
+Control Capture::Step(const Cluster& c, bool down, int32_t x, int32_t y) {
+    if (!down) {
+        control = kNone;
+        wasDown = false;
+        return kNone;
+    }
+    if (!wasDown) {
+        // The press: whatever control it starts on (or none) holds until the release.
+        wasDown = true;
+        control = HitControl(c, x, y);
+    }
+    return control;
 }
 
 int32_t ZoomRepeat::Step(bool held, float dt) {

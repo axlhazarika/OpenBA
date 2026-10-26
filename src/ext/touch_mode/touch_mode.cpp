@@ -47,11 +47,11 @@ constexpr const char* kHolders[kControlCount] = {"holderTouchPad", "holderTouchR
 constexpr const char* kControlNames[kControlCount] = {"pad", "rotate left", "rotate right", "zoom in", "zoom out"};
 
 // A glyph's side as a fraction of its button's shorter side, and the frame's inset (layout units).
-constexpr float kGlyphFraction = 0.38f;
+constexpr float kGlyphFraction = 0.5f;
 constexpr int32_t kFrameInset = 6;
 
 const UI::Dialog* g_toolbarDesc = nullptr;   // Dialog/Toolbar.rsc, the toolbar's and every sub-toolbar's
-bool g_toolbarLooked = false;
+const GameUpdateLoop* g_toolbarFor = nullptr;   // the game it was resolved for (a load reloads the resource)
 float g_k = 1.0f;                            // the toolbar's own scale this frame
 float g_loggedK = 0.0f;
 int32_t g_loggedOwnWidth = -1;
@@ -77,6 +77,7 @@ bool Active(const CameraHold& h) {
 Control g_held = kNone;
 float g_heldSeconds = 0.0f;
 ZoomRepeat g_zoomRepeat;
+Capture g_capture;
 
 class ClusterDialog;
 ClusterDialog* g_open = nullptr;
@@ -91,9 +92,17 @@ const UI::Dialog* LoadDialog(const char* path) {
     return static_cast<const UI::Dialog*>(ext);
 }
 
+// Resolved once per game: the game's Startup loads the toolbar's dialog resource (gameupdateloop.cpp), and a
+// new game or a load may give it a new address. No game: none (the front end has no toolbar).
 const UI::Dialog* ToolbarDescription() {
-    if (!g_toolbarLooked && ::Object::ExternalFactory::_singleton != nullptr) {
-        g_toolbarLooked = true;
+    const GameUpdateLoop* game = GameUpdateLoop::_singleton;
+    if (game == nullptr) {
+        g_toolbarFor = nullptr;
+        g_toolbarDesc = nullptr;
+        return nullptr;
+    }
+    if (game != g_toolbarFor && ::Object::ExternalFactory::_singleton != nullptr) {
+        g_toolbarFor = game;
         g_toolbarDesc = LoadDialog(kToolbarRsc);
     }
     return g_toolbarDesc;
@@ -130,9 +139,6 @@ bool UpdateCluster(int32_t width, int32_t height) {
     g_layoutH = height;
     const int32_t phoneMargin = Ext().phone_menu ? PhoneMenu::SafeMargin(height) : 0;
     g_cluster = LayoutCluster(width, height, Margin(width, height, phoneMargin));
-    std::fprintf(stderr, "[TouchMode] %dx%d: cluster cell %d, box %d,%d..%d,%d, bar region %d..%d\n", width, height,
-                 g_cluster.cell, g_cluster.box.x1, g_cluster.box.y1, g_cluster.box.x2, g_cluster.box.y2,
-                 g_cluster.barRegion.x1, g_cluster.barRegion.x2);
     return true;
 }
 
@@ -162,6 +168,9 @@ public:
         if (_shapedW == g_layoutW && _shapedH == g_layoutH) return;
         _shapedW = g_layoutW;
         _shapedH = g_layoutH;
+        std::fprintf(stderr, "[TouchMode] %dx%d: cluster cell %d, box %d,%d..%d,%d, bar region %d..%d\n", g_layoutW,
+                     g_layoutH, g_cluster.cell, g_cluster.box.x1, g_cluster.box.y1, g_cluster.box.x2,
+                     g_cluster.box.y2, g_cluster.barRegion.x1, g_cluster.barRegion.x2);
         for (int32_t i = 0; i < kControlCount; ++i) {
             const Rect& r = g_cluster.control[i];
             UI::Element* holder = FindElement(System::String(kHolders[i])).Get();
@@ -178,6 +187,8 @@ public:
             button->_minWidth = r.Width();
             button->_minHeight = r.Height();
             button->SetNeedsSizeCalc();
+            // The pad's tooltip off: a finger left on it after a pan is a parked cursor.
+            if (i == kPad) button->SetFlagsOnOff(0, UI::kElementFlagToolTipValid);
         }
         const Rect& pad = g_cluster.control[kPad];
         if (UI::Element* arrows = FindElement(System::String("groupTouchPadArrows")).Get()) {
@@ -197,9 +208,11 @@ public:
             const int32_t sw = sprite.Width();
             const int32_t sh = sprite.Height();
             if (sw <= 0 || sh <= 0) continue;
-            // A whole multiple of the sprite when it is at least the sprite's size (even pixels), else the glyph.
-            int32_t h = glyph;
-            if (h >= sh) h = (h / sh) * sh;
+            // A whole multiple of the sprite from twice its size on (even pixels), else the glyph's own size.
+            // The pad's four arrows sit alone on a large button: larger.
+            const bool padArrow = name == images[0] || name == images[1] || name == images[2] || name == images[3];
+            int32_t h = padArrow ? glyph * 3 / 2 : glyph;
+            if (h >= 2 * sh) h = (h / sh) * sh;
             image->SetWidthHeight(sw * h / sh, h);
             image->SetNeedsSizeCalc();
         }
@@ -300,6 +313,9 @@ void Sync() {
 bool Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32_t height, int32_t* rect) {
     if (!Ext().touch_mode || dialog == nullptr) return false;
     if (point == UI::UserInterface::kExtPlaceBackdrop) return false;
+    // The game's own interface only (the front end and the loading screens have their own).
+    const GameUpdateLoop* game = GameUpdateLoop::_singleton;
+    if (game == nullptr || dialog->_ui != game->m_userInterface) return false;
     UpdateCluster(width, height);
     ToolbarDescription();
 
@@ -333,14 +349,23 @@ bool Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         }
         return true;
     }
-    // The event notices, parented to the toolbar: retail slides them in left of it, where the cluster is.
-    // Moved to sit above the bar's left end (the right-hand strip stays free for touch_pointer).
+    // The event notices, parented to the toolbar (EventNotifyDialog::OnUpdateLayout, 0x1400680c0): retail keeps the
+    // ribbon behind the toolbar while there is nothing to show and slides it out to the LEFT of the toolbar by its
+    // right padding (the smoothed offset) as notices come: where the cluster is. Here the same slide lifts it out
+    // from behind the bar's left end to just above it (the right-hand strip stays free for touch_pointer): fully
+    // out once the offset reaches retail's 44-unit base.
     if (IsToolbar(dialog->_parent.Get())) {
         if (point == UI::UserInterface::kExtPlaceAfterLayout && g_bar[2] > g_bar[0]) {
             UI::Element* root = const_cast<UI::Element*>(dialog->_root.Get());
             if (root != nullptr) {
+                float t = static_cast<float>(root->_rightPad) / 44.0f;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                const int32_t hiddenBottom = g_bar[3];
+                const int32_t shownBottom = g_bar[1] - g_cluster.gap;
+                const int32_t bottom = hiddenBottom + static_cast<int32_t>(t * static_cast<float>(shownBottom - hiddenBottom));
                 const int32_t dx = g_bar[0] - root->_layoutLeft;
-                const int32_t dy = (g_bar[1] - g_cluster.gap) - root->_layoutBottom;
+                const int32_t dy = bottom - root->_layoutBottom;
                 root->AdjustUpperLeft(dx, dy);
             }
         }
@@ -369,8 +394,8 @@ void CameraInput(float dt, float& yaw, float& panX, float& panY, int& zoomDir) {
     if (want && g_open == nullptr && ui != nullptr) OpenCluster(ui);
     if (!want && g_open != nullptr && ui != nullptr) CloseCluster(ui);
 
-    // The cluster: the control under the pointer while the button is down and the press began on the
-    // cluster (a drag from the world onto it does nothing).
+    // The cluster: the control the press started on, held until the release whatever the pointer crosses
+    // (touch_math.h Capture; the owner's rule, 2026-10-26).
     Control held = kNone;
     int32_t mx = 0;
     int32_t my = 0;
@@ -379,7 +404,9 @@ void CameraInput(float dt, float& yaw, float& panX, float& panY, int& zoomDir) {
         mx = static_cast<int32_t>(static_cast<float>(in->_mouse[0].value) * ui->_uiScale);
         my = static_cast<int32_t>(static_cast<float>(in->_mouse[1].value) * ui->_uiScale);
         const bool down = in->_mouse[4].value > 0;
-        if (down && g_cluster.box.Contains(ui->_mouseDownX, ui->_mouseDownY)) held = HitControl(g_cluster, mx, my);
+        held = g_capture.Step(g_cluster, down, mx, my);
+    } else {
+        g_capture = Capture();
     }
     CameraHold pad;
     if (held == kPad) {

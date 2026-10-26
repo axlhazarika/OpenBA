@@ -341,7 +341,7 @@ UNIT_TEST(ext_rsc_text_parse_terrain_edit_page) {
 }
 
 // TOUCHMODE (docs/android/TOUCH_MODE.md): the cluster dialog. The controller finds the five holders and buttons
-// by name; every look is the game's own (SharedElements.rsc's raised button, SpriteSheet.rsc's glyphs).
+// by name; every look is the game's own (the toolbar's raised button, SpriteSheet.rsc's glyphs).
 UNIT_TEST(ext_rsc_text_parse_touch_controls) {
     File f;
     CHECK(ParseEmbedded("Dialog/TouchControls.rsc", f));
@@ -355,7 +355,7 @@ UNIT_TEST(ext_rsc_text_parse_touch_controls) {
         CHECK(button && button->type == "ButtonDescription");
     }
     const Object* pad = f.Find("buttonTouchPad");
-    CHECK(pad && pad->base == "SharedElements.rsc:raisedButton");
+    CHECK(pad && pad->base == "Toolbar.rsc:buttonToolbar");
     const Object* arrow = f.Find("imageTouchArrow");
     CHECK(arrow && arrow->body.Find("_spriteSheet") &&
           arrow->body.Find("_spriteSheet")->tokens[0].text == "SpriteSheet.rsc");

@@ -2,7 +2,7 @@
 //
 // docs/android/TOUCH_MODE.md section 3. The cluster at the bottom left of the game view: a D-pad (camera pan), Rotate
 // left / right above it, Zoom in / out to its right. Every look is the game's own, read from the player's install: the
-// buttons are SharedElements.rsc's raised button (the toolbar's), the glyphs are sprites of the game's SpriteSheet.rsc
+// buttons are the toolbar's own (Toolbar.rsc:buttonToolbar, SharedElements.rsc's raised button), the glyphs are sprites of the game's SpriteSheet.rsc
 // (ArrowUp / Down / Left / Right, Plus, Minus, ToolCamera), the tooltips the Options Input tab's key names
 // (StringTable.rsc:gameKeys). Nothing here is drawn by us.
 //
@@ -33,10 +33,15 @@ GroupDescription holderTouchRotateRight { Alignment _alignment = TopLeft; Elemen
 GroupDescription holderTouchZoomIn { Alignment _alignment = TopLeft; ElementDescription _elements [ "buttonTouchZoomIn" ] }
 GroupDescription holderTouchZoomOut { Alignment _alignment = TopLeft; ElementDescription _elements [ "buttonTouchZoomOut" ] }
 
-// The D-pad: one raised button, the four arrows at its edges.
-ButtonDescription buttonTouchPad : "SharedElements.rsc:raisedButton"
+// The D-pad: one raised button, the four arrows at its edges. Its tooltip is switched off by the controller (a finger
+// parked on the pad after a pan would open it); the text is only there because the base has one.
+ButtonDescription buttonTouchPad : "Toolbar.rsc:buttonToolbar"
 {
+	Alignment _alignment = TopLeft;	// inside its holder: the holder's padding is the place
 	ElementDescription _content = "groupTouchPadArrows";
+	Dialog _toolTipDialog = "ToolTip.rsc";
+	StringTable _toolTipStringTable = "StringTable.rsc:gameKeys";
+	String _toolTipText = "Camera_Forward";
 }
 
 GroupDescription groupTouchPadArrows
@@ -57,8 +62,9 @@ ImageDescription imageTouchLeft : "imageTouchArrow" { Alignment _alignment = Mid
 ImageDescription imageTouchRight : "imageTouchArrow" { Alignment _alignment = MidRight; String _spriteName = "ArrowRight"; }
 
 // Rotate: the camera icon of the toolbar's Camera tool with an arrow on the side it turns to.
-ButtonDescription buttonTouchRotateLeft : "SharedElements.rsc:raisedButton"
+ButtonDescription buttonTouchRotateLeft : "Toolbar.rsc:buttonToolbar"
 {
+	Alignment _alignment = TopLeft;	// inside its holder: the holder's padding is the place
 	ElementDescription _content = "ribbonTouchRotateLeft";
 	Dialog _toolTipDialog = "ToolTip.rsc";
 	StringTable _toolTipStringTable = "StringTable.rsc:gameKeys";
@@ -89,8 +95,9 @@ ImageDescription imageTouchCameraLeft : "imageTouchArrow" { Alignment _alignment
 ImageDescription imageTouchCameraRight : "imageTouchArrow" { Alignment _alignment = MidCenter; String _spriteName = "ToolCamera"; }
 
 // Zoom: the game's Plus and Minus.
-ButtonDescription buttonTouchZoomIn : "SharedElements.rsc:raisedButton"
+ButtonDescription buttonTouchZoomIn : "Toolbar.rsc:buttonToolbar"
 {
+	Alignment _alignment = TopLeft;	// inside its holder: the holder's padding is the place
 	ElementDescription _content = "imageTouchZoomIn";
 	Dialog _toolTipDialog = "ToolTip.rsc";
 	StringTable _toolTipStringTable = "StringTable.rsc:gameKeys";
