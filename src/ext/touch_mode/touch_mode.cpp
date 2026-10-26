@@ -11,6 +11,7 @@
 #include "ext/phone_menu/phone_math.h"   // SafeMargin: the cluster keeps ext.phone_menu's safe area
 
 #include "ui/ImageElement.h"
+#include "ui/ButtonElement.h"
 #include "ui/Element.h"
 #include "ui/DialogInstance.h"
 #include "ui/ToolTipDialog.h"
@@ -49,6 +50,10 @@ constexpr const char* kControlNames[kControlCount] = {"pad", "rotate left", "rot
 // A glyph's side as a fraction of its button's shorter side, and the frame's inset (layout units).
 constexpr float kGlyphFraction = 0.5f;
 constexpr int32_t kFrameInset = 6;
+
+// ButtonElement (ButtonElement.h): state 3 = pressed (its fourth state child), child 4 = the label.
+constexpr int32_t kButtonPressedState = 3;
+constexpr int32_t kButtonLabelChild = 4;
 
 const UI::Dialog* g_toolbarDesc = nullptr;   // Dialog/Toolbar.rsc, the toolbar's and every sub-toolbar's
 const GameUpdateLoop* g_toolbarFor = nullptr;   // the game it was resolved for (a load reloads the resource)
@@ -160,6 +165,29 @@ public:
 
     void OnClosed() override {
         if (g_open == this) g_open = nullptr;
+    }
+
+    // The captured control in its pressed state (ButtonElement state 3, the toolbar's held art) while the press is
+    // held, even off the button: retail's ButtonElement::Update shows it only while the pointer is over the button,
+    // and runs first each frame (the UI's update precedes the camera's), so this puts state 3 back for the frame's
+    // draw. Same steps as retail's own state change: the state child laid out over the button, the label's colour.
+    void ShowPressed(const Capture& capture) {
+        for (int32_t i = 0; i < kControlCount; ++i) {
+            if (!capture.ShowsPressed(static_cast<Control>(i))) continue;
+            UI::Element* e = FindElement(System::String(kButtons[i])).Get();
+            if (!::Object::IsDerivedFromNullSafe(e, UI::ButtonElement::TypeId())) continue;
+            UI::ButtonElement* button = static_cast<UI::ButtonElement*>(e);
+            if (button->_state == kButtonPressedState) continue;
+            button->_state = kButtonPressedState;
+            button->SetNeedsSizeCalc();
+            if (UI::Element* art = button->_children._data[kButtonPressedState]) {
+                art->ComputeLayout(button->_layoutLeft, button->_layoutTop, button->_layoutRight,
+                                   button->_layoutBottom);
+            }
+            if (UI::Element* label = button->_children._data[kButtonLabelChild]) {
+                label->SetColor(button->_stateColor[kButtonPressedState]);
+            }
+        }
     }
 
     // The holders' padding and the buttons' sizes from the cluster's rectangles, the glyphs scaled to
@@ -417,6 +445,7 @@ void CameraInput(float dt, float& yaw, float& panX, float& panY, int& zoomDir) {
     } else {
         g_capture = Capture();
     }
+    if (g_open != nullptr) g_open->ShowPressed(g_capture);
     CameraHold pad;
     if (held == kPad) {
         int32_t dx = 0;

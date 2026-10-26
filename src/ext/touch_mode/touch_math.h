@@ -92,6 +92,9 @@ struct Capture {
     Control control = kNone;
     bool wasDown = false;
     Control Step(const Cluster& c, bool down, int32_t x, int32_t y);
+    // The owner's ruling (2026-10-26): the captured control shows the toolbar buttons' pressed art for as long as
+    // the press is held, even after the finger slid off it; released on lift.
+    bool ShowsPressed(Control c) const { return c != kNone && wasDown && control == c; }
 };
 
 // The zoom buttons' repeat: Step(held, dt) returns the zoom steps this frame (0 or 1): one when

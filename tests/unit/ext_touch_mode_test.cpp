@@ -169,7 +169,10 @@ UNIT_TEST(ext_touch_mode_capture) {
     CHECK(cap.Step(c, true, 100, 600) == kPad);            // slid over Rotate left: still the pad
     CHECK(cap.Step(c, true, 500, 700) == kPad);            // over Zoom in: still the pad
     CHECK(cap.Step(c, true, 1500, 950) == kPad);           // over the toolbar: still the pad
+    CHECK(cap.ShowsPressed(kPad));                         // the pad keeps its pressed look off the pad
+    CHECK(!cap.ShowsPressed(kZoomIn) && !cap.ShowsPressed(kNone));
     CHECK(cap.Step(c, false, 1500, 950) == kNone);         // released
+    CHECK(!cap.ShowsPressed(kPad));                        // the look goes with the lift
     CHECK(cap.Step(c, true, 100, 600) == kRotateLeft);     // a fresh press on Rotate left
     CHECK(cap.Step(c, true, 300, 600) == kRotateLeft);     // slid onto Rotate right: no hand-off
     CHECK(cap.Step(c, true, 200, 850) == kRotateLeft);     // onto the pad: still rotating
@@ -179,6 +182,7 @@ UNIT_TEST(ext_touch_mode_capture) {
     CHECK(cap.Step(c, false, 500, 950) == kNone);
     CHECK(cap.Step(c, true, 1200, 500) == kNone);          // a press in the game view
     CHECK(cap.Step(c, true, 200, 850) == kNone);           // dragged onto the pad: nothing
+    CHECK(!cap.ShowsPressed(kPad));                        // and no pressed look
     CHECK(cap.Step(c, true, 500, 700) == kNone);
     CHECK(cap.Step(c, false, 500, 700) == kNone);
     CHECK(cap.Step(c, true, 259, 600) == kNone);           // a press in the gap between controls
