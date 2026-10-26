@@ -22,6 +22,7 @@
 #include "ao/shaders/PSResolveDepthMS.h"
 #include "ao/shaders/VSFullscreen.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -61,4 +62,25 @@ UNIT_TEST(vulkan_ao_programs_convert) {
     CHECK(Convert(g_ao_PSApply, sizeof(g_ao_PSApply), Stage::Pixel, &refl));
     // A program fed to the wrong stage is refused, not converted.
     CHECK(!Convert(g_ao_PSApply, sizeof(g_ao_PSApply), Stage::Vertex, &refl));
+}
+
+// P8 round 2 (src/render/vulkan/spirv_legalize.h): the Adreno 830 driver refused VSFullscreen's
+// OpBitFieldInsert (vkCreateGraphicsPipelines VK_ERROR_UNKNOWN, "Shader compilation failed", so no AO
+// on the S25). The converted VSFullscreen holds no OpBitFieldInsert: the shifts and masks instead.
+UNIT_TEST(vulkan_ao_bitfield_insert_lowered) {
+    std::vector<uint32_t> vs;
+    ShaderReflection refl;
+    std::string why;
+    CHECK(ConvertDxbc(g_ao_VSFullscreen, sizeof(g_ao_VSFullscreen), Stage::Vertex, &vs, &refl, &why));
+    std::map<uint32_t, size_t> ops;
+    for (size_t at = 5; at < vs.size();) {
+        const uint32_t words = vs[at] >> 16;
+        if (words == 0) break;
+        ++ops[vs[at] & 0xFFFF];
+        at += words;
+    }
+    CHECK_EQ(ops[201], (size_t)0);    // OpBitFieldInsert
+    CHECK(ops[196] >= 1);             // OpShiftLeftLogical
+    CHECK(ops[197] >= 1);             // OpBitwiseOr
+    CHECK(CheckSpirvStructure(vs, &why));
 }

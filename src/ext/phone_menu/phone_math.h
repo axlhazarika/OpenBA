@@ -10,14 +10,20 @@
 // of their inputs, so they hold at any UI scale.
 //
 // TWO LAYOUTS. The main menu is a 3D scene (Game/MenuScene) under the menu
-// dialog, whose backdrop is a 16:9 overlay: the Banished logo and the dark torn
-// borders, transparent between them. On a screen WIDER than the overlay (a
-// 19.5:9 phone) retail's centred cover fit cuts the logo's top off; there the
-// menu becomes a logo-left layout: the overlay drawn larger and against the
-// right edge so the logo sits whole on the left, and the button column in the
-// space right of the logo. On any other screen (a desktop's 16:9 or 16:10) the
-// overlay keeps retail's cover fit and the column stays centred, kept inside the
-// safe area and clear of the logo and the version line.
+// dialog, whose backdrop is a 16:9 overlay: the Banished logo near its top and
+// the dark torn borders, transparent between them.
+//   * On a screen WIDER than the overlay (a 19.5:9 phone) retail's centred cover
+//     fit cuts the logo's top off. There the overlay is drawn with its top on
+//     the screen's top (LogoTop: the logo whole, centred at the top) and, when
+//     it fits, the menu's buttons become a HORIZONTAL ROW OF SQUARE BUTTONS
+//     across the middle of the safe area, wrapped to two rows when one does not
+//     fit (PlanRows), the version line centred at the bottom.
+//   * Otherwise (a desktop's 16:9 or 16:10, or a row too wide for the screen)
+//     the overlay keeps retail's fit on a desktop and the column stays centred,
+//     kept inside the safe area and clear of the logo and the version line
+//     (MenuBand, VersionAside).
+// Every decision is made from THIS frame's sizes (the caller sizes the tree
+// before it asks), so the first frame a menu is drawn is already its final one.
 // ============================================================================
 #pragma once
 
@@ -44,10 +50,10 @@ constexpr float kUiScaleMinPercent = 25.0f;
 // picture's height from its top: measured on the installed pictures (the logo's lowest
 // pixel, the descender of its long s, at 0.210 of the drawn height), plus about one percent
 // of air. A number about the user's own data, not a copy of it; a mod that repaints the
-// backdrop with the logo elsewhere only moves the centred layout's band.
+// backdrop with the logo elsewhere only moves the band the buttons are kept out of.
 constexpr float kLogoBottomFraction = 0.22f;
 
-// The gap kept between the button column and the version line (layout units).
+// The gap kept between the buttons and the version line (layout units).
 constexpr int32_t kVersionGap = 4;
 
 struct Rect {
@@ -63,49 +69,87 @@ int32_t SafeMargin(int32_t height);
 // dropped (the whole screen).
 Rect InsetLayout(int32_t width, int32_t height);
 
-// ---- the logo-left layout (a screen wider than the overlay) ----------------
+// ---- the main menu's backdrop ----------------------------------------------
 
-// Where the logo's centre line is put, as a fraction of the screen width from its
-// left edge: left of centre by enough that the column fits right of the logo at
-// the phone's UI scales, while the overlay is drawn at most 1.28x wider than the
-// screen (its upscale stays near retail's own cover fit on a 19.5:9 phone).
-constexpr float kLogoCentreFraction = 0.36f;
+// True when the screen is wider than the backdrop picture (spriteW x spriteH), by retail's own
+// compare in UserInterface::Draw (0x180121dbe): `spriteAspect > screenAspect` fits the height
+// (false here), anything else fits the width and overhangs top and bottom (true). A picture or
+// screen with no size: false.
+bool WiderThanBackdrop(int32_t width, int32_t height, int32_t spriteW, int32_t spriteH);
 
-// The logo's horizontal extent inside the overlay, as fractions of the drawn
-// overlay's width (measured on the installed overlay: 0.330 .. 0.675, centred on
-// the overlay's own centre line), with about one percent of air on the right.
-constexpr float kLogoRightFraction = 0.685f;
+// The height retail draws the backdrop at: on a wider screen the width-fitted picture
+// (`2 * ((int)(width / aspect + 0.5) >> 1)`, Draw's arithmetic), otherwise the screen's height.
+int32_t BackdropHeight(int32_t width, int32_t height, int32_t spriteW, int32_t spriteH);
 
-// Retail draws a dialog's backdrop "cover" fitted and centred: on a screen wider
-// than the overlay it is scaled to the width and the same amount is cut off its
-// top and bottom, which cuts into the logo near the overlay's top. This draws the
-// overlay 2 * (1 - kLogoCentreFraction) screen widths wide, its right edge on the
-// screen's right edge and its top on the screen's top, so the logo is whole and
-// centred on kLogoCentreFraction of the width, and the overlay still covers the
-// screen. A rectangle that does not overhang the top (a screen not wider than the
-// overlay) is returned unchanged.
-Rect LogoLeft(const Rect& retail, int32_t width);
+// Retail's backdrop rectangle (`retail`) moved so its top is on the screen's top when it
+// overhangs it (a wider screen): the logo is whole and stays centred; the cut moves to the
+// bottom border. A rectangle that does not overhang the top is returned unchanged.
+Rect LogoTop(const Rect& retail);
 
-// The logo's right edge (layout units) in an overlay drawn at `overlay`.
-int32_t LogoRight(const Rect& overlay);
+// Where the logo ends (layout units from the screen's top) in a backdrop drawn
+// `backdropHeight` tall with its top on the screen's top.
+int32_t LogoBottom(int32_t backdropHeight);
 
-// The button column's layout rectangle right of the logo (`logoRight`): centred
-// in the space between the logo and the safe area's right edge when the column
-// (`columnWidth`, last frame's; <= 0 when unknown) fits there; otherwise
-// right-aligned on the safe margin (overlapping the logo as little as it can).
-Rect ColumnBeside(int32_t width, int32_t height, int32_t logoRight, int32_t columnWidth);
+// ---- the button row (a screen wider than the backdrop) ----------------------
 
-// The version line's layout rectangle in the logo-left layout: centred on the logo's
-// centre line (`logoCentre`), on the safe area's bottom edge.
-Rect VersionUnderLogo(int32_t width, int32_t height, int32_t logoCentre);
+// The room kept between a label and its square's edge (layout units): the button frame's own
+// inset (MainMenu.rsc's `button*BorderPad` frames are padded 3 in from the button), so the
+// longest label ("Achievements") keeps 2 units of air inside the frame instead of touching it.
+constexpr int32_t kSquareInset = 5;
 
-// ---- the centred layout (any other screen) ---------------------------------
+// The side the labels need: the largest of their padded widths and heights (`count` of each)
+// plus kSquareInset on both sides, so every label fits inside its square's frame. 0 when there
+// is none.
+int32_t SquareSide(const int32_t* labelWidths, const int32_t* labelHeights, int32_t count);
 
-// The band the main menu's button column is centred in, on a width x height screen:
+// The largest square side as a fraction of the safe area's height: the squares fill the row
+// across the safe area up to this, so on a large screen they stay buttons, not tiles.
+constexpr float kRowSideFraction = 0.22f;
+
+// The band the rows are centred in (their dialog's root is MidCenter, handed this rectangle):
+// the safe area below the logo (`logoBottom`) and kVersionGap above the version line
+// (`versionTop`); either < 0: unknown, the safe area's edge.
+Rect RowBand(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop);
+
+// RowBand's height, the tallest the rows' dialog may be; 0 when there is no room.
+int32_t BlockHeight(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop);
+
+// What the row is made of, measured on the menu with its buttons `contentSide` square in ONE
+// row (all in layout units).
+struct RowMetrics {
+    int32_t count = 0;            // visible buttons
+    int32_t contentSide = 0;      // the side the labels need (SquareSide)
+    int32_t outerWidth = 0;       // the dialog's padded width less the buttons and the gaps between them
+    int32_t outerHeight = 0;      // the dialog's padded height less one row of buttons
+    int32_t buttonPadWidth = 0;   // a button's left + right padding
+    int32_t buttonPadHeight = 0;  // a button's top + bottom padding
+    int32_t spacing = 0;          // the gap between two squares, across a row and between the rows
+};
+
+// The dialog's padded size with `perRow` squares of `side` across and `rows` rows.
+int32_t RowsWidth(const RowMetrics& m, int32_t perRow, int32_t side);
+int32_t RowsHeight(const RowMetrics& m, int32_t rows, int32_t side);
+
+struct RowPlan {
+    int32_t rows = 0;     // 1 or 2; 0: no row fits (the caller tries the small font, then the column)
+    int32_t perRow = 0;   // squares on the first row: ceil(count / rows); the second has the rest
+    int32_t side = 0;     // the square side
+};
+
+// The row for a width x height screen. One row if it fits, else TWO rows (the first ceil(n / 2)
+// squares, the rest centred under them: a button added to the menu wraps, it never breaks the
+// layout). The side fills the safe width for the longer row, is capped by kRowSideFraction of the
+// safe height and by the band the rows must fit in between the logo and the version line
+// (BlockHeight), and is never smaller than the labels need. Nothing fits: rows 0.
+RowPlan PlanRows(int32_t width, int32_t height, const RowMetrics& m, int32_t logoBottom, int32_t versionTop);
+
+// ---- the centred column (any other screen, and the pause menu) ---------------
+
+// The band the menu's button column is centred in, on a width x height screen:
 //   * by default the safe area (InsetLayout);
 //   * below the logo (`logoBottom`, < 0 when unknown) and above the version line
 //     (`versionTop` less kVersionGap, < 0 when unknown), when the column (`columnHeight`, its
-//     last laid-out height, <= 0 when unknown) fits there: at a large UI scale the centred
+//     laid-out height, <= 0 when unknown) fits there: at a large UI scale the centred
 //     column would otherwise cover the logo and run under the version line;
 //   * else above the version line alone, when it fits between the screen's top edge and
 //     the line (its top may then rise into the margin: the buttons stay whole and clear
@@ -126,11 +170,69 @@ bool VersionAside(int32_t width, int32_t height, int32_t versionTop, int32_t ver
 // as the line, so its bottom-centre alignment puts it in the bottom-left corner.
 Rect VersionAsideLayout(int32_t width, int32_t height, int32_t versionWidth);
 
-// ---- the Options slider -----------------------------------------------------
+// The top of the version line (`versionHeight` tall, padded) laid out bottom-centred in the
+// safe area; -1 for a height <= 0.
+int32_t VersionTop(int32_t width, int32_t height, int32_t versionHeight);
 
-// The slider minimum with the row on: the lower of the platform's answer
-// (Platform::Display::UiScaleSliderRange) and kUiScaleMinPercent.
-float SliderMinimum(float platformMinPercent);
+// ---- every other dialog (the in-game HUD, its panels, the front end's other dialogs) ----
+
+// The rectangle DialogInstance::ComputeLayout (retail 0x180113d90) is handed for a dialog that is
+// not one of the menus above, so that what retail anchors to an edge or a corner (the toolbar and
+// the event notices bottom-right, the autosave notice top-left, a panel opened at its default
+// upper-left (0, 0)) sits inside the safe area. ComputeLayout places a dialog at
+// `_upperLeftX + x1` (left / top alignment) or against `x2` less the dialog's width (right /
+// bottom), centres it between the two, and pulls one that would cross `x2` back to `x2`. So:
+//   * the far edges are the safe area's (x2 = width - m, y2 = height - m): right / bottom anchors
+//     move in, centred dialogs do not move, and nothing is pushed past the safe edge;
+//   * the near edges are a FLOOR, not an offset: x1 = max(0, m - upperLeftX), so the dialog's
+//     left is max(upperLeftX, m). A dialog put at a screen point (a tooltip at the cursor, a combo
+//     box's drop-down under its box, a panel dragged by the player) stays exactly where retail
+//     puts it unless that point is inside the margin; a panel at its default (0, 0) opens at the
+//     safe corner. (Dragging a panel out of the corner then moves it once the cursor has gone
+//     past the margin: the dead zone retail itself has at the right and bottom edges.)
+//   * an axis on which the dialog (`lastWidth` / `lastHeight`, as laid out; <= 0 when not laid
+//     out yet) is wider than the safe area keeps retail's whole extent (0 .. width): the
+//     margin is not worth cutting a dialog off for;
+//   * a screen too small for the margin keeps retail's rectangle (InsetLayout's rule).
+Rect SafeArea(int32_t width, int32_t height, int32_t upperLeftX, int32_t upperLeftY, int32_t lastWidth,
+              int32_t lastHeight);
+
+// ---- the icons in the squares ----------------------------------------------------
+
+// The icon's share of the square's side (owner's ruling, P8 round 4: "the icons could be a bit
+// larger in mobile mode"); the label's text stays under it.
+constexpr float kIconFraction = 0.45f;
+
+// The icon height for a square of `side` holding a label `labelHeight` tall whose icon is
+// `iconHeight` (both with the icon at its sprite size, icon above text): kIconFraction of the
+// side, but no taller than leaves the text and kSquareInset on both sides inside the square,
+// rounded down to a whole multiple of the sprite's size (the icons are 16-pixel sprites; a whole
+// multiple scales every sprite pixel alike), and never smaller than the sprite's own size. <= 0
+// inputs: `iconHeight`.
+int32_t IconSide(int32_t side, int32_t labelHeight, int32_t iconHeight);
+
+// ---- the Options slider and the UI scale floor ----------------------------------------
+
+// The pause menu (the menu with the most buttons) as measured on the S25 in the small font: ten
+// buttons, "Achievements" 68 wide plus kSquareInset on both sides, the ribbon's 8-unit padding,
+// 2-unit button padding, 2 units between squares. Numbers about the user's own data.
+RowMetrics PauseMenuMetrics();
+
+// The version line's padded height (Dialog/BuildId.rsc: a 48-unit logo plus 8 under it).
+constexpr int32_t kVersionHeight = 56;
+
+// The lowest UI scale (percent) at which the pause menu still fits as rows of squares (PlanRows,
+// in the small font) on a back buffer `backBufferWidth` x `backBufferHeight` (the render scale's
+// size) under a backdrop of aspect spriteW : spriteH, rounded UP to a multiple of 5 (owner's
+// ruling, P8 round 4: the slider stops there instead of letting the menus fall back to a column
+// that runs off the screen). 0 when the screen is not wider than the backdrop (the rows never
+// apply there; the slider keeps kUiScaleMinPercent). 100 when nothing below fits.
+int32_t UiScaleFloor(int32_t backBufferWidth, int32_t backBufferHeight, const RowMetrics& menu,
+                     int32_t spriteW, int32_t spriteH, int32_t versionHeight);
+
+// The slider minimum with the row on: `floorPercent` when there is one (> 0), else the lower of
+// the platform's answer (Platform::Display::UiScaleSliderRange) and kUiScaleMinPercent.
+float SliderMinimum(float platformMinPercent, int32_t floorPercent);
 
 }  // namespace PhoneMenu
 }  // namespace Ext

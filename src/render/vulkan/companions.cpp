@@ -756,7 +756,9 @@ bool CreateProgram(Data* self, Shaders::Stage stage) {
         Shaders::ShaderReflection reflection;
         bool hit = false;
         std::string why;
-        if (!Shaders::LoadOrConvert(cache, bytes, size, stage, &spirv, &reflection, &hit, &why)) {
+        Shaders::ConvertOptions options;
+        options.combineSamplers = true;   // P8: the game programs are combined (shader_convert.h)
+        if (!Shaders::LoadOrConvert(cache, bytes, size, stage, &spirv, &reflection, &hit, &why, options)) {
             g_programFailures.fetch_add(1, std::memory_order_relaxed);
             std::fprintf(stderr, "[Vulkan] %s program %p permutation %d (%zu bytes): %s\n", Shaders::StageName(stage),
                          static_cast<const void*>(owner), i, size, why.c_str());

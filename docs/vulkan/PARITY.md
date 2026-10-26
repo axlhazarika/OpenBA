@@ -12,7 +12,7 @@ layer loaded) in an autostarted new game that quits through the pause menu with 
 
 | Feature | DX11 | Vulkan | Notes |
 |---|---|---|---|
-| MSAA | Multisampled main target, resolved once a frame | Multisampled main colour and depth, resolve attachment at the end of each main pass; `VK_EXT_multisampled_render_to_single_sampled` where present | Same picture. Resolve per pass costs bandwidth; the tiler path has not run on a device (P7, S25). Sample count follows dx11's ResolveMultisampleMode. Verified at 4x and 1x. |
+| MSAA | Multisampled main target, resolved once a frame | Multisampled main colour and depth, resolve attachment at the end of each main pass; `VK_EXT_multisampled_render_to_single_sampled` where present | Same picture. Resolve per pass costs bandwidth; the tiler path runs on the S25 (P7, P8; with AO at 2x in P8). Sample count follows dx11's ResolveMultisampleMode. Verified at 4x and 1x. |
 | Fullscreen | DXGI swap chain, exclusive or borderless per settings | SDL window fullscreen; the swap chain is rebuilt on the flip | No exclusive-mode probe (`Render::BootedExclusiveFullscreen` answers "not probed"). Fullscreen boot verified in P3. |
 | VSync | Present interval 1 / 0 | FIFO when on; MAILBOX, then IMMEDIATE, then FIFO when off | Re-read on every swap-chain rebuild. |
 | Shadows | Depth-only shadow map render buffer | Same render buffer as a depth image, depth-only pass | P3 RenderDoc capture: shadow 104 draws against DX11's 105 (one culling-order draw). The pixel shaders write `SV_Target` into no attachment (a validation warning, as D3D11 binds a null target). |
@@ -27,7 +27,7 @@ layer loaded) in an autostarted new game that quits through the pause menu with 
 
 | Feature | DX11 | Vulkan | Notes |
 |---|---|---|---|
-| `ext.ambient_occlusion` (AoBackend, `Graphics::ExtAoAfterOpaque`) | ASSAO from the committed DXBC (`src/render/common/ao/shaders/`), readable D24S8 depth | Supported. The same committed DXBC through the same dxbc-spirv converter as the game's programs (`ao/assao_pass.cpp`); the main depth gets a sampled depth-aspect view on request | Route below. Verified at 4x. Skipped (logged) on the tiler MSAA path. |
+| `ext.ambient_occlusion` (AoBackend, `Graphics::ExtAoAfterOpaque`) | ASSAO from the committed DXBC (`src/render/common/ao/shaders/`), readable D24S8 depth | Supported. The same committed DXBC through the same dxbc-spirv converter as the game's programs (`ao/assao_pass.cpp`); the main depth gets a sampled depth-aspect view on request | Route below. Verified at 4x. On the tiler MSAA path (msrtss) the single-sampled depth (sample 0) is read through the 1x resolve; verified on the S25 at 2x (P8). |
 | `ext.foliage_aa` (FaaBackend) | DXBC rewrite -> second pixel shader; A2C clone of a non-blending state | Supported. Same rewrite, converted into a second registry entry; the A2C clone is two bits of the pipeline key | `shader_rewrites.cpp`. Verified mode 2 at 4x (coverage + fill). |
 | `ext.billboard_shadow` (BbsBackend) | DXBC rewrite of the receiver vertex program | Supported, as above | Verified. |
 | `ext.draw_batch` smoke VS (SmokeVsBackend) | DXBC rewrite of the particle vertex program | Supported, as above; `Rewritten` checks every permutation | Verified. |

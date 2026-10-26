@@ -212,11 +212,91 @@ New, seen by the owner on the S25:
   only; the cap is a settings key, never an env flag).
 
 Verdicts on the P7 "Left" list: depth-discard re-arm rule: **fix**. Frame-copy pass split (2 of 3 depth passes still
-store): **investigate**. Shadows: **retail's three settings stay, plus an Off** for very limited devices (a class A `ext.*` row, off by default). Combined image samplers in the
-converter: **implement**. Release: a **signed Android apk in `release.yml`** like the three desktop packages. The release keystore exists (made 2026-10-25, PKCS12, alias `openba`, RSA 4096, kept off-tree in the owner's `~/.android/`) and the repo's Actions secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` are set; the job decodes the keystore to a temp file and signs with apksigner (or Gradle's signingConfig fed from the environment); nothing of it enters the tree. HWASan and the 30-minute soak: **skip**. Font rasteriser on Android (the TTF from the data folder):
+store): **investigate**. Shadows: ~~retail's three settings stay, plus an Off (a class A `ext.*` row)~~ **retail's Shadow Quality = None is
+the Off** (`VideoShaderDetail=0`: no shadow pass, no casters, the unshadowed pixel variant; verified 2026-10-25 on
+DX11 and the S25, `docs/android/P8_SHADOWS_RELEASE.md`); no ext row (ruled 2026-10-25); the phone seed keeps shadows on. Combined image samplers in the
+converter: **implement**. Release: a **signed Android apk in `release.yml`** like the three desktop packages (done in P8:
+job `android` + `tools/android.sh sign`; the first real run is the next tag or a dispatch). The release keystore exists (made 2026-10-25, PKCS12, alias `openba`, RSA 4096, kept off-tree in the owner's `~/.android/`) and the repo's Actions secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` are set; the job decodes the keystore to a temp file and signs with apksigner (or Gradle's signingConfig fed from the environment); nothing of it enters the tree. HWASan and the 30-minute soak: **skip**. Font rasteriser on Android (the TTF from the data folder):
 **add**. Still unverified from P7: ext.phone_menu on the phone itself, the oversized push-descriptor pair path, the
-in-game trim-memory save after the latch fix, rotation / display change at render scale 50, the Windows Vulkan boot
+in-game trim-memory save after the latch fix (verified in P8: `Auto.sav` the same second, and it loads), rotation / display change at render scale 50, the Windows Vulkan boot
 state left RUNNING after a clean exit.
+
+**P8 outcome (2026-10-25, four opus agents, merged on `android/p8`; the per-agent logs are `docs/android/P8_UI.md`,
+`P8_INPUT_OPTIONS.md`, `P8_VULKAN.md`, `P8_SHADOWS_RELEASE.md`).** Done: the in-game HUD / panels / tooltips inside
+ext.phone_menu's safe area (seen on the S25); ext.phone_menu verified on the phone; the Android font rasteriser
+(`font_raster_android.cpp`, the TTF in the data folder); the lost middle-mouse release (SDL's Java glue drops captured
+pointer events: `OpenBASurface.java` forwards them; verified with a uinput mouse only); Options > Enhanced rows Render
+scale (live, Android) and Frame rate cap (`ext.fps_cap` class A + `ext.fps_cap_rate`, the in-game limiter; phone seed
+60); rotation at render scale 50; the depth discard re-armed by frame signature and the main pass 3 -> 2; combined image
+samplers (all 465 permutations, caches re-versioned); the oversized push-pair path exercised; boot state EXITED on a
+clean exit (Windows + Linux); the signed apk job in `release.yml` (never run yet) and a non-required Android job in
+`ci.yml`; the trim-memory save verified; shadows off = retail's Shadow Quality None. Gate + resave PASS on the merged tree.
+
+Left / for the owner: the citizen shadow flicker is NOT reproduced (pinned camera, 512 map, half res: no frame-to-frame
+change; needs a recording or the settings in force, then a RenderDoc capture on the phone); a real KVM mouse test of the
+middle-button fix; a phone whose `settings.cfg` predates P8 is NOT capped (the seed runs on a first launch only: the
+coordinator's merged-tree run on the S25 logged `game: not paced`; decide whether the seed should add missing keys);
+UI scale at render scale Quarter pushes the Options tab row off the top (known_port_issues); the 60 cap sleeps, the
+panel stays at 120 Hz (a panel-rate request was not built); the frame-copy split stays (the remaining redesigns are
+unfaithful or large); the sun map is still allocated at Shadow Quality None (unmeasured); the Android CI job as a fifth
+required check or not; a dispatch dry run of `release.yml` before the next tag; whether the apk bundles the font.
+
+**P8 rounds 2-4 (2026-10-25/26, after the owner's own S25 test; same branch, same four logs).** Done: the pause / main
+menu no longer jump on their first frame (laid out from the current frame); modals shown through
+`UserInterface::ShowDialog` take the UI scale (`fix.ui_scale_layout`, retail_bugs §5); the phone main and pause menus are
+a row of square buttons (logo top, version bottom), wrapping to two rows as overflow, icons about 45 % of the square,
+the UI-scale slider floored at the lowest scale where both menus fit (35 on the S25 at render scale 100, computed,
+clamped at boot); the rotate drag at full speed (Android batches mouse samples: all summed) and no cursor snap on
+release; retail's Video rows (Resolution, Refresh rate, Fullscreen, VSync on) disabled on a fixed surface under
+ext.phone_menu; the phone seed appends missing keys to an existing settings.cfg; AO on the S25 (the Adreno driver
+refused `OpBitFieldInsert`: lowered to shifts and masks) and on the tiler MSAA path (about 2.1 ms GPU at AO Low);
+anisotropy reaches the samplers (the Texture Filter choices say "(next start)", Enhanced-tab host); the OpenBA
+launcher icon. Closing checks: DX11 gate + resave PASS; DX11 unit 1492/0, Vulkan 1512/0; the RELEASE apk (signed with
+the debug key through `tools/android.sh sign`) boots a new game on a zeroed phone and writes the full seed.
+
+Left / for the owner: the citizen shadow flicker is still NOT reproduced (120 fps recordings at three zooms: walking
+citizens' shadows step one sun-map texel, retail's look; suspects to toggle live: `ext.render_culling`,
+`ext.render_pipe`; the owner's recording + whether DX11 on the PC shows it); the KVM mouse: a jump to the screen
+CENTRE was not reproduced (a KVM re-announcing the mouse starts its pointer at the centre); below about UI 31-33 % on
+the phone the column returns (a third row or a smaller logo if ever wanted); the enlarged 16 px icons read as pixel
+art; "Anisotropic 16x (next start)" touches the combo's drop arrow at UI 100; the fifth CI check; a dispatch dry run
+of `release.yml`; whether the apk bundles the font; the sun map still allocated at Shadow Quality None (unmeasured).
+
+### 2.8 Android P9 (the owner's rulings after the P8 release-apk test, 2026-10-26)
+
+Rulings on the P8 opens: the citizen shadow flicker is GONE on the final P8 build (no further work); the enlarged
+16 px icons in the phone menu squares are fine for now; PR #53 merged as is.
+
+Next session, in the owner's order:
+- **Texture Filter drop-down:** REMOVE the "(next start)" suffix again (`src/ext/enhanced_tab/texture_filter_note.cpp`
+  and its string-table entry, the `OptionsDialog::PopulateFilterCombo` seam).
+- **AO setting changes the mipmap level:** on the S25 adjusting the AO quality / strength visibly changes texture
+  mip selection. Find why (the AO pass's sampler state leaking into the main pass's samplers under the
+  combined-sampler conversion? the texture_quality Half path? a sampler cache keyed without the anisotropy / LOD
+  bias?) and fix it; compare DX11.
+- **Loading screen:** the bottom black edging image sits too low / off-screen on the phone, and the "Loading" text is
+  drawn over the rendered scene / loading image instead of over the black edging as the Banished logo is. Fit both
+  under ext.phone_menu (same backdrop rule as the logo).
+- **Scroll bars about 4x wider on the phone** (finger scrolling), under ext.phone_menu: lists in Options, Fixes and
+  Extensions, Mods, the in-game panels.
+- **Render scale and UI scale coupled:** changing the render scale must re-derive the UI scale value so the interface
+  keeps the same size on screen (UI scale is in render pixels today: Half -> the UI doubles). Keep the slider floor
+  rule in step.
+- **Options and Fixes and Extensions dialogs cut off at the top** below UI 45 at render scale Full (35 at Half): the
+  tab row and the top of the list go off-screen, and in Options the other buttons become unreachable. A phone layout
+  for the tall dialogs: cap the dialog to the safe height (scroll the list, keep the tab row and the button row on
+  screen), or scale the dialog down to fit.
+- **Icons for the new extension rows** (`fps_cap`, and any row added in P8 without one) in the Extensions sprite
+  sheet (`src/ext/ui/`, `tools/ext_resources.sh` recompiles the kit output; the sheet cross-check unit test).
+- **In-game version text overlaps the bottom row of buttons** at render scale Full, UI 40 on the S25 (the pause menu's
+  two rows vs the version line: the rows must be placed above the version line, or the version line hidden when the
+  rows need the space), and the black fringe image is missing there too.
+- **Bundle the font in the apk (ruled 2026-10-26):** the FrancophilSans files the desktop packages ship
+  (`tools/release/fonts`, with the notice; `THIRD_PARTY_NOTICES.md`) go into the apk as assets and are copied to the
+  app's data folder at first run when absent (`font_raster_android.cpp` reads them there); `push-data` no longer
+  needs to push them.
+- Ruled 2026-10-26: the rotate drag is good on the real KVM mouse (centre jump and speed: closed). Waiting, no action:
+  the fifth CI check, a dispatch dry run of `release.yml`, the sun map still allocated at Shadow Quality None.
 
 ## 3. Rules that hold (do not relax)
 

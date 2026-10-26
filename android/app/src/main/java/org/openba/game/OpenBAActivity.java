@@ -1,7 +1,7 @@
 // android/app/src/main/java/org/openba/game/OpenBAActivity.java (docs/android/README.md)
 //
 // The app's one activity: SDL's SDLActivity (compiled from the pinned SDL submodule, see
-// android/app/build.gradle) with two changes.
+// android/app/build.gradle) with three changes.
 //
 //  * The native entry point is the game's own `main` (src/app/main.cpp, built into libmain.so),
 //    the same function Linux runs, not SDL's renamed SDL_main: main.cpp defines SDL_MAIN_HANDLED.
@@ -14,8 +14,12 @@
 //        adb shell am start -n <package>/org.openba.game.OpenBAActivity -e BANISHED_AUTOSTART 1
 //    Variables left from an earlier launch in the same process are cleared first, so a launch
 //    from the icon (no extras) runs with none. Nothing else sets the environment.
+//
+//  * The surface is OpenBASurface: SDL's, with the captured mouse's buttons and motion passed on
+//    (a camera-rotate drag's middle-button release was lost; OpenBASurface.java has the defect).
 package org.openba.game;
 
+import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.system.ErrnoException;
@@ -23,6 +27,7 @@ import android.system.Os;
 import android.util.Log;
 
 import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLSurface;
 
 public class OpenBAActivity extends SDLActivity {
     private static final String TAG = "OpenBA";
@@ -37,6 +42,11 @@ public class OpenBAActivity extends SDLActivity {
     @Override
     protected String getMainFunction() {
         return "main";
+    }
+
+    @Override
+    protected SDLSurface createSDLSurface(Context context) {
+        return new OpenBASurface(context);
     }
 
     private static void applyLaunchEnvironment(Intent intent) {

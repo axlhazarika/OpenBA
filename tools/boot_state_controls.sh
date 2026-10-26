@@ -141,11 +141,12 @@ make_state BOOTING "$LIVE_PID" 0
 check "N3 NEW script says BOOTING (not STALE)" "$NEW" 3
 
 echo "--- N4: EXITED, frozen 600s -- a clean shutdown is SUPPOSED to sit frozen."
-echo "        SCOPE: BootState::Stop() has NO CALLER in the tree, so the shipped"
-echo "        exe never writes EXITED. This exercises probe_once's EXITED arm --"
-echo "        real code -- against a state no real run currently produces."
+echo "        Every platform's Platform::App::Shutdown calls BootState::Stop(), so a"
+echo "        clean exit writes EXITED (its pid then gone: see N4b)."
 make_state EXITED "$LIVE_PID" 600
 check "N4 NEW script says NOT_RUNNING, not STALE" "$NEW" 1
+make_state EXITED 999999 0
+check "N4b NEW script says NOT_RUNNING for EXITED with its pid gone (a clean exit)" "$NEW" 1
 
 echo "--- N5: pid GONE -- the pre-existing STALE(4) must be unchanged"
 make_state RUNNING 999999 0

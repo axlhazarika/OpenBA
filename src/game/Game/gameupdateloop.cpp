@@ -62,6 +62,7 @@
 #include "system/Filename.h"
 #include "showroom.h"         // BANISHED_SHOWROOM shot sequence (src/diag/)
 #include "stress_harness.h"   // BANISHED_STRESS Update/Draw brackets (standalone/)
+#include "frame_limiter.h"    // NOT RETAIL: the in-game frame cap (src/app/)
 #include "ext/render_culling/render_culling.h" // EXT SEAM (NOT RETAIL, docs/extensions/handins/PERFXEXT.md): ext.render_culling / ext.anim_batch (PerfX)
 #include "ext/walk_batch/walk_batch.h" // EXT SEAM (NOT RETAIL, docs/extensions/handins/WALKBATCH.md, WALKGRID.md): ext.walk_batch (A) / ext.walk_batch_grid (B)
 #include "ext/spread_warmth/spread_warmth.h"   // EXT SEAM (NOT RETAIL, docs/extensions/handins/HITCH_PFBURST.md): ext.spread_warmth (class B), Ext::SpreadWarmth::BeginFrame
@@ -1381,6 +1382,11 @@ void GameUpdateLoop::Draw(float alpha) {
         }
         return;
     }
+
+    // NOT RETAIL: the in-game frame cap (src/app/frame_limiter.h). A no-op unless the settings cap
+    // (ext.fps_cap, the phone's first run sets it to 60) or BANISHED_FPS_CAP asks for one; it sleeps
+    // before the frame's draw work, and MainLoop::Frame's accumulator still runs every sim step owed.
+    FrameLimiter::TickInGame();
 
     StressHarness_DrawBegin();   // [STRESS] render-frame period + Draw bracket
 

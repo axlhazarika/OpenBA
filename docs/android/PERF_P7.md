@@ -193,7 +193,7 @@ Ordered by expected gain per cost on this phone. "Gain" is an estimate from §3,
 | 3 | **Half-resolution render scale** (ruled phone default): back buffer at half size, upscale in the existing present pass or by a smaller swap chain (SurfaceFlinger scales) | GPU fill and main-target bandwidth / 4; lets the governor drop clocks further | medium (back buffer vs window density, mouse mapping) | known issue "full-resolution rendering", `present.cpp` |
 | 4 | **Main-target store ops**: depth DONT_CARE on the last main pass; DONT_CARE colour store where the present pass is the next reader is not possible (it reads), but the msrtss end copy (`draw.cpp:1082`) can be dropped by sampling the msrtss image in the present pass | about 10-30 MB a frame less traffic | cheap to medium | `draw.cpp:447-468`, `:1082` |
 | 5 | **Gather helper spin**: `HelperLoop` spins ~10% of all samples; on a phone that is power and heat with nothing to show | 0.5-1 core of spinning less; lower clocks | cheap (`ext.gather_threads`, park after N spins) | `src/ext/gather_threads/` |
-| 6 | **Shadow pass CPU**: 33-36% of the render thread draws the 512x512 sun map; a phone "shadows off" (class A ext, ruled needed) or fewer casters | render thread -30% when off | extension + ruling | `SunLight::DrawShadowMap` |
+| 6 | **Shadow pass CPU**: 33-36% of the render thread draws the 512x512 sun map; a phone "shadows off" or fewer casters | render thread -30% when off | none: retail's Shadow Quality = None is the off (P8_SHADOWS_RELEASE.md) | `SunLight::DrawShadowMap` |
 | 7 | Frame copy split: make the 2340->1170 copy a sampled half-size draw inside the pass, or move it to a pass boundary that already exists | removes one store + load of 20 MB | redesign | `draw.cpp:1218` |
 | 8 | Stop enabling `VK_EXT_vertex_input_dynamic_state` (unused; Qualcomm says avoid) | none measured; hygiene | cheap | `device.cpp:985` |
 | 9 | Combined image samplers in the converter mapping | 2-5% fill (Qualcomm) | redesign | `shader_convert.cpp`, layouts |
@@ -210,7 +210,7 @@ Ordered by expected gain per cost on this phone. "Gain" is an estimate from §3,
 | 5 | Half-resolution render scale | Full resolution (§4 rank 3) | With the frame cap, the main phone setting |
 | 6 | MSAA default | Off; msrtss 2x rendered the menu in P6, never measured in game | Measure 2x msrtss in the pinned town (fps, GPU busy, clock) after rank 3; Qualcomm calls 2x nearly free on the tile |
 | 7 | AO on the tiler MSAA path | Skipped and logged (depth never stored multisampled) | Leave off on the phone; revisit only if MSAA becomes the default |
-| 8 | Shadows off | Retail has no off; phone uses the 512 map | An extension (class A) if rank 6 is wanted; ruling |
+| 8 | Shadows off | Retail has one: Shadow Quality = None (`VideoShaderDetail=0`; verified in P8, P8_SHADOWS_RELEASE.md); phone seed keeps shadows on (512 map) | none (ruled 2026-10-25: no ext row) |
 | 9 | Edge scroll on a phone | `GameEdgeScroll=true` scrolled an unattended game to the map corner | Seed `GameEdgeScroll=false` in the phone defaults, or ignore edge scroll for touch-sourced mouse positions; ruling |
 | 10 | Font rasteriser | Absent: looks beside `/proc/self/exe`; `ext.sharp_ui` keeps its retail fallback | Look in the data folder (`files/`) for the user's TTF |
 | 11 | HWASan run | Not done | Once per phase via `wrap.sh` on a debuggable apk (PLAN §4.6) |

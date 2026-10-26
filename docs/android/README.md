@@ -16,7 +16,8 @@ their own Banished install into the app's data folder (below).
 | `android/` | The Gradle project: `settings.gradle`, `build.gradle` (AGP pin), `gradle.properties` (the package id and app name, each set once), the Gradle wrapper. |
 | `android/app/build.gradle` | The app module: SDK levels, NDK and CMake pins, arm64-v8a only, the native build over `../../CMakeLists.txt` (targets `OpenBA` = `libmain.so` and `SDL3-shared` = `libSDL3.so`), SDL's Java glue compiled in place from `third_party/SDL/android-project`. |
 | `android/app/src/main/AndroidManifest.xml` | One activity, landscape only, Vulkan 1.3 required. |
-| `android/app/src/main/java/org/openba/game/OpenBAActivity.java` | `SDLActivity` subclass: runs the game's own `main`, turns the launch intent's `BANISHED_*` extras into the environment. |
+| `android/app/src/main/java/org/openba/game/OpenBAActivity.java` | `SDLActivity` subclass: runs the game's own `main`, turns the launch intent's `BANISHED_*` extras into the environment, makes the surface an `OpenBASurface`. |
+| `android/app/src/main/java/org/openba/game/OpenBASurface.java` | `SDLSurface` subclass: the captured mouse's buttons and motion (P8). |
 | `src/platform/android/` | The platform twins (`README.md` there has the rule). |
 | `src/diag/android/` | The crash handler and boot-state watchdog twins. |
 | `tools/android.sh` | Build, install, push the data, run, pull the logs. |
@@ -44,7 +45,8 @@ tools/android.sh build debug --jobs 8      # android/app/build/outputs/apk/debug
 The script sets `ANDROID_HOME` (default `%LOCALAPPDATA%/Android/Sdk`) and `JAVA_HOME` (default Android
 Studio's `jbr`) when they are unset, and passes the job count to the native build. A clean debug build
 takes about 4.5 minutes with 2 jobs; a one-file change rebuilds in well under a minute. Release builds
-(`build release`, the perf flavour) are unsigned until P7.
+(`build release`, the perf flavour) come out unsigned (`apk/release/app-release-unsigned.apk`); `tools/android.sh
+sign` aligns and signs them (see Release below).
 
 The NDK configures the root `CMakeLists.txt` with `ANDROID` set. That branch takes `src/platform/posix`
 plus `src/platform/sdl` and `common`, with every `src/platform/android/<name>_android.cpp` replacing its
@@ -55,8 +57,8 @@ modules because SDL's Java glue calls into them at startup. The renderer is the 
 ## Install, data, run
 
 ```bash
-tools/android.sh install debug            # adb install -r
-tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg -> the phone (once)
+tools/android.sh install debug            # adb install -r -d (a debug apk replaces any debuggable build)
+tools/android.sh push-data                # BANISHED_DIR's WinData/*.pkg + the FrancophilSans files -> the phone (once)
 tools/android.sh run                      # launch to the main menu
 tools/android.sh run BANISHED_AUTOSTART=1 BANISHED_PAUSEMENU=3000 BANISHED_PAUSEMENU_QUIT=120 \
                      BANISHED_PAUSEMENU_BUTTON=6   # new game, then Quit Game from the pause menu
@@ -71,6 +73,7 @@ tools/android.sh stop
 | On the phone | What |
 |---|---|
 | `files/WinData/*.pkg` | The retail packages, pushed by the player. Only the top-level `*.pkg` are pushed; parked mods and other subfolders stay home. |
+| `files/FrancophilSans.ttf`, `FrancophilSans-Bold.ttf`, `FrancophilSans_README.txt` | The typeface `ext.sharp_ui` rasterises its fonts from at a UI scale other than 100 % (below). Pushed by `push-data`. |
 | `files/OpenBA` | Does not exist: it is the "exe path" the engine is told (`file_android.cpp`), so the game directory is `files/`. |
 | `files/standalone_debug.log`, `standalone_error.log`, `standalone_crash.log`, `standalone_hang.log`, `standalone_boot_state.txt` | The same files as beside `OpenBA.exe` on Windows. |
 | `files/Documents/Banished/` | The per-user folder: `settings.cfg`, `Save/`, `Cache/` (the derived-data cache: SPIR-V, `vulkan_pipelines.bin` / `.txt`). |
@@ -79,6 +82,17 @@ tools/android.sh stop
 `WinData/` must be made by the app: a folder adb makes belongs to the shell user, and the app process can
 neither list nor open anything inside it (EACCES). The app makes `WinData/` and `Documents/` at every
 start, and `push-data` starts the app once when the folder is missing (or removes an adb-made one first).
+
+**The font rasteriser** (P8). `ext.sharp_ui` draws the UI's text crisp at any UI scale by rasterising the
+game's typeface, FrancophilSans, at the pixel height the screen needs (FreeType,
+`src/platform/common/font_raster_freetype.cpp`). Windows, Linux and macOS find `FrancophilSans.ttf`
+installed or beside the exe, where the release packages put it. On Android the one place is the data folder
+(`src/platform/android/font_raster_android.cpp`): the app looks for `files/FrancophilSans.ttf` and nowhere
+else. The typeface is Manfred Klein's, kept unchanged with his notice in `tools/release/fonts/` and shipped
+beside the exe in the desktop packages (`THIRD_PARTY_NOTICES.md`); `tools/android.sh push-data` pushes the
+same three files. Without the file the text keeps the game's own glyph sheets (`[ExtRes] font variants off:
+typeface FrancophilSans absent` in `standalone_error.log`); with it, a UI scale other than 100 shows
+`[ExtRes] font <Kit> at <px> px: ... glyphs rasterised`. The apk carries no font.
 
 **Harness flags.** The game reads its `BANISHED_*` flags once at boot from the process environment
 (`src/app/options.cpp`; `src/app/options.h` is the inventory). On Android the launch intent is the
@@ -93,20 +107,46 @@ SDL ends the game's process state once `main` returns and refuses a second start
 
 **Phone defaults** (PLAN.md §1). The first start (no `settings.cfg` yet) writes a `settings.cfg` holding
 only `GameEdgeScroll=false` (P7: a touch held at the edge is a parked cursor), `VideoRenderScale=50`,
-`VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low; retail has no shadows-off), and
+`VideoMultisample=0`, `VideoShadowScalar=2` (retail's Low Shadow Resolution; shadows stay on: retail's own
+off is Options > Shadow Quality = None, `VideoShaderDetail=0`, `P8_SHADOWS_RELEASE.md`), and
 `ext.ambient_occlusion`, `ext.better_trees`, `ext.foliage_aa`, `ext.billboard_shadow`,
-`ext.max_shadow_res` off, and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
-main menu's logo sits whole on the left and the buttons on the right, inside a 4.5 % safe area clear of the
-rounded corners and the camera cut-out, and Options > User interface scale goes down to 25 % (the UI four
-times larger than 100 %; `docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
+`ext.max_shadow_res` off, `ext.fps_cap` on at `ext.fps_cap_rate=60` (P8, ruled: the menu and the game
+paced to 60 on the 120 Hz panel), and `ext.phone_menu` on (`app_android.cpp`): on the phone's 19.5:9 screen the
+main menu's logo sits whole and centred at the top and the menu's buttons form one row of square buttons
+across the middle (owner's ruling, P8 round 2), inside a 4.5 % safe area clear of the
+rounded corners and the camera cut-out, the in-game interface (the toolbar and event notices bottom-right,
+the panels at their default top-left, tooltips, drop-downs) is kept inside the same safe area, and Options >
+User interface scale goes down to 25 % (the UI four times larger than 100 %;
+`docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
 100. Options changes are kept as anywhere else.
 
 **Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
 window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
-1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key once at window creation (no
-Options control; edit the file and restart); desktops answer 1.0. The SDL layer hands the engine the scaled
-size and pixel density, so taps land where they are drawn. The MSAA default stays off and the 60 fps cap
-is unruled: the numbers are in `P7_FIRST_PASS.md`.
+1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key at window creation; since P8
+Options > Enhanced "Render scale" (Full / Half / Quarter = 100 / 50 / 25) changes it live
+(`SetRenderScale`, then `Video::Device::settingsChanged`: the Vulkan backend rebuilds the back buffer, the
+targets and the swap chain at the next frame) and records the key. Desktops answer 1.0 and show the row
+disabled. The SDL layer hands the engine the scaled size and pixel density, so taps land where they are
+drawn. The UI is laid out in engine pixels, so it grows as the scale shrinks (known_port_issues). The MSAA
+default stays off: the numbers are in `P7_FIRST_PASS.md`.
+
+**Frame rate cap** (P8). Options > Enhanced "Frame rate cap" (Off / 30 / 60 / 90 / 120) is the class A row
+`ext.fps_cap` with `ext.fps_cap_rate`: `src/app/frame_limiter.h` paces the menu and the game to it (the
+game's fixed simulation step is untouched; only fewer frames draw it). The phone's first run turns it on
+at 60; a desktop leaves it off, the game uncapped as retail. `BANISHED_FPS_CAP` still overrides it.
+
+**Mouse** (P8). A mouse works as on a desktop. While the middle button is held (camera rotate) the window
+is in relative mode, which on Android is pointer capture; `OpenBASurface.java` passes the captured
+pointer's buttons and motion (the frame's batched samples summed) to SDL, which the pinned SDL drops, and
+at the release the cursor is put back where the drag began, where Android shows the pointer
+(`docs/reference/android_mouse.md`).
+
+**Retail's Video rows** (P8). With `ext.phone_menu` on, Options > Video's Resolution, Refresh Rate,
+Fullscreen and VSync are disabled on the phone (they change nothing there; VSync is kept on, so the
+Frame rate cap is the only frame-rate control): `docs/android/P8_INPUT_OPTIONS.md` round 2.
+**Phone defaults on an existing file** (P8): each start appends the defaults whose key the file lacks,
+never changing a key it has. A
+uinput mouse for tests: `adb shell uinput <file.json>` (the script in that reference).
 
 ## Logs
 
@@ -154,6 +194,38 @@ LOW_MEMORY, including the one each trip home brings; in the background the main 
 such a request is dropped. To check by hand: `adb shell input keyevent KEYCODE_HOME`, then
 `adb shell am start -n org.openba.game/org.openba.game.OpenBAActivity` brings the running game back;
 `adb shell am send-trim-memory org.openba.game RUNNING_CRITICAL` in a running town writes `Save/Auto.sav`.
+
+## Release
+
+`.github/workflows/release.yml`, job `android`, builds and signs the apk next to the three desktop packages:
+`OpenBA-v<version>-android-arm64.apk` (+ `.sha256`) is a release asset on a `v*` tag and the run artifact
+`package-android` on a manual dispatch. The version is the root `CMakeLists.txt`'s `project(... VERSION x.y.z)`:
+`android/app/build.gradle` reads it (versionName `x.y.z`, versionCode `x*10000 + y*100 + z`), so the release bump
+stays the one CMake edit. The job installs the pinned SDK packages (`ndk;30.0.16248370`, `cmake;3.31.6`,
+`platforms;android-35`, `build-tools;36.0.0`) into the runner's SDK, runs Gradle on JDK 21 (Temurin), builds with
+`tools/android.sh build release --ccache` and signs with `tools/android.sh sign`:
+
+1. `zipalign -f -P 16 4` (16 KB pages for the uncompressed native libraries), then
+2. `apksigner sign` (v2 / v3 by minSdk 29; no v1), the passwords read from the environment (`--ks-pass
+   env:...`), then `zipalign -c -P 16 4` and `apksigner verify --verbose --print-certs`.
+
+The key: the repository's Actions secrets `ANDROID_KEYSTORE_BASE64` (the PKCS12 keystore, base64),
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The keystore is decoded into the
+runner's temp folder (outside the workspace, mode 600, removed when the step ends) and reaches only the signing
+step; Gradle, the native build and the caches never see it. Signing in a step of its own rather than a Gradle
+`signingConfig`: the build is the same command as on a developer's machine, and the secrets stay out of the
+Gradle daemon and every build script. The release keystore itself (alias `openba`, RSA 4096) is kept off-tree by
+the owner; nothing of it is in the repository.
+
+A local check of the same commands with the debug key (`adb install` replaces a debug install: same key):
+```bash
+tools/android.sh build release --jobs 8
+OPENBA_KEYSTORE=~/.android/debug.keystore OPENBA_KEY_ALIAS=androiddebugkey \
+OPENBA_KEYSTORE_PASSWORD=android OPENBA_KEY_PASSWORD=android tools/android.sh sign
+tools/android.sh install release          # apk/release/app-release.apk
+```
+`ci.yml` builds the debug apk on every PR (job `Android (arm64, debug apk)`); it is not one of the four
+required checks.
 
 ## Pre-rotation
 

@@ -62,8 +62,29 @@ float GamePixelDensity();
 // engine's back buffer, the client rect, the cursor and the size events all agree on the smaller
 // size, and the renderer scales the frame up to the window when it presents. 1.0 on Windows, Linux
 // and macOS; Android reads `VideoRenderScale` (a percent, 25..100) from the user's settings.cfg once
-// (the phone's first-run file seeds 50: half resolution, docs/vulkan/PLAN.md §1).
+// (the phone's first-run file seeds 50: half resolution, docs/vulkan/PLAN.md §1). P8: any thread
+// (the Vulkan backend reads it where it rebuilds the swap chain); SetRenderScale changes it.
 float RenderScale();
+
+// P8: whether the render scale can be changed in a run (the Options dialog's Render scale row,
+// src/ext/enhanced_tab/render_scale_entry.cpp): true on Android, false on Windows, Linux and macOS,
+// whose RenderScale stays 1.0 (a desktop's present path does not scale the frame; the row is shown
+// disabled there).
+bool RenderScaleAdjustable();
+
+// P8: the render scale from now on, a percent (25..100; out of range is ignored). Main thread. The
+// caller raises Video::Device::settingsChanged, so the next frame's settings change rebuilds the back
+// buffer, the targets and the swap chain at the new size (the Vulkan backend's
+// ApplyEngineSettingsChange reads the window's size through RenderScale), and records the key
+// (`VideoRenderScale`) so the next start opens at it. A no-op where not RenderScaleAdjustable.
+void SetRenderScale(int percent);
+
+// P8: true where the game's surface is the whole screen at its own size and refresh, whatever the
+// engine's Video configuration says: Android (an activity's window; the Vulkan backend republishes the
+// window's size as the back buffer and never sets a display mode). There retail's Options rows
+// Resolution, Refresh rate and Fullscreen change nothing; ext.phone_menu disables them and keeps VSync
+// on (src/ext/phone_menu/video_rows.cpp). False on Windows, Linux and macOS.
+bool FixedDisplaySurface();
 
 }  // namespace Window
 }  // namespace Platform

@@ -6,6 +6,8 @@
 // headless check (tools/vulkan/shader_check.cpp) links this file alone.
 // ============================================================================
 #include "shader_convert.h"
+#include "spirv_combine.h"
+#include "spirv_legalize.h"
 
 #include "ext/derived_cache/derived_cache.h"
 #include "ext/derived_cache/hash64.h"
@@ -489,6 +491,36 @@ bool ConvertDxbc(const uint8_t* dxbc, size_t size, Stage stage, std::vector<uint
         spirv->clear();
         return false;
     }
+    // P8 round 2: OpBitFieldInsert lowered to shifts and masks (spirv_legalize.h: the Adreno 830 driver
+    // refuses a vertex shader holding one). Every module, the AO pass's included.
+    {
+        std::string legalize;
+        uint32_t changed = 0;
+        if (!LowerBitFieldInsert(spirv, &changed, &legalize)) {
+            SetWhy(why, legalize);
+            spirv->clear();
+            return false;
+        }
+        if (changed != 0 && !CheckSpirvStructure(*spirv, &structure)) {
+            SetWhy(why, "the bit-field lowering produced a malformed module: " + structure);
+            spirv->clear();
+            return false;
+        }
+    }
+    // P8: one COMBINED_IMAGE_SAMPLER per sampled (texture, sampler) pair (spirv_combine.h).
+    if (options.combineSamplers) {
+        std::string combine;
+        if (!CombineImageSamplers(spirv, SetOfStage(stage), refl, &combine)) {
+            SetWhy(why, combine);
+            spirv->clear();
+            return false;
+        }
+        if (!CheckSpirvStructure(*spirv, &structure)) {
+            SetWhy(why, "the combined-sampler pass produced a malformed module: " + structure);
+            spirv->clear();
+            return false;
+        }
+    }
     return true;
 }
 
@@ -546,6 +578,8 @@ Ext::DerivedCache::Key CacheKey(const uint8_t* dxbc, size_t size, Stage stage, c
     key.shape[1] = static_cast<uint32_t>(compiler);
     key.shape[2] = static_cast<uint32_t>(compiler >> 32);
     key.shape[3] = static_cast<uint32_t>(link ^ (link >> 32));
+    // P8: the combined module is a different entry (bit 31 of the stage word; the stage is 0 or 1).
+    if (options.combineSamplers) key.shape[0] |= 0x80000000u;
     key.sourceSize = size;
     key.sourceHash = Ext::DerivedCache::Hash64(dxbc, size);
     return key;
@@ -562,6 +596,14 @@ std::vector<uint8_t> EncodeEntry(const std::vector<uint32_t>& spirv, const Shade
     Put32(out, refl.samplerMask);
     Put32(out, refl.textureCubeMask);
     Put32(out, refl.uavMask);
+    out.push_back(refl.combined ? 1 : 0);
+    out.insert(out.end(), refl.textureSampler.begin(), refl.textureSampler.end());
+    Put32(out, static_cast<uint32_t>(refl.extraPairs.size()));
+    for (const CombinedPair& p : refl.extraPairs) {
+        out.push_back(p.binding);
+        out.push_back(p.texture);
+        out.push_back(p.sampler);
+    }
     PutElements(out, refl.inputs);
     PutElements(out, refl.outputs);
     Put32(out, static_cast<uint32_t>(spirv.size()));
@@ -582,6 +624,18 @@ bool DecodeEntry(const std::vector<uint8_t>& payload, std::vector<uint32_t>* spi
     out.samplerMask = r.U32();
     out.textureCubeMask = r.U32();
     out.uavMask = r.U32();
+    out.combined = r.U8() != 0;
+    for (uint8_t& s : out.textureSampler)
+        s = r.U8();
+    const uint32_t extras = r.U32();
+    if (!r.ok || extras > kMaxSamplers) return false;
+    for (uint32_t i = 0; i < extras; ++i) {
+        CombinedPair p;
+        p.binding = r.U8();
+        p.texture = r.U8();
+        p.sampler = r.U8();
+        out.extraPairs.push_back(p);
+    }
     if (!GetElements(r, &out.inputs) || !GetElements(r, &out.outputs)) return false;
     const uint32_t words = r.U32();
     if (!r.ok || payload.size() - r.at != static_cast<size_t>(words) * 4) return false;

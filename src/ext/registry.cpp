@@ -43,7 +43,8 @@ const Entry kEntries[] = {
 
     { "ui_scale_layout", Tier::Fix, Class::None, true,
       "Steady dialogs on UI rescale",
-      "Dialogs no longer flash to a corner when the UI scale changes.",
+      "Dialogs no longer flash to a corner when the UI scale changes, and pop-up notices follow the "
+      "UI scale.",
       0, [](State& s) -> bool& { return s.fix.ui_scale_layout; } },
 
     // ROCKSEAT (docs/extensions/handins/ROCKSEAT.md, docs/retail_bugs.md section 7): rocks and ore
@@ -408,14 +409,24 @@ const Entry kEntries[] = {
       0, [](State& s) -> bool& { return s.ext.texture_quality; } },
     // PHONEMENU (docs/extensions/handins/PHONEMENU.md): the front end fitted to a phone held in
     // landscape -- the menu backdrop moved so the logo is whole on a screen wider than 16:9, the menu
-    // dialogs laid out inside a 4.5 % safe area (rounded corners, the camera cut-out), and the UI scale
-    // slider down to 25 %. Class A: layout only, nothing saved, live. OFF by default on a desktop;
-    // the Android first run turns it on (src/platform/android/app_android.cpp).
+    // dialogs and the in-game interface laid out inside a 4.5 % safe area (rounded corners, the camera
+    // cut-out), and the UI scale slider down to 25 %. Class A: layout only, nothing saved, live. OFF by
+    // default on a desktop; the Android first run turns it on (src/platform/android/app_android.cpp).
     { "phone_menu", Tier::Extension, Class::A, false,
       "Phone screen fit",
-      "Keeps the main menu clear of rounded screen corners and camera cut-outs, shows the whole "
-      "Banished logo on wide screens, and lets the UI scale go down to 25% (a much larger interface).",
+      "Keeps the menus and the game's interface clear of rounded screen corners and camera cut-outs, "
+      "shows the whole Banished logo on wide screens, and lets the UI scale go down to 25% (a much larger "
+      "interface).",
       0, [](State& s) -> bool& { return s.ext.phone_menu; } },
+    // FPSCAP (docs/android/P8_INPUT_OPTIONS.md): a frame-rate ceiling for the menu and the game
+    // (src/app/frame_limiter.h), at ext.fps_cap_rate. Class A: frames only; the sim's fixed step runs
+    // every tick the elapsed time owes, nothing is saved, live. OFF by default on a desktop (the game
+    // stays uncapped, as retail); the Android first run turns it on at 60 (ruled 2026-10-25).
+    { "fps_cap", Tier::Extension, Class::A, false,
+      "Frame rate cap",
+      "Limits the frame rate in the menu and in game (the Enhanced tab's Frame rate cap): less power and "
+      "heat, the simulation unchanged.",
+      0, [](State& s) -> bool& { return s.ext.fps_cap; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
@@ -435,6 +446,7 @@ constexpr int kEntryCount = static_cast<int>(sizeof(kEntries) / sizeof(kEntries[
 // the owner row's bool; opacity 0..30 percent, default 20: the user's look of 2026-10-14 put
 // the usable maximum at 20 and anything past 30 "iffy").
 constexpr int32_t kMaxShadowSizes[] = { 4096, 8192 };
+constexpr int32_t kFpsCapRates[] = { 30, 60, 90, 120 };
 
 const ValueKey kValueKeys[] = {
     { "ao_quality", "ambient_occlusion", 1, 3, 2,
@@ -474,6 +486,10 @@ const ValueKey kValueKeys[] = {
     // a range key). The code below the key still takes any drop N (texture_quality.h).
     { "texture_quality_drop", "texture_quality", 0, 1, 0,
       [](State& s) -> int32_t& { return s.val.texture_quality_drop; }, nullptr, 0 },
+    // FPSCAP: the ceiling while the row fps_cap is on, one of the combo's rates; 60 is the phone's ruled
+    // default. Any other number reads as 60 (a discrete key).
+    { "fps_cap_rate", "fps_cap", 30, 120, 60,
+      [](State& s) -> int32_t& { return s.val.fps_cap_rate; }, kFpsCapRates, 4 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

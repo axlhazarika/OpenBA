@@ -1,5 +1,5 @@
 // Dialog/EnhancedOptions.rsc -- the Options dialog's fifth tab "Enhanced" (NOT RETAIL; blocks AOMENU,
-// FAA-MENU, BETTER-TREES, TEXQUALITY, COMPRESSAO: eight rows in the Game tab's container, docs/extensions/AO.md §6.3; was AoOptions.rsc). Added at run time by UI::TabElement::AddTab from
+// FAA-MENU, BETTER-TREES, TEXQUALITY, COMPRESSAO, P8 render scale + frame rate cap: ten rows in the Game tab's container, docs/extensions/AO.md §6.3; was AoOptions.rsc). Added at run time by UI::TabElement::AddTab from
 // OptionsDialog::OnOpened (src/ext/enhanced_tab/enhanced_tab.cpp). Every name here is NEW:
 // a loose .crs never overrides a name the game's packages hold (IO::FileSystem::OpenFile looks
 // in the packfile index first, handins/AOSPIKE.md S5). The look inherits the kit's own
@@ -16,6 +16,8 @@ StringTable aoStrings
 		{ String _name = "MaxShadowRes";	String _text = "Max shadow resolution"; }
 		{ String _name = "SeamlessLoops";	String _text = "Seamless ambient loops"; }
 		{ String _name = "TextureQuality";	String _text = "Texture quality"; }
+		{ String _name = "RenderScale";		String _text = "Render scale"; }
+		{ String _name = "FpsCap";			String _text = "Frame rate cap"; }
 		{ String _name = "DerivedCache";	String _text = "Data cache on disk"; }
 		{ String _name = "DerivedCacheSize";	String _text = "@0"; }
 		{ String _name = "DerivedCacheClear";	String _text = "Clear cache"; }
@@ -64,6 +66,32 @@ StringTable seamlessLoopsItems
 	[
 		{ String _name = "Item0";		String _text = "Off";					}
 		{ String _name = "Item1";		String _text = "On (next start)";		}
+	]
+}
+
+// Render scale (P8, docs/android/P8_INPUT_OPTIONS.md): VideoRenderScale 100 / 50 / 25, live. The
+// platform decides whether it can change (Platform::Window::RenderScaleAdjustable: Android); elsewhere
+// the combo shows Full, disabled.
+StringTable renderScaleItems
+{
+	Entry _strings
+	[
+		{ String _name = "Item0";		String _text = "Full";		}
+		{ String _name = "Item1";		String _text = "Half";		}
+		{ String _name = "Item2";		String _text = "Quarter";	}
+	]
+}
+
+// Frame rate cap (P8): 0 = the bool row ext.fps_cap off, else on with ext.fps_cap_rate 30 / 60 / 90 / 120.
+StringTable fpsCapItems
+{
+	Entry _strings
+	[
+		{ String _name = "Item0";		String _text = "Off";		}
+		{ String _name = "Item1";		String _text = "30 fps";	}
+		{ String _name = "Item2";		String _text = "60 fps";	}
+		{ String _name = "Item3";		String _text = "90 fps";	}
+		{ String _name = "Item4";		String _text = "120 fps";	}
 	]
 }
 
@@ -123,9 +151,9 @@ ContainerDescription enhancedOptions : "Options.rsc:gameOptions"
 	ElementDescription _content = "enhancedOptionsTable";
 }
 
-// The rows: Options.rsc:gameOptionsTable's shape, eight rows (AO combo, AO slider, Better trees, shadow,
-// loops, texture quality (TEXQUALITY), the derived-data cache's size and, under it, its "Clear cache"
-// button: COMPRESSAO). The size sits in the control column, not in the label: "0 MB (cleared at the next
+// The rows: Options.rsc:gameOptionsTable's shape, ten rows (AO combo, AO slider, Better trees, shadow,
+// loops, texture quality (TEXQUALITY), render scale and frame rate cap (P8), the derived-data cache's
+// size and, under it, its "Clear cache" button: COMPRESSAO). The size sits in the control column, not in the label: "0 MB (cleared at the next
 // start)" in the label column made that column, and so the dialog, wider than the retail tabs.
 TableDescription enhancedOptionsTable
 {
@@ -137,7 +165,7 @@ TableDescription enhancedOptionsTable
 	Alignment _alignment = TopLeft;
 
 	int _width = 2;
-	int _height = 8;
+	int _height = 10;
 
 	TableItem _items
 	[
@@ -147,7 +175,9 @@ TableDescription enhancedOptionsTable
 		{ int _x = 0; int _y = 3; ElementDescription _element = "textMaxShadowRes"; }
 		{ int _x = 0; int _y = 4; ElementDescription _element = "textSeamlessLoops"; }
 		{ int _x = 0; int _y = 5; ElementDescription _element = "textTextureQuality"; }
-		{ int _x = 0; int _y = 6; ElementDescription _element = "textDerivedCache"; }
+		{ int _x = 0; int _y = 6; ElementDescription _element = "textRenderScale"; }
+		{ int _x = 0; int _y = 7; ElementDescription _element = "textFpsCap"; }
+		{ int _x = 0; int _y = 8; ElementDescription _element = "textDerivedCache"; }
 
 		{ int _x = 1; int _y = 0; ElementDescription _element = "comboAoQuality"; }
 		{ int _x = 1; int _y = 1; ElementDescription _element = "sliderAoOpacity"; }
@@ -155,8 +185,10 @@ TableDescription enhancedOptionsTable
 		{ int _x = 1; int _y = 3; ElementDescription _element = "comboMaxShadowRes"; }
 		{ int _x = 1; int _y = 4; ElementDescription _element = "comboSeamlessLoops"; }
 		{ int _x = 1; int _y = 5; ElementDescription _element = "comboTextureQuality"; }
-		{ int _x = 1; int _y = 6; ElementDescription _element = "textDerivedCacheSize"; }
-		{ int _x = 1; int _y = 7; ElementDescription _element = "buttonDerivedCacheClear"; }
+		{ int _x = 1; int _y = 6; ElementDescription _element = "comboRenderScale"; }
+		{ int _x = 1; int _y = 7; ElementDescription _element = "comboFpsCap"; }
+		{ int _x = 1; int _y = 8; ElementDescription _element = "textDerivedCacheSize"; }
+		{ int _x = 1; int _y = 9; ElementDescription _element = "buttonDerivedCacheClear"; }
 	]
 }
 
@@ -174,6 +206,8 @@ TextDescription textBetterTrees : "textAoOption" { String _text = "BetterTrees";
 TextDescription textMaxShadowRes : "textAoOption" { String _text = "MaxShadowRes"; }
 TextDescription textSeamlessLoops : "textAoOption" { String _text = "SeamlessLoops"; }
 TextDescription textTextureQuality : "textAoOption" { String _text = "TextureQuality"; }
+TextDescription textRenderScale : "textAoOption" { String _text = "RenderScale"; }
+TextDescription textFpsCap : "textAoOption" { String _text = "FpsCap"; }
 // The cache row's label and size take the combo rows' spacing (a combo row is 26 + 3 high, its label
 // sits 5 down), so the size and the button under it do not crowd the row above.
 TextDescription textDerivedCache : "textAoOption" { String _text = "DerivedCache"; int _topPad = 5; int _bottomPad = 3; }
@@ -232,4 +266,18 @@ ComboDescription comboTextureQuality : "Options.rsc:comboAutosave"
 	int _minWidth = 180;
 	int _bottomPad = 3;
 	StringTable _initialData = "EnhancedOptions.rsc:textureQualityItems";
+}
+
+ComboDescription comboRenderScale : "Options.rsc:comboAutosave"
+{
+	int _minWidth = 180;
+	int _bottomPad = 3;
+	StringTable _initialData = "EnhancedOptions.rsc:renderScaleItems";
+}
+
+ComboDescription comboFpsCap : "Options.rsc:comboAutosave"
+{
+	int _minWidth = 180;
+	int _bottomPad = 3;
+	StringTable _initialData = "EnhancedOptions.rsc:fpsCapItems";
 }

@@ -8,7 +8,7 @@
 // hidden; a swipe brings them back for a moment), which is how a game owns the screen there. The
 // engine's own "fullscreen" (a borderless window placed over the display, SetFramed) has no
 // meaning on Android and stays as the shared SDL code does it. P7: RenderScale reads the phone's
-// render scale (below). Every other hook is the identity.
+// render scale (below); P8: SetRenderScale changes it in the run. Every other hook is the identity.
 // ============================================================================
 
 #include "platform_window_hooks.h"
@@ -16,6 +16,7 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,24 +28,61 @@ namespace Window {
 // P7: `VideoRenderScale=<percent>` in the user's settings.cfg (Documents/Banished under the data
 // folder), read once at the first call: the window's creation, after EnterRunDirectory has seeded a
 // first run's file (app_android.cpp: 50). Absent or out of 25..100: 100, the window's own size. The
-// engine keeps the key with the rest (IO::Persistence writes back every key it read).
-float RenderScale() {
-    static float scale = 0.0f;
-    if (scale > 0.0f) return scale;
-    scale = 1.0f;
+// engine keeps the key with the rest (IO::Persistence writes back every key it read). P8: the
+// Options dialog's Render scale row changes it in the run (SetRenderScale) and records the key. The
+// percent is an atomic: the Vulkan backend reads the scale where it rebuilds the swap chain, which is
+// the render thread under ext.render_pipe.
+namespace {
+
+std::atomic<int> g_percent{0};   // 0 = not read yet
+
+int ReadPercentFromSettings() {
+    int result = 100;
     const std::string path = Android::DataDir() + "/Documents/Banished/settings.cfg";
     FILE* f = std::fopen(path.c_str(), "r");
-    if (f == nullptr) return scale;
+    if (f == nullptr) return result;
     char line[256];
     const char key[] = "VideoRenderScale=";
     while (std::fgets(line, sizeof(line), f) != nullptr) {
         if (std::strncmp(line, key, sizeof(key) - 1) != 0) continue;
         const int percent = std::atoi(line + sizeof(key) - 1);
-        if (percent >= 25 && percent <= 100) scale = static_cast<float>(percent) / 100.0f;
+        if (percent >= 25 && percent <= 100) result = percent;
     }
     std::fclose(f);
-    std::fprintf(stderr, "[Window] render scale %.2f (VideoRenderScale in %s)\n", scale, path.c_str());
-    return scale;
+    std::fprintf(stderr, "[Window] render scale %.2f (VideoRenderScale in %s)\n",
+                 static_cast<float>(result) / 100.0f, path.c_str());
+    return result;
+}
+
+}  // namespace
+
+float RenderScale() {
+    int percent = g_percent.load(std::memory_order_acquire);
+    if (percent == 0) {
+        percent = ReadPercentFromSettings();
+        int expected = 0;
+        if (!g_percent.compare_exchange_strong(expected, percent, std::memory_order_acq_rel))
+            percent = expected;
+    }
+    return static_cast<float>(percent) / 100.0f;
+}
+
+bool RenderScaleAdjustable() {
+    return true;
+}
+
+bool FixedDisplaySurface() {
+    return true;
+}
+
+void SetRenderScale(int percent) {
+    if (percent < 25 || percent > 100) return;
+    RenderScale();   // the boot value is read first, so a late first read cannot overwrite this one
+    const int before = g_percent.exchange(percent, std::memory_order_acq_rel);
+    if (before != percent) {
+        std::fprintf(stderr, "[Window] render scale %.2f -> %.2f (Options)\n",
+                     static_cast<float>(before) / 100.0f, static_cast<float>(percent) / 100.0f);
+    }
 }
 
 uint64_t PrepareCreate(int32_t* width, int32_t* height) {

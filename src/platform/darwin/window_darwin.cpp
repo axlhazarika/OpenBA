@@ -189,5 +189,17 @@ float RenderScale() {
     return 1.0f;
 }
 
+bool RenderScaleAdjustable() {
+    return false;
+}
+
+void SetRenderScale(int percent) {
+    (void)percent;
+}
+
+bool FixedDisplaySurface() {
+    return false;
+}
+
 }  // namespace Window
 }  // namespace Platform

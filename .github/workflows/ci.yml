@@ -1,6 +1,7 @@
 name: CI
-# Build + unit tests on the three platforms, and the no-doors acceptance check. Nothing here needs
-# the game: retail data is never on a runner (AGENTS.md section 1), so the gameplay gate
+# Build + unit tests on the three platforms, the no-doors acceptance check, and the Android debug apk
+# (built, not run; not a required check). Nothing here needs the game: retail data is never on a
+# runner (AGENTS.md section 1), so the gameplay gate
 # (tools/build.sh run) and the serializer check (tools/resave_gate/) stay maintainer steps.
 # Unit tests that read the user's install (xwma_decode_test) skip when it is absent.
 #
@@ -158,6 +159,56 @@ jobs:
             exit 1
           fi
           wait "$pid"
+      - name: ccache statistics
+        if: always()
+        run: ccache -s
+
+  # The Android app (debug apk: libmain.so through the NDK, SDL's Java glue), so a seam the desktop
+  # builds do not compile (src/platform/android, src/diag/android, an ARM ABI guard) breaks here and
+  # not on the phone. NOT one of the four required checks (AGENTS.md section 7): branch protection
+  # names those, and making this a fifth is the owner's call. Pins as release.yml's android job.
+  android:
+    name: Android (arm64, debug apk)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CCACHE_MAXSIZE: 600M
+      ANDROID_NDK_PIN: "30.0.16248370"
+      ANDROID_CMAKE_PIN: "3.31.6"
+      ANDROID_PLATFORM_PIN: "android-35"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ccache
+          ccache -z
+      - name: Android SDK packages
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;$ANDROID_PLATFORM_PIN" "ndk;$ANDROID_NDK_PIN" "cmake;$ANDROID_CMAKE_PIN" > /dev/null
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-android-${{ github.sha }}
+          restore-keys: ccache-android-
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-android-
+      - name: Build the debug apk
+        run: tools/android.sh build debug --jobs "$BUILD_JOBS" --ccache
       - name: ccache statistics
         if: always()
         run: ccache -s

@@ -86,6 +86,7 @@
 #include "ui/UserInterface.h"
 #include "save/SaveLoad.h"
 #include "Game/GameUpdateLoop.h"
+#include "frame_limiter.h"     // src/app: FrameLimiter::TickInGame (the in-game frame cap)
 #include "Game/Minimap.h"
 #include "Game/PlayerController.h"
 #include "Entity/ComponentEntity.h"   // PlayerToolManager.h instantiates InternalPtr<ComponentEntity>::Get
@@ -197,6 +198,7 @@ void IdemCamera(PlayerController& pc) {
 // ===========================================================================
 void MainHalf(::Engine::MainLoop& loop, GameUpdateLoop& g, Graphics::Renderer& r, float alpha,
               bool renderIdle, bool verify, Packet& p) {
+    FrameLimiter::TickInGame();   // the in-game frame cap, as GameUpdateLoop::Draw's (src/app/frame_limiter.h)
     StressHarness_DrawBegin();   // [STRESS] render-frame period + the Draw bracket
 
     // Step 1: pause -> alpha 1.0 (no interpolation).

@@ -185,6 +185,15 @@ with the old scale is one frame of input in the old unit space.
 Fix: `fix.ui_scale_layout` (tier 1), default on, engine seam `UI::UserInterface::_extFixScaleLayout`
 (a null-by-default pointer the game side points at the fix's bool at boot: DESIGN.md hook rule 5).
 
+**The modals ignore the UI scale (same row, 2026-10-25, seen on the S25).** `UserInterface::ShowDialog`
+(`0x18011fd10`) builds a NESTED UserInterface for the modal and copies only `+0x90..+0xc8` (the audio scene
+and the seven UI sounds) from the one it is shown from; the nested ctor leaves `_uiScale = 1.0f` (+0xdc).
+So every modal shown that way (the mods' "changes require a restart" notice `Dialog/Reload.rsc`, the
+Extensions restart notice, the save / load warnings, the Options confirmations) is laid out and drawn at
+100 % whatever the Options UI scale: invisible at retail's default 100, too small at a phone's large UI.
+Lever: copy `_uiScale` into the nested UI in the same step. Under the same row (both are "a dialog drawn
+at the wrong UI scale"): `userinterface_showdialog.cpp`, the same seam pointer.
+
 ## 6. The employment allocator rates a never-measured commute as free
 
 **Symptom.** None a player can point at. Once every 300 simulated seconds the employment

@@ -31,9 +31,10 @@
 // sampled), with sync2 barriers between the draws. Constants go to a per-frame-slot host ring, sets to a
 // per-frame-slot pool, both reset when the slot's frame comes round (its fence was waited for).
 //
-// NOT RUN on the tiler-MSAA path (VK_EXT_multisampled_render_to_single_sampled, the S25 with MSAA on):
-// there the main depth is single-sampled with an implicit resolve whose depth contents this pass has not
-// been verified to read; the frame is skipped with one log line (docs/vulkan/PARITY.md).
+// The tiler-MSAA path (VK_EXT_multisampled_render_to_single_sampled, the S25 with MSAA on): the main
+// depth image is single-sampled, its contents the implicit resolve of sample 0 that the main passes
+// store (draw.cpp BeginPass), so the depth is read as ASSAO's non-MSAA path reads it (the 1x resolve).
+// The apply runs in a main pass at the MSAA count, as every main pass there.
 // ============================================================================
 #include "ao/assao_pass.h"
 
@@ -214,6 +215,7 @@ struct SlotState {
 struct State {
     VkDevice device = VK_NULL_HANDLE;   // the device everything below belongs to
     bool ready = false;
+    bool pipelineFailed = false;   // P8 round 2: a pipeline the driver refused: the pass is not supported here
     Module modules[kProgramCount];
     VkDescriptorSetLayout vertexLayout = VK_NULL_HANDLE;   // empty
     VkDescriptorSetLayout pixelLayout = VK_NULL_HANDLE;
@@ -579,8 +581,10 @@ VkPipeline PipelineFor(const PipelineShape& s) {
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult r = vkCreateGraphicsPipelines(LiveDevice(), GamePipelineCache(), 1, &pi, nullptr, &pipeline);
     if (r != VK_SUCCESS) {
-        std::fprintf(stderr, "[AmbientOcclusion] Vulkan: pipeline %s: %s\n", kBlobs[s.ps].name, ResultName(r));
+        std::fprintf(stderr, "[AmbientOcclusion] Vulkan: pipeline %s: %s: the AO pass is not supported on this "
+                             "device (the row turns inactive)\n", kBlobs[s.ps].name, ResultName(r));
         pipeline = VK_NULL_HANDLE;
+        g.pipelineFailed = true;
     }
     g.pipelines.emplace(key, pipeline);
     return pipeline;
@@ -859,7 +863,8 @@ bool ResolveDepth(VkCommandBuffer cb, SlotState& slot, const AoTargets& t) {
     FlushBarriers(cb, &barriers);
     DrawDesc d;
     d.vs = kVsFullscreen;
-    d.ps = t.samples > 1 ? kResolveMs : kResolve1x;
+    // The tiler's MSAA: the depth image is single-sampled (sample 0, resolved by the main passes).
+    d.ps = t.samples > 1 && !t.msrtss ? kResolveMs : kResolve1x;
     d.colors[0] = g.depthResolved.attach[0];
     d.formats[0] = VK_FORMAT_R32_SFLOAT;
     d.colorCount = 1;
@@ -1172,7 +1177,10 @@ bool InitLocked() {
 
 bool Ready() {
     std::lock_guard<std::mutex> guard(g_mutex);
-    return InitLocked();
+    // P8 round 2: a pipeline the driver refused makes the pass "not supported" (AoBackend::Supported), so
+    // the row goes inactive and the Enhanced tab shows it disabled, instead of a pass that silently draws
+    // nothing every frame.
+    return InitLocked() && !g.pipelineFailed;
 }
 
 void AfterOpaque(Video::Context& context, const Graphics::ExtAoFrame& frame, const Graphics::RendererSceneEntry& entry) {
@@ -1183,10 +1191,8 @@ void AfterOpaque(Video::Context& context, const Graphics::ExtAoFrame& frame, con
     AoTargets t;
     if (!DrawAoBegin(&t)) return;
     if (t.msrtss) {
-        LogOnce(1, "the main target uses the tiler's MSAA (multisampled_render_to_single_sampled): the AO pass is "
-                   "not run on it (docs/vulkan/PARITY.md)");
-        DrawAoEnd();
-        return;
+        LogOnce(1, "the main target uses the tiler's MSAA (multisampled_render_to_single_sampled): the AO pass "
+                   "reads its single-sampled depth (sample 0) as the non-MSAA path");
     }
     if (t.extent.width < 16 || t.extent.height < 16 || !Resize(t.extent.width, t.extent.height)) {
         DrawAoEnd();

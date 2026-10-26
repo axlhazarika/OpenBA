@@ -9,6 +9,9 @@ NOT RETAIL. The third backend behind `src/render/common/README.md`'s seam, picke
 |---|---|
 | `backend.cmake` | The CMake fragment: sources, the Vulkan-Headers include (`-isystem`), ready flag; the `dxbc_spv` static library (dxbc-spirv + SPIRV-Headers submodules); the unit additions; the `vulkan-shader-check` target. |
 | `shader_convert.h`, `shader_convert.cpp` | DXBC to SPIR-V through dxbc-spirv, the binding layout (set 0 vertex, set 1 pixel; constant buffers, then textures, then samplers), the reflection, the VS -> PS semantic link, the cache key and payload. No Vulkan header. |
+| `spirv_combine.h`, `spirv_combine.cpp` | P8: the SPIR-V pass that turns the separate texture / sampler bindings into one combined image sampler per sampled pair, recording the pairs in the reflection. No Vulkan header. |
+| `spirv_legalize.h`, `spirv_legalize.cpp` | P8 round 2: lowers `OpBitFieldInsert` to shifts and masks in every converted module (the Adreno 830 driver refuses a vertex shader holding one: AO's fullscreen VS). No Vulkan header. |
+| `depth_discard.h` | P8: THE DEPTH DISCARD's prediction by frame-structure signature (pure; `tests/unit/vulkan_depth_discard_test.cpp`). |
 | `shader_cache.cpp` | `LoadOrConvert`: the SPIR-V cache over the per-user derived-data cache (`src/ext/derived_cache`). |
 | `device_objects.h` | What the other files read from the device file: the live device, queue, properties, `Caps`, the depth and swap-chain formats; shader modules (tracked, destroyed at Shutdown). |
 | `vk_mem.h`, `vma_impl.cpp` | VMA (`third_party/VulkanMemoryAllocator`), configured once (no static or dynamic function fetching, API 1.3); the implementation is compiled in `vma_impl.cpp`. |
@@ -102,6 +105,19 @@ frame smaller than the images (the render scale, `Platform::Window::RenderScale`
 linear filtering (`PresentActive`). `VK_EXT_vertex_input_dynamic_state` is no longer enabled. The pipeline
 cache is written at WILL_ENTER_BACKGROUND too. S25 at a fixed 443 MHz: stress 98 -> 162 fps (half res),
 seeded town GPU busy 70 % -> 32-40 % at 120 fps.
+
+P8 (2026-10-25; `docs/android/P8_VULKAN.md`):
+- **The depth discard** predicts the last main-depth pass by the frame's structure signature
+  (`depth_discard.h`). A structure change before the pass (the game after the menu) starts unarmed, with no
+  wrong frame; one miss still turns it off for the session. An empty clear pass attaches only what it clears.
+- **The main target is split twice, no longer three times.** Render buffers drawn before a main pass, and the
+  frame copy, move to SHADER_READ_ONLY between passes. Game frame: 4 passes, depth 1/2 discarded, 0 misses,
+  on the S25 and on Windows.
+- **The game's programs use combined image samplers** (`spirv_combine.{h,cpp}`; shader_convert.h COMBINED
+  IMAGE SAMPLERS): one descriptor per sampled texture. The retail pairs are all (t_i, s_i).
+  - `kMappingVersion` 5;
+  - the pipeline-cache magic `OBAVKPC2`;
+  - the AO pass keeps separate bindings.
 
 ## Validation on the Windows bed
 The debug flavour enables `VK_LAYER_KHRONOS_validation` when the loader lists it. With the LunarG Vulkan

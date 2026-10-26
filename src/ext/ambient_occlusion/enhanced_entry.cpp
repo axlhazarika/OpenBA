@@ -6,6 +6,8 @@
 #include "ext/ambient_occlusion/params.h"
 #include "ext/enhanced_tab/enhanced_tab.h"
 
+#include "ao/ao_backend.h"   // src/render/common/ao: AoBackend::Supported
+
 #include "ui/ComboElement.h"
 #include "ui/SliderElement.h"
 
@@ -29,8 +31,16 @@ void Open(UI::Element* page) {
         g_opacity->_maximum = 30.0f;     // ext.ao_opacity's range (registry.cpp kValueKeys; the user's ruling 2026-10-14)
         g_opacity->_value = static_cast<float>(now.opacity);
     }
-    std::fprintf(stderr, "[AmbientOcclusion] combo=%p slider=%p quality=%d opacity=%d\n",
-                 static_cast<void*>(g_quality), static_cast<void*>(g_opacity), now.quality, now.opacity);
+    // P8 round 2: where the backend cannot run the pass (AoBackend::Supported false: the device's
+    // features, or a pipeline its driver refused) both rows show disabled rather than doing nothing.
+    const bool supported = AoBackend::Supported();
+    if (!supported) {
+        if (g_quality != nullptr) g_quality->Enable(false);
+        if (g_opacity != nullptr) g_opacity->Enable(false);
+    }
+    std::fprintf(stderr, "[AmbientOcclusion] combo=%p slider=%p quality=%d opacity=%d%s\n",
+                 static_cast<void*>(g_quality), static_cast<void*>(g_opacity), now.quality, now.opacity,
+                 supported ? "" : " (not supported on this device: disabled)");
 }
 
 void Apply() {

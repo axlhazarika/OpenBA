@@ -258,7 +258,9 @@ probe_once() {
     stale="$(printf '%s' "$line" | sed -n 's/.* stale=\([0-9]*\).*/\1/p')"
 
     # A file whose pid is gone describes a previous run. Never report its state as live.
-    if [ -n "$pid" ] && ! state_pid_alive "$pid"; then
+    # EXITED is the one state written by a process on its way out (Stop()): its pid is
+    # gone by design, so it goes on to the NOT_RUNNING arm below.
+    if [ -n "$pid" ] && [ "$state" != "EXITED" ] && ! state_pid_alive "$pid"; then
         echo "STALE  (state file says $state from pid $pid, which is no longer running)"
         return 4
     fi
@@ -268,15 +270,11 @@ probe_once() {
     # tick. EXITED is written once by Stop() and is SUPPOSED to sit frozen, so
     # ageing it would turn every clean shutdown into a false STALE.
     #
-    # MEASURED WHILE WRITING THIS, and it makes the freshness check MORE
-    # load-bearing rather than less: `BootState::Stop()` HAS NO CALLER anywhere
-    # in the tree (only `Start()` at main.cpp:1639 and `MarkStartupComplete()`
-    # at game_main.cpp:478). So STATE=EXITED is never actually written, and
-    # EVERY run -- including a clean self-quit, verified twice today -- leaves
-    # STATE=RUNNING behind with a dead pid. The pid check catches that today;
-    # freshness catches it even if the pid were recycled. The EXITED arm below
-    # is kept because it is the correct rule for the state the header
-    # documents, but nothing in the shipped exe currently produces it.
+    # Every platform's Platform::App::Shutdown calls `BootState::Stop()` before
+    # SDL_Quit (Windows and Linux since P8, 2026-10-25; Darwin and Android before),
+    # so a clean exit writes STATE=EXITED. A crash, a kill or a hang leaves the
+    # last live tick behind with a dead pid: the pid check above catches that, and
+    # freshness catches it even if the pid were recycled.
     case "$state" in
         BOOTING|RUNNING|QUITTING|HUNG|BLOCKED_DIALOG)
             age="$(file_age)"
