@@ -241,6 +241,27 @@ panel stays at 120 Hz (a panel-rate request was not built); the frame-copy split
 unfaithful or large); the sun map is still allocated at Shadow Quality None (unmeasured); the Android CI job as a fifth
 required check or not; a dispatch dry run of `release.yml` before the next tag; whether the apk bundles the font.
 
+**P8 rounds 2-4 (2026-10-25/26, after the owner's own S25 test; same branch, same four logs).** Done: the pause / main
+menu no longer jump on their first frame (laid out from the current frame); modals shown through
+`UserInterface::ShowDialog` take the UI scale (`fix.ui_scale_layout`, retail_bugs §5); the phone main and pause menus are
+a row of square buttons (logo top, version bottom), wrapping to two rows as overflow, icons about 45 % of the square,
+the UI-scale slider floored at the lowest scale where both menus fit (35 on the S25 at render scale 100, computed,
+clamped at boot); the rotate drag at full speed (Android batches mouse samples: all summed) and no cursor snap on
+release; retail's Video rows (Resolution, Refresh rate, Fullscreen, VSync on) disabled on a fixed surface under
+ext.phone_menu; the phone seed appends missing keys to an existing settings.cfg; AO on the S25 (the Adreno driver
+refused `OpBitFieldInsert`: lowered to shifts and masks) and on the tiler MSAA path (about 2.1 ms GPU at AO Low);
+anisotropy reaches the samplers (the Texture Filter choices say "(next start)", Enhanced-tab host); the OpenBA
+launcher icon. Closing checks: DX11 gate + resave PASS; DX11 unit 1492/0, Vulkan 1512/0; the RELEASE apk (signed with
+the debug key through `tools/android.sh sign`) boots a new game on a zeroed phone and writes the full seed.
+
+Left / for the owner: the citizen shadow flicker is still NOT reproduced (120 fps recordings at three zooms: walking
+citizens' shadows step one sun-map texel, retail's look; suspects to toggle live: `ext.render_culling`,
+`ext.render_pipe`; the owner's recording + whether DX11 on the PC shows it); the KVM mouse: a jump to the screen
+CENTRE was not reproduced (a KVM re-announcing the mouse starts its pointer at the centre); below about UI 31-33 % on
+the phone the column returns (a third row or a smaller logo if ever wanted); the enlarged 16 px icons read as pixel
+art; "Anisotropic 16x (next start)" touches the combo's drop arrow at UI 100; the fifth CI check; a dispatch dry run
+of `release.yml`; whether the apk bundles the font; the sun map still allocated at Shadow Quality None (unmeasured).
+
 ## 3. Rules that hold (do not relax)
 
 - CLAUDE.md's hard rules: no null guard on a faithful crash (find what handed us the null); no `getenv`, flags through
