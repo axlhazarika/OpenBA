@@ -6,7 +6,8 @@
 #   tools/android.sh sign [IN.apk OUT.apk]             # zipalign -P 16 + apksigner (default: the release apk ->
 #                                                      # apk/release/app-release.apk); the key from OPENBA_KEYSTORE*
 #   tools/android.sh install [debug|release|FILE.apk]  # adb install -r -d (downgrade allowed) of that apk
-#   tools/android.sh push-data                         # the install's WinData/*.pkg + the FrancophilSans files -> the data folder
+#   tools/android.sh push-data                         # the install's WinData/*.pkg -> the data folder (the apk
+#                                                      # carries the FrancophilSans files and copies them there)
 #   tools/android.sh run [KEY=VALUE ...]               # force-stop, then launch with BANISHED_* flags
 #   tools/android.sh stop                              # force-stop the app
 #   tools/android.sh pull DIR                          # the standalone_* logs and the boot state -> DIR
@@ -201,13 +202,8 @@ push-data)
         "$ADB" push "$pkg" "$DATA/WinData/"
     done
     "$ADB" shell ls -l "$DATA/WinData"
-    # The typeface ext.sharp_ui rasterises (src/platform/android/font_raster_android.cpp): the files
-    # the desktop release packages put beside the exe, with their notice, into the game directory.
-    for f in FrancophilSans.ttf FrancophilSans-Bold.ttf FrancophilSans_README.txt; do
-        font="$ROOT/tools/release/fonts/$f"
-        if command -v cygpath >/dev/null 2>&1; then font="$(cygpath -m "$font")"; fi
-        "$ADB" push "$font" "$DATA/"
-    done
+    # The typeface ext.sharp_ui rasterises is not pushed: the apk carries it (tools/release/fonts as
+    # assets, android/app/build.gradle) and OpenBAActivity copies it into the data folder at start.
     ;;
 run)
     "$ADB" shell am force-stop "$PKG"

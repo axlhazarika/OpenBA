@@ -383,6 +383,9 @@ AO pipeline (§6.1).
 
 ### 7.2 Texture filter: "(next start)" on the choices (`6728bebee`)
 
+**Removed in P9** (owner ruling 2026-10-26, `docs/android/P9_ASSETS.md` §1): the seam, the note and the
+`NextStartSuffix` string are gone; the combo is retail's again. The text below records what P8 had.
+
 - Retail's Options > Video "Texture Filtering" combo writes `Video::Configuration::textureFilter`. Both
   backends read it when a texture is created, so a new choice reaches the game's textures at the next
   start (§6.2).

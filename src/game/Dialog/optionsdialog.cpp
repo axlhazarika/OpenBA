@@ -340,9 +340,6 @@ void OptionsDialog::PopulateFilterCombo() {
     else selIdx = (filterVal >> 1) + 2;
 
     comboFilter->SetCurrentItem(selIdx);
-    // EXT SEAM (NOT RETAIL, docs/android/P8_VULKAN.md §7.2): the choices that apply at the next start
-    // say so; retail's combo under the faithful profile.
-    Ext::EnhancedTab::NoteTextureFilterNextStart(comboFilter);
 }
 
 // ============================================================

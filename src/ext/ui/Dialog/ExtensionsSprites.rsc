@@ -81,5 +81,7 @@ SpriteSheet resource
 		{ String _name = "ExtensionsEntry_find_fastpath";	String _source = "Sprite/Extensions/Entry_find_fastpath.png"; }
 		{ String _name = "ExtensionsEntry_heap_slack";	String _source = "Sprite/Extensions/Entry_heap_slack.png"; }
 		{ String _name = "ExtensionsEntry_texture_quality";	String _source = "Sprite/Extensions/Entry_texture_quality.png"; }
+		{ String _name = "ExtensionsEntry_phone_menu";	String _source = "Sprite/Extensions/Entry_phone_menu.png"; }
+		{ String _name = "ExtensionsEntry_fps_cap";	String _source = "Sprite/Extensions/Entry_fps_cap.png"; }
 	]
 }
