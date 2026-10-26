@@ -47,8 +47,19 @@ void Sync();
 void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause);
 
 // OptionsDialog::OnOpened, after Platform::Display::UiScaleSliderRange: the slider's minimum
-// (percent), lowered to 25 while the row is on; `platformMinPercent` unchanged otherwise.
+// (percent) while the row is on: UiScaleFloorNow on a screen wider than the menus' backdrop,
+// else 25; `platformMinPercent` unchanged with the row off.
 float UiScaleSliderMinimum(float platformMinPercent);
+
+// The lowest UI scale (percent, a multiple of 5) at which the menus still fit as rows of squares
+// on the current back buffer (phone_math.h UiScaleFloor); 0 before the video device exists or
+// on a screen not wider than the backdrop.
+int32_t UiScaleFloorNow();
+
+// GameContainer::ApplyKeyMapToUI (every loop's start, and Options' Apply), before the settings'
+// UI scale becomes UserInterface::_uiScale: `percent` raised to UiScaleFloorNow while the row is
+// on (a settings.cfg written before the floor, or by hand); unchanged otherwise.
+int32_t ClampUiScale(int32_t percent);
 
 // P8, retail's Video rows on a fixed surface (video_rows.cpp, docs/android/P8_INPUT_OPTIONS.md
 // round 2). True while the row is on and Platform::Window::FixedDisplaySurface (Android): the
