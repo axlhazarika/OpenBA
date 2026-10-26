@@ -29,6 +29,7 @@
 
 #include "ext/resources/ext_sprites_data.h"
 #include "ext/resources/sheet_builder.h"
+#include "ext/registry.h"   // the rows whose icons the sheet must carry
 #include "object/External.h"
 #include "system/Crc.h"
 #include "system/Filename.h"
@@ -306,6 +307,28 @@ UNIT_TEST(ext_sheet_pack_fits_pads_and_records) {
     CHECK(Ext::Resources::PackSheet(nopad, Bitmaps(), BitmapCount(), l3));
     const SheetRecord r3 = Ext::Resources::RecordFor(l3, Bitmaps()[6], 6);   // the first 48 x 48
     CHECK_EQ(r3.x, 0); CHECK_EQ(r3.reserved, 0); CHECK_EQ(r3.u0, 0.0f); CHECK_EQ(r3.v0, 0.0f);
+}
+
+// Every registry row has its icon (the Extensions dialog's ExtensionsEntry_<id>, tools/ext_icons/): a row
+// added without one draws no picture (fps_cap and phone_menu had none until P9). The unit tests' own rows
+// (unit_a / unit_b / unit_c, registry.cpp under BANISHED_UNIT_TEST) are not in the exe and have none.
+UNIT_TEST(ext_sheet_every_entry_has_an_icon) {
+    for (int i = 0; i < Ext::EntryCount(); ++i) {
+        const Ext::Entry& e = Ext::EntryAt(i);
+        if (std::strncmp(e.id, "unit_", 5) == 0) continue;
+        const std::string name = std::string("ExtensionsEntry_") + e.id;
+        bool found = false;
+        for (int b = 0; b < BitmapCount(); ++b) {
+            if (name == Bitmaps()[b].name) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std::fprintf(stderr, "  no icon for registry row %s\n", e.id);
+        }
+        CHECK(found);
+    }
 }
 
 // ---------------------------------------------------------------------------
