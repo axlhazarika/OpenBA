@@ -291,8 +291,12 @@ Next session, in the owner's order:
 - **In-game version text overlaps the bottom row of buttons** at render scale Full, UI 40 on the S25 (the pause menu's
   two rows vs the version line: the rows must be placed above the version line, or the version line hidden when the
   rows need the space), and the black fringe image is missing there too.
-- Still open from P8: a real-KVM check of the rotate drag (centre jump, speed); the fifth CI check; a dispatch dry run
-  of `release.yml`; whether the apk bundles the font; the sun map still allocated at Shadow Quality None.
+- **Bundle the font in the apk (ruled 2026-10-26):** the FrancophilSans files the desktop packages ship
+  (`tools/release/fonts`, with the notice; `THIRD_PARTY_NOTICES.md`) go into the apk as assets and are copied to the
+  app's data folder at first run when absent (`font_raster_android.cpp` reads them there); `push-data` no longer
+  needs to push them.
+- Ruled 2026-10-26: the rotate drag is good on the real KVM mouse (centre jump and speed: closed). Waiting, no action:
+  the fifth CI check, a dispatch dry run of `release.yml`, the sun map still allocated at Shadow Quality None.
 
 ## 3. Rules that hold (do not relax)
 
