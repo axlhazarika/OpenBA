@@ -1821,6 +1821,10 @@ bool ImageBufferData::Read(void* dst, int width, int height) {
 // payload into it, the same bytes); a buffer of size 0 keeps the old order. Save: the contents are written.
 template <class Data>
 static void SerializeBuffer(Data* self, IO::Serializer* serializer, bool index) {
+    // Retail's first test (dx11 buffers.cpp, the Vulkan body too): a non-binary encoding -- the IO::Visitor
+    // reference-discovery pass, whose every slot is a RET -- serializes nothing. Without it the visitor pass
+    // took the save arm below and made every deferred (ext.create_on_demand) buffer: ~4 GB with MegaMod X.
+    if (!serializer->GetEncoding().IsBinary()) return;
     auto* owner = self->_owner;
     const bool loading = static_cast<int>(serializer->GetDirection()) == 0;
     // NOT RETAIL (ext.create_on_demand): no eviction while this reads `buffer`, and the save arm's deferred
