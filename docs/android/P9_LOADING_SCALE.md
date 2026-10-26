@@ -45,6 +45,28 @@ the screen's top as a straight cut (`p1_18_half.png`). The alternative that keep
 fit (the whole picture, black side bars of about 9 % of the width each on the S25); it changes retail's
 cover look more and was not built.
 
+**Follow-up after the merge onto `android/p9` (72abd6571): the menus' two-draw look does not carry over.**
+The menus now draw their 16:9 backdrop twice (`kExtPlaceBackdropLower`, `touch_fit.cpp`
+`BackdropLowerDraw`): top-aligned, plus a bottom-aligned copy drawn first, under it. That works for the
+menus because their backdrop is an overlay, transparent between the logo and the borders, over the 3D menu
+scene. The Loading picture (`Dialog/Loading.rsc:gameLoad%i`, 1600x900) is opaque from edge to edge: top-aligned
+at the width-fitted scale it covers the whole screen, and a copy drawn under it never shows. Built and seen
+on Windows (functional dir, 2340x1080 client, UI 40, row on): the top border whole, NO bottom border, and
+"Loading..." on the picture (the session scratchpad's `android-loading-scale/w6_16.png`; the attempt's diff is
+`lower_draw_attempt.diff` there, not committed). `SpriteDraw` carries no source rectangle, so the copy cannot
+be cropped to its border either. The committed fit (bottom-aligned, above) stays; on the merged tree at the
+same settings the main menu and the loading screen side by side are `win_menu_vs_loading_opt1.png` (same
+picture scale, the loading screen's top border cut). The choices left for the owner:
+1. keep the bottom-aligned fit (the bottom border whole with the text in it, the top border cut);
+2. top-aligned plus the lower copy drawn OVER it, clipped to the bottom strip by the sprite context's scissor
+   (an engine-seam change: the extra draw after retail's, with a scissor); the strip's top is either a
+   straight black edge or the torn edge with a seam in the picture just above it;
+3. a height fit: both borders whole, the picture smaller than the menus' with black side bars.
+A different reading of the owner's remark: the loading screen's own UI (spinner, "Loading...") is laid out at
+retail's splash scale, 900 / screen height (0.83 on the S25), not at the Options UI scale (0.40 at UI 40), so
+its text is drawn at a different scale from the menus'. Making it follow the UI scale is possible
+(`GameLoadDialogLoopT::Startup`'s step 5 and ext.load_progress's copy of it); not built pending the ruling.
+
 ## 2. Render scale and UI scale coupled: DONE
 
 **What was wrong.** `_uiScale = UIScale / 100` is layout units per BACK-BUFFER pixel; the render scale
