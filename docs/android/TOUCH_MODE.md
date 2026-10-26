@@ -1,0 +1,240 @@
+# Android P10: touch mode (`ext.touch_mode`) -- design
+
+NOT RETAIL. The owner's ruling of 2026-10-26: a phone layout for playing with fingers. In a landscape
+phone (Galaxy S25, 2340x1080) the game view sits on top. The bottom-left holds a virtual D-pad (camera pan)
+with ROTATE LEFT / ROTATE RIGHT above it and ZOOM IN / ZOOM OUT to its right. The in-game toolbar runs as
+one bar along the bottom, to the right of that cluster, at its own scale: about 2x at render scale Full and
+UI 40 on the S25. Panels, dialogs and tooltips keep the existing UI scale. Sketch: session scratchpad
+`android-touch/mobile_layout_sketch.png`. Phase 1 is this design only; nothing here is built yet.
+
+## 1. Retail mechanisms this hooks
+
+| What | Where | Fact the design relies on |
+|---|---|---|
+| UI unit space | `UI::UserInterface::_uiScale` (`UserInterface.h`, `SetUIScale`) | `_uiScale` = percent / 100 = layout units per back-buffer pixel. One value for every dialog. The layout screen is `backBuffer * _uiScale` (`Update`, `userinterface_frame.cpp`). |
+| Layout | `UserInterface::Update` -> `DialogInstance::ComputeLayout(x, y, right, bottom)` (0x180113d90) for each dialog | The rectangle goes through `_extDialogPlace` (ext.phone_menu's seam: `kExtPlaceLayout`, `kExtPlaceAfterLayout`). |
+| Hit testing | `UserInterface::Update`: `st.mouseX/Y = Input::Device mouse * scale`, then `DialogInstance::Update(time, ui, st)` tail to head | Every element hit-tests `st` in the dialog's layout units. A tooltip starts from the same `st` (`element_vtable.cpp`, `BeginToolTip(.., mx, my)`, `SetUpperLeft(x, y - h)`). `_mouseCaptured` comes back in `st` and gates world input (`gameupdateloop.cpp`: `m_toolManager->Update(.., _mouseCaptured == 0)`). |
+| Drawing | `UserInterface::Draw` (`userinterface_draw.cpp`): `SpriteContext::Begin(_uiScale, ..)` | Records are stored in layout units, and `Flush` maps them to pixels by `SpriteContext::_scale`. The sharp_ui seam already flushes between dialogs (`_extSharp` origin). |
+| The toolbar | `ToolbarDialog` (`src/game/Dialog/toolbardialog.cpp`, `Dialog/Toolbar.rsc`), opened in `GameUpdateLoop::Startup` (`gameupdateloop.cpp`) | Bottom-right, one row of buttons (templates 0..3; the extension button is template 3). A category button opens a CHILD `ToolbarDialog` with the same `Dialog` description. `OnElementEvent` places the child with `SetPadding(0, xPos, 0, radio height + root bottom pad)`, where `xPos = backBufferWidth * _ui->_uiScale - buttonCentre - subWidth / 2`. That formula reads the global unit space. |
+| Event notices | `EventNotifyDialog::OnUpdateLayout` (`eventnotifydialog.cpp`, 0x1400680c0) | Parented to the toolbar. Its padding is `toolbarRoot->_layoutWidth - ownWidth + 44 (+40 per extra entry)`, smoothed, so the ribbon sits LEFT of the toolbar on the bottom row. In touch mode that is where the cluster is. |
+| Tutorial glow | `TutorialHighlightDialog` (`tutorialhighlightdialog.cpp`) | Places its ring from a toolbar element's layout rectangle in global units. |
+| Camera input | `PlayerToolManager::UpdateCamera` (FUN_1400feec0, `src/game/Game/camera_input.cpp`), called every frame from `PlayerToolManager::Update` (`entityui.cpp`) | Locals: `yaw -= dt * kRotSpeed` (90 deg/s) for RotateLeft (key id 9) and `+=` for RotateRight (10). `panX / panY = -1 / +1` for Left / Right / Forward / Back (0xd, 0xe, 0xb, 0xc), assigned after edge scroll (`g_gameSettings->edgeScroll`, `GameEdgeScroll`). `zoomDir = +1 / -1` on a PRESS of ZoomIn / ZoomOut (0xf / 0x10), else the wheel, and each step is `kZoomStep` 5 on the zoom target. Keys run whatever `inputFlag` is (only the wheel is gated). The ext.eye_camera and ext.better_camera seams already sit in this function. |
+| Safe area | ext.phone_menu `phone_math.h` `SafeArea` (margin 4.5 % of the screen height) | The cluster and the bar stay inside it. |
+
+## 2. Independent toolbar scale: a per-dialog unit space
+
+**Meaning.** The toolbar and its sub-toolbars get their own unit space: `toolbar units = global units / k`.
+Everything inside them is laid out, hit-tested and drawn as if the UI scale were `_uiScale / k`: sprites,
+nine-sliced button frames, border thickness, padding, the speed text and hit rectangles all grow by k
+together. Panels, dialogs and tooltips stay at `_uiScale`. `k` is relative to the UI scale, so when the
+other agent's render-scale coupling re-derives the UI scale at Half (the interface keeps its on-screen
+size), the bar keeps its on-screen size as well. Nothing in this row reads the render scale.
+
+**Engine seam** (DESIGN.md hook rule 5; `src/engine` never includes `src/ext`). One new static pointer
+`UI::UserInterface::_extDialogScale`, `float (*)(const DialogInstance*)`, null by default and always null
+under the faithful profile. A null pointer, or an answer of 1.0, is retail's path. It has three call points:
+1. `Update`, layout loop: `ComputeLayout` gets the placed rectangle divided by k.
+2. `Update`, pump loop: for a dialog with k != 1, the dialog gets a copy of `st` with `mouseX / mouseY /
+   dragDx / dragDy` divided by k. The fields the callee writes back (`leftDown`, `mouseCaptured`, the drag
+   state) are copied into the shared `st`, and the mouse fields are restored.
+3. `Draw`, per dialog: when k != 1, pending quads are flushed, `SpriteContext::_scale = _uiScale / k` is set
+   for the dialog, and the old value comes back after the dialog's own flush. For that dialog only,
+   `_extSharp` is null: its text is drawn with retail's filtered quads, as sharp_ui already does below
+   75 %. No edits to src/ext/sharp_ui, which is another agent's area.
+
+`GetFirstContainedDialog` (only the unwired `EntityUI::UpdateInput` calls it) gets the same per-dialog
+point division so it stays consistent.
+
+**Which dialogs.** The `Dialog` description equals the toolbar's, `Dialog/Toolbar.rsc`, recorded at
+`GameUpdateLoop::Startup` through one `// EXT SEAM` line, `Ext::TouchMode::ToolbarOpened(toolbar)`. The
+sub-toolbars share that description, so they follow. The cluster dialog is ours (§3) and uses the same k.
+
+**Fit.** `k = min(requested, (barRegionWidth in global units) / (toolbar root width in toolbar units))`,
+then floored at 1.0. The toolbar's width in its own units does not depend on k, so the fit cannot
+oscillate. It changes only when buttons change (mods, the extension button). One log line is written per
+change: `[TouchMode] toolbar k=<k> (requested <r>, fit <f>) bar <w>x<h> px`.
+
+**Compensations** (retail code that mixes the two unit spaces). Each one lives in touch_mode's place hook
+and touches no game code:
+- *Sub-toolbar.* Retail's `xPos` uses the global screen width. Laying the child out with its rectangle's
+  right edge at `W_global` in toolbar units makes retail's own formula centre the child on its button
+  exactly. The derivation: left edge = `R - subW - xPos = R - W_g + centre - subW/2`, which is the centre
+  only when `R = W_g`. `kExtPlaceAfterLayout` then clamps the child horizontally into the bar region, so a
+  wide group does not run over the cluster or off the right edge.
+- *Tooltip of a toolbar button.* Its upper-left was set in toolbar units. The `kExtPlaceLayout` arm for the
+  tooltip dialog (`ui->_toolTipOwner` has k != 1) maps it back to global units:
+  `x = ulX * k`, `y = (ulY + h) * k - h`.
+- *Event notices.* Moved by `kExtPlaceAfterLayout` (`Element::AdjustUpperLeft`) to sit above the bar's right
+  end, so the ribbon grows leftwards along the bar's top edge with retail's slide kept as an offset. The
+  exact offset is settled in phase 2 from the laid-out rectangles (a one-time `[TouchMode]` print).
+- *Tutorial glow ring.* It would be drawn at the unscaled place. Phase 2 maps it in the same hook if the
+  ring's dialog can be identified cheaply; otherwise it becomes a known_port_issues row (tutorial plus
+  touch mode only).
+
+**Rejected alternative (for a ruling if the seam is unwanted).** Reshape the toolbar instance in one unit
+space, as ext.phone_menu reshapes the menu buttons: min sizes, padding and `ImageElement::SetWidthHeight`
+multiplied by k. That needs no engine seam, and retail's relative placement (sub-toolbar, ribbon, tutorial)
+works unchanged. Against it: text and frame borders do not scale (the speed label stays small), every
+element type needs its own rule, and a later element with its own scale would repeat the work. The engine
+seam is about 30 lines in two engine files with one null test per point on the faithful path.
+
+## 3. The control cluster: layout in the safe area
+
+**What it is.** Our own dialog `src/ext/ui/Dialog/TouchControls.rsc` (root `pageTouchControls`), served by
+the resource providers like the Extensions dialog. Its buttons inherit from the toolbar's button
+descriptions (`"Toolbar.rsc:<template>"`, the brown retail button art from the user's install) and their
+nine-sliced frames draw at any size.
+- D-pad arrows: an existing arrow sprite from the installed sheets, turned 0 / 90 / 180 / 270 with
+  `ImageElement::_rotation`. Phase 2 picks one, in order: the tutorial arrow (`TutorialHighlight`'s arrow
+  image), then a scroll-bar arrow. If none fits, the fallback is the game font's `^ v < >`.
+- Rotate and zoom labels: the game's own Input-tab key-binding strings ("Rotate Left", "Rotate Right",
+  "Zoom In", "Zoom Out"; localised, retail data). If they do not fit, the fallback is game-font text
+  `<` `>` `+` `-`.
+
+No new art enters the tree. The only new PNG is the Extensions-row icon that every row has (§5).
+
+**Sizes.** `S` is the short edge in device pixels, `m` the safe margin (ext.phone_menu's 4.5 % of the
+height when that row is on; 2 % of `S` without it, the desktop test case).
+
+| Item | Rule | S25 (2340x1080, S = 1080, m = 49) |
+|---|---|---|
+| cell `c` | 0.11 S (about 7.3 mm at the S25's ~16.4 px/mm) | 119 px |
+| gap `g` | 0.02 S | 22 px |
+| D-pad | square 3c, left = m, bottom = H - m | x 49..406, y 674..1031 (357 px, 0.33 S) |
+| Rotate L / R | each (3c - g) / 2 wide, 0.8 c tall, a gap g above the D-pad | x 49..216 and 238..406, y 557..652 |
+| Zoom in / out | 1.4 c wide, (3c - g) / 2 tall each, a gap g right of the D-pad, aligned with it | x 428..595; y 674..841 and 863..1031 |
+| Cluster box | | x 49..595, y 557..1031: 546 x 474 px (0.51 S x 0.44 S) |
+| Bar region | left = cluster right + 2g, right = W - m, bottom = H - m | x 639..2291: 1652 px |
+
+The device pixels go to cluster units with `units = px * (backBuffer / device) * _uiScale / k`. The
+cluster is placed through `kExtPlaceLayout` like any dialog. Its sizes are re-applied as `_minWidth /
+_minHeight` whenever the screen, `_uiScale` or k changes, so it keeps its physical size at any UI scale or
+render scale.
+
+**The bar at the ruled settings.** On the P8 screenshot (UI 42, render scale Full) the toolbar measures
+about 447 x 51 units: 1065 x 120 device px, 10 buttons. At UI 40 that is 1118 x 128 px, so 2x would be
+2236 x 256 px. That is the whole safe width (2242 px), and it does not fit beside the cluster. The fit
+gives `k = 1652 / 1118 = 1.48`: a 1652 x 189 px bar with buttons about 140 px (8.5 mm) square. The owner's
+sketch draws the bar at about 63 % of the width, roughly 1.3x. **Ruling needed:** keep "fit beside the
+cluster" (recommended, and what the sketch shows), or put 2x first and let the bar run full width with the
+cluster stacked above its left end. Phase 2 confirms the 447 units from the log.
+
+**Sub-toolbars** open above the bar at the same k, clamped into the bar region (§2). The cluster's top is at
+y = 557, and a sub-toolbar sits at about y 650..840. They overlap only if a group is wider than the bar
+region, which is a modded case: it then aligns to the region's left edge.
+
+## 4. Input flow
+
+Touches arrive as left-button mouse events (SDL). The cluster is a UI dialog, so a touch on it sets
+`_mouseCaptured` and the world never sees that click (no building placed under the D-pad). The camera
+seam is one `// EXT SEAM` call in `UpdateCamera`, after `zoomDir` is set and before the eye_camera zoom
+seam:
+```cpp
+if (Ext::Ext().touch_mode || Ext::TouchMode::Shown())
+    Ext::TouchMode::CameraInput(dt, yaw, panX, panY, zoomDir);   // the locals the keys write
+```
+- **Which control is held.** The control is held while the left button is down, the press began inside
+  the cluster (`UserInterface::_mouseDownX/Y`), and the pointer is over a control. Our own pure math
+  (`touch_math.h`) does the hit test against the laid-out rectangles. It does not rely on the elements'
+  click events, which fire on release.
+- **D-pad**, 8-way. The direction is the vector from the pad's centre, with a dead zone of 0.15 of the
+  side. Each axis is set when its component exceeds `tan(22.5 deg)` of the other, and the pan axes are
+  assigned as the keys assign them (`panX = -1/+1`, `panY = -1/+1`). Retail normalises the vector, so a
+  diagonal pans at the same speed. Sliding between directions while held is allowed. Releasing, or
+  leaving the pad, stops the pan.
+- **Rotate**: `yaw -= / += dt * 90` every frame while held, retail's key rate.
+- **Zoom**: one step (`zoomDir = +/-1`) at the press, then one every 0.15 s after 0.35 s of holding (the
+  repeat lives in touch_mode). The camera's own smoothing turns the steps into a glide.
+- **Keyboard and mouse still work.** The seam only assigns while a control is held. Keys, edge scroll, the
+  wheel and the middle-button rotate drag (the KVM mouse) are unchanged, and a click anywhere outside the
+  cluster is retail's.
+- **Shown.** The cluster opens with the toolbar (`ToolbarOpened`) while the row is on. It closes when the
+  row goes off (the next `CameraInput` call sees `Shown()` and closes it: live, class A), and it hides while
+  the toolbar root is hidden (ToggleAll). It is not opened in the front end.
+- One pointer only: SDL's mouse emulation carries one touch, so pan and zoom cannot be held together. The
+  follow-ups (§8) record this.
+
+## 5. Settings rows
+
+- `ext.touch_mode`: class A, live, default OFF. Registry row in `src/ext/registry.cpp` after `fps_cap`,
+  `Extensions::touch_mode`. Display name "Touch controls". Description: "A camera pad and zoom / rotate
+  buttons at the bottom left, and the toolbar enlarged for fingers along the bottom. For phones and
+  touch screens." Icon `src/ext/ui/Dialog/Sprite/Extensions/Entry_touch_mode.png` drawn by a new
+  `tools/ext_icons/touchmode.py`, the sheet rebaked (`tools/ext_sprites_bake.py`), and
+  `tools/ext_resources.sh` re-run so the kit cross-check unit test passes (the stale-kit trap).
+- `ext.touch_mode_toolbar_scale`: a value key in `kValueKeys`, owner `touch_mode`, discrete
+  100 / 125 / 150 / 175 / 200, default 200 (the ruled "about 2x", fitted per §3).
+- **Enhanced tab** (`src/ext/touch_mode/enhanced_entry.cpp`, `Ext::EnhancedTab::TouchModeEntry()`), one
+  combo built like Frame rate cap: "Touch controls": Off / Toolbar 100 % / 125 % / 150 % / 175 % / 200 %.
+  Picking a size sets the value key and turns the row on. Labels are new keys in
+  `ExtensionsStringTable.rsc`.
+- **Android seed** (`app_android.cpp` first-run lines, appended to an existing file through
+  `phone_seed.h`): `ext.touch_mode=1`, `ext.touch_mode_toolbar_scale=200`.
+- No `BANISHED_*` flag, no `getenv`.
+
+## 6. Files (phase 2)
+
+| File | Change |
+|---|---|
+| `src/ext/touch_mode/touch_math.{h,cpp}` | Pure math: `ClusterLayout`, `ToolbarFit`, `DpadDirection`, `ZoomRepeat`, `ToGlobal / ToDialog`, `SubToolbarRight`, `TooltipUpperLeft` |
+| `src/ext/touch_mode/touch_mode.{h,cpp}` | `ToolbarOpened`, `Shown`, `CameraInput`, `Place` (called from phone_menu's place function, one chained line), `Scale` (the engine seam's function), the cluster dialog |
+| `src/ext/touch_mode/enhanced_entry.cpp` | The Enhanced combo |
+| `src/ext/ui/Dialog/TouchControls.rsc`, `ExtensionsStringTable.rsc` | The cluster dialog, the labels |
+| `src/engine/ui/UserInterface.h`, `userinterface_frame.cpp`, `userinterface_draw.cpp`, `userinterface.cpp` | `_extDialogScale` and its call points (§2) |
+| `src/game/Game/camera_input.cpp`, `gameupdateloop.cpp` | Two `// EXT SEAM` lines |
+| `src/ext/phone_menu/phone_menu.cpp` | One chained call to `TouchMode::Place`. This is another agent's file: the line is announced and merged after theirs |
+| `src/ext/registry.{h,cpp}`, `registry_boot.cpp`, `src/platform/android/app_android.cpp` | Row, value key, `Sync` installs `_extDialogScale`, seed |
+| `tests/unit/ext_touch_mode_test.cpp`, `ext_registry_test.cpp`, `sources.cmake` | Tests |
+| `docs/extensions/handins/TOUCHMODE.md`, `LIST.MD`, `docs/android/README.md` | Hand-in, list row, phone defaults |
+
+## 7. Tests and verification
+
+**Unit** (`ext_touch_mode_test.cpp`, cases `ext_touch_mode_<what>`):
+- `cluster_layout_s25`: the table in §3 to the pixel at 2340x1080. The same fractions hold at 1920x1080
+  and 3080x1421, and the cluster stays inside the safe area.
+- `cluster_layout_render_scale_invariant`: device sizes are equal at render scale 100 / 50 / 25 with the
+  UI scale re-derived.
+- `toolbar_fit`: k = min(requested, fit) and >= 1. At UI 40 / 447 units / S25 the answer is 1.48. The
+  result is stable when fed its own output.
+- `dpad_direction`: 8 sectors, the dead zone, outside the pad means none, and the sector boundaries
+  (22.5 deg).
+- `zoom_repeat`: a step at the press, none before 0.35 s, then every 0.15 s, none after release, at
+  irregular frame times.
+- `unit_mapping`: `ToDialog(ToGlobal(x)) == x`; the sub-toolbar right edge makes retail's xPos formula
+  centre the child (the formula re-run in the test); the tooltip upper-left mapping.
+- Registry: the row is class A, default off, and has its key and description; the value key's discrete
+  set, default and clamping.
+
+**Windows** (functional dir, `tools/game_dirs.sh env p10touch functional`, debug exe copied there, never
+`deploy` / `run`). A windowed run at the S25 aspect (the 3080x1421 window P8 used) with `ext.phone_menu=1`,
+`ext.touch_mode=1` and UI 40, started with `BANISHED_AUTOSTART=1`:
+- Screenshot: the cluster and the bar match §3 within a few px (scaled by 1421 / 1080), and the
+  `[TouchMode]` k line matches.
+- A held press on the D-pad and on rotate / zoom. The existing mouse-inject harness is used only if its
+  flags cover a held press; otherwise the check is by hand on the phone. The camera's target, yaw and
+  distance before and after come from the log, through one `[TouchMode] held <control> <seconds>` line
+  per release.
+- A sub-toolbar opens centred on its button inside the bar region; a toolbar tooltip appears at the
+  finger; the row turned off live removes the cluster and gives retail's toolbar back.
+- Row off: the toolbar is exactly as on main (layout rectangles logged equal).
+
+**S25** (phone lock; `tools/android.sh build debug --jobs 2 / install / run`):
+- Screencaps at render scale Full / UI 40 and at Half.
+- `adb shell input swipe x y x y 1500` on each D-pad arm, rotate and zoom (a 1.5 s held touch), with
+  screencaps before and after.
+- `input tap` on a category button: the sub-toolbar opens.
+- A tap in the game view still selects and places.
+- A real mouse middle-drag still rotates.
+- Build / unit counts recorded; the DX11 gate and resave stay the coordinator's.
+
+## 8. Follow-ups (the owner's thoughts, NOT ruled; not built)
+
+- **Place-then-confirm** for buildings and roads: the ghost follows the finger, and an on-screen tick /
+  cross confirms or cancels. Hooks: the build and road tools' `OnKey` / `Update` (`src/game/Player/`),
+  retail's tool bubbles (`tool_base_createbar.cpp`).
+- **Larger pick area, or pick-nearest,** for citizens and buildings: a pick radius in device mm around the
+  touch, over EditTool's pick (`edittool.cpp`).
+- Multi-touch (pan and zoom together, pinch zoom, two-finger rotate): SDL finger events beside the mouse
+  emulation, behind the platform twins.
+- A cluster on the right for left-handed players, a mirrored layout (a value key).
+- The cluster's own size as a value key if 0.11 S proves wrong in the hand.
