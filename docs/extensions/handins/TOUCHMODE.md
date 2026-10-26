@@ -9,16 +9,19 @@ session log: `docs/android/TOUCH_MODE.md`.
 
 * **Control cluster** (`Dialog/TouchControls.rsc`, our text `.rsc`): a D-pad (8-way camera pan), Rotate
   left / right above it, Zoom in / out right of it, at the bottom left, inside ext.phone_menu's safe area
-  (or 2 % of the short edge without that row). Sizes are fractions of the short edge (cell 0.11, gap
-  0.02; `touch_math.h LayoutCluster`), so the cluster keeps its physical size at any UI scale and render
-  scale. Every look is the game's own, read from the install: `SharedElements.rsc:raisedButton`, the
-  `SpriteSheet.rsc` glyphs ArrowUp / Down / Left / Right, Plus, Minus, ToolCamera, the tooltips the
-  Input tab's key names (`StringTable.rsc:gameKeys`). No art of ours but the row's icon.
+  (or 2 % of the short edge without that row), in ONE frame around the group, the toolbar's own
+  (`SharedElements.rsc:dialogBorder` + `sunkenBorderPad6`, as `Toolbar.rsc:toolBar`). Sizes are
+  fractions of the short edge (cell 0.11, gap 0.014, frame 0.03; `touch_math.h LayoutCluster`), so the
+  cluster keeps its physical size at any UI scale and render scale. Every look is the game's own, read
+  from the install: the buttons inherit `Toolbar.rsc:buttonToolbar`, the `SpriteSheet.rsc` glyphs
+  ArrowUp / Down / Left / Right, Plus, Minus, ToolCamera, the tooltips the Input tab's key names
+  (`StringTable.rsc:gameKeys`). No art of ours but the row's icon.
 * **Input**: one `// EXT SEAM` call in `PlayerToolManager::UpdateCamera` (`camera_input.cpp`), after the
   keys set their locals: a held control assigns `panX` / `panY` as the keys do (a key that set one keeps
   it), turns the yaw at retail's key rate (90 deg/s) and adds zoom steps (one at the press, one every
-  0.15 s after 0.35 s). The control is found by hit-testing the pointer against the cluster's rectangles
-  while the button is down and the press began in the cluster. The cluster dialog takes the pointer from
+  0.15 s after 0.35 s). The capture rule (owner, 2026-10-26; `touch_math.h Capture`): the control a press
+  starts on acts until the release, wherever the finger slides (the pad keeps its direction from its
+  centre, even off the pad); nothing else fires meanwhile; a press that starts elsewhere captures nothing. The cluster dialog takes the pointer from
   the world over its box. `Hold(Source, CameraHold)` is the entry point the later `touch_pointer`
   extension calls (last device wins).
 * **Toolbar at its own scale**: the engine seam `UI::UserInterface::_extDialogScale` (null by default and
