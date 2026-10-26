@@ -142,6 +142,7 @@
 #include "ui/Cursor.h"
 #include "ui/SpriteSheet.h"
 #include "ui/SharpDraw.h"   // NOT RETAIL: ext.sharp_ui's snap origin (SpriteContext::_extSharp)
+#include "video/CompanionData.h"   // NOT RETAIL: ext.touch_mode resets ImageBufferData::_extPointSampling
 // ENDGAME B.3.6 block E: element_common.h carries the same file-scope
 // `Module` / `ResolveAddr` declaration every other runtime/src file uses (the
 // address door lives in standalone/), and the RULE B6-5 atomic door caches.
@@ -516,6 +517,30 @@ void UI::UserInterface::Draw(Video::Context& context) {
                     if (layer != curLayer) continue;
                 }
 
+                // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): ext.touch_mode, a dialog with its own
+                // scale k. Its quads are in its own units: the pending quads are flushed under the
+                // global scale, then the context's world transform scales by k and the scissor scale
+                // is _uiScale / k until this dialog's last flush. ext.sharp_ui's snap is off for it
+                // (retail's filtered quads). Null `_extDialogScale` (the faithful profile): nothing.
+                const float dialogScale = _extDialogScale != nullptr ? _extDialogScale(d) : 1.0f;
+                const SharpDraw* const sharpBefore = SpriteContext::_extSharp;
+                if (dialogScale != 1.0f) {
+                    sc->Flush();
+                    Matrix scaled;
+                    scaled.m[0] = dialogScale;
+                    scaled.m[5] = dialogScale;
+                    scaled.m[10] = 1.0f;
+                    scaled.m[15] = 1.0f;
+                    context.SetTransform(0, scaled);
+                    sc->_scale = _uiScale / dialogScale;
+                    SpriteContext::_extSharp = nullptr;
+                    if (::Video::ImageBufferData::_extPointSampling) {
+                        ::Video::ImageBufferData::_extPointSampling = false;
+                        context._imageBufferDirty |= 0xffffu;
+                        context._dirty |= RtVideo::kDirtyImageBuffers;
+                    }
+                }
+
                 sc->_deferring = 1;
                 {
                     // Element vtable slot 6 (+0x30) `Draw(SpriteContext&, alpha)`
@@ -541,6 +566,19 @@ void UI::UserInterface::Draw(Video::Context& context) {
                     rtcoll::RtColl_ArraySetSize_1800783d0(&sc->_deferred);
                 }
                 sc->_deferring = 0;
+
+                // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md): back to the global scale.
+                if (dialogScale != 1.0f) {
+                    sc->Flush();
+                    Matrix identity;
+                    identity.m[0] = 1.0f;
+                    identity.m[5] = 1.0f;
+                    identity.m[10] = 1.0f;
+                    identity.m[15] = 1.0f;
+                    context.SetTransform(0, identity);
+                    sc->_scale = _uiScale;
+                    SpriteContext::_extSharp = sharpBefore;
+                }
             }
 
             if (curLayer >= maxLayer) break;   // `CMP R14D,R8D; JLE` at the tail

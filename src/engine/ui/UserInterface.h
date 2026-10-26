@@ -436,6 +436,12 @@ public:
     static void (*_extDialogPlace)(int32_t point, const DialogInstance* dialog, int32_t width,
                                    int32_t height, int32_t* rect);
 
+    // EXT SEAM (NOT RETAIL, docs/android/TOUCH_MODE.md section 2; DESIGN.md hook rule 5): ext.touch_mode.
+    // Null by default (always under the faithful profile). A dialog's own unit space: the answer k
+    // (1.0 = retail) makes the dialog laid out, hit-tested and drawn as if the UI scale were
+    // _uiScale / k (Update: the layout rectangle and the mouse divided by k; Draw: the quads scaled
+    // by k through the context's world transform). src/engine never includes src/ext.
+    static float (*_extDialogScale)(const DialogInstance* dialog);
     // EXT SEAM (NOT RETAIL, P9, docs/extensions/handins/PHONEMENU.md §3): ext.phone_menu. Null by
     // default (always under the faithful profile). Draw, just AFTER a dialog's backdrop: `rect` holds
     // the backdrop's {x1, y1, x2, y2} as drawn; a true answer draws the backdrop's sprite once more

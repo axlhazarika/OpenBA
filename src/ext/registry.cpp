@@ -427,6 +427,15 @@ const Entry kEntries[] = {
       "Limits the frame rate in the menu and in game (the Enhanced tab's Frame rate cap): less power and "
       "heat, the simulation unchanged.",
       0, [](State& s) -> bool& { return s.ext.fps_cap; } },
+    // TOUCHMODE (docs/android/TOUCH_MODE.md): a camera pad and rotate / zoom buttons bottom-left, the
+    // in-game toolbar at its own scale along the bottom (ext.touch_mode_toolbar_scale, shrunk to fit).
+    // Class A: input and layout only, nothing saved, live. OFF by default on a desktop; the Android
+    // first run turns it on (ruled 2026-10-26).
+    { "touch_mode", Tier::Extension, Class::A, false,
+      "Touch controls",
+      "A camera pad and zoom / rotate buttons at the bottom left, and the toolbar enlarged for fingers "
+      "along the bottom. For phones and touch screens.",
+      0, [](State& s) -> bool& { return s.ext.touch_mode; } },
 
 #ifdef BANISHED_UNIT_TEST
     // The unit tests' three classes (registry.h). Not compiled into the exe.
@@ -447,6 +456,7 @@ constexpr int kEntryCount = static_cast<int>(sizeof(kEntries) / sizeof(kEntries[
 // the usable maximum at 20 and anything past 30 "iffy").
 constexpr int32_t kMaxShadowSizes[] = { 4096, 8192 };
 constexpr int32_t kFpsCapRates[] = { 30, 60, 90, 120 };
+constexpr int32_t kTouchToolbarScales[] = { 100, 125, 150, 175, 200 };
 
 const ValueKey kValueKeys[] = {
     { "ao_quality", "ambient_occlusion", 1, 3, 2,
@@ -490,6 +500,10 @@ const ValueKey kValueKeys[] = {
     // default. Any other number reads as 60 (a discrete key).
     { "fps_cap_rate", "fps_cap", 30, 120, 60,
       [](State& s) -> int32_t& { return s.val.fps_cap_rate; }, kFpsCapRates, 4 },
+    // TOUCHMODE: the toolbar's own scale in percent while the row touch_mode is on, one of the combo's
+    // sizes; 200 is the ruled "about 2x" (shrunk to fit beside the controls). Any other number reads as 200.
+    { "touch_mode_toolbar_scale", "touch_mode", 100, 200, 200,
+      [](State& s) -> int32_t& { return s.val.touch_mode_toolbar_scale; }, kTouchToolbarScales, 5 },
 };
 
 constexpr int kValueKeyCount = static_cast<int>(sizeof(kValueKeys) / sizeof(kValueKeys[0]));

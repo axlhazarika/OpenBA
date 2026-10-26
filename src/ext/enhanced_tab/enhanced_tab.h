@@ -59,6 +59,7 @@ const Contribution& SeamlessLoopsEntry();
 const Contribution& TextureQualityEntry();   // src/ext/texture_quality/enhanced_entry.cpp (TEXQUALITY)
 const Contribution& RenderScaleEntry();   // src/ext/enhanced_tab/render_scale_entry.cpp: VideoRenderScale (P8)
 const Contribution& FpsCapEntry();        // src/ext/fps_cap/enhanced_entry.cpp: ext.fps_cap (P8)
+const Contribution& TouchModeEntry();     // src/ext/touch_mode/enhanced_entry.cpp: ext.touch_mode (TOUCHMODE)
 const Contribution& DerivedCacheEntry();   // src/ext/derived_cache/enhanced_entry.cpp: size + "Clear cache"
 
 // Whether this build offers the tab: always, except under the gate (`/profile:faithful` from the

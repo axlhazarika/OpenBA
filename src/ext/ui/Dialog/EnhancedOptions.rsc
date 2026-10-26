@@ -1,5 +1,5 @@
 // Dialog/EnhancedOptions.rsc -- the Options dialog's fifth tab "Enhanced" (NOT RETAIL; blocks AOMENU,
-// FAA-MENU, BETTER-TREES, TEXQUALITY, COMPRESSAO, P8 render scale + frame rate cap: ten rows in the Game tab's container, docs/extensions/AO.md §6.3; was AoOptions.rsc). Added at run time by UI::TabElement::AddTab from
+// FAA-MENU, BETTER-TREES, TEXQUALITY, COMPRESSAO, P8 render scale + frame rate cap, TOUCHMODE touch controls: eleven rows in the Game tab's container, docs/extensions/AO.md §6.3; was AoOptions.rsc). Added at run time by UI::TabElement::AddTab from
 // OptionsDialog::OnOpened (src/ext/enhanced_tab/enhanced_tab.cpp). Every name here is NEW:
 // a loose .crs never overrides a name the game's packages hold (IO::FileSystem::OpenFile looks
 // in the packfile index first, handins/AOSPIKE.md S5). The look inherits the kit's own
@@ -18,6 +18,7 @@ StringTable aoStrings
 		{ String _name = "TextureQuality";	String _text = "Texture quality"; }
 		{ String _name = "RenderScale";		String _text = "Render scale"; }
 		{ String _name = "FpsCap";			String _text = "Frame rate cap"; }
+		{ String _name = "TouchMode";		String _text = "Touch controls"; }
 		{ String _name = "DerivedCache";	String _text = "Data cache on disk"; }
 		{ String _name = "DerivedCacheSize";	String _text = "@0"; }
 		{ String _name = "DerivedCacheClear";	String _text = "Clear cache"; }
@@ -95,6 +96,21 @@ StringTable fpsCapItems
 	]
 }
 
+// Touch controls (TOUCHMODE, docs/android/TOUCH_MODE.md): 0 = the bool row ext.touch_mode off, else on with the
+// toolbar at ext.touch_mode_toolbar_scale 100 / 125 / 150 / 175 / 200 percent (shrunk to fit beside the controls).
+StringTable touchModeItems
+{
+	Entry _strings
+	[
+		{ String _name = "Item0";		String _text = "Off";				}
+		{ String _name = "Item1";		String _text = "Toolbar 100%";		}
+		{ String _name = "Item2";		String _text = "Toolbar 125%";		}
+		{ String _name = "Item3";		String _text = "Toolbar 150%";		}
+		{ String _name = "Item4";		String _text = "Toolbar 175%";		}
+		{ String _name = "Item5";		String _text = "Toolbar 200%";		}
+	]
+}
+
 ButtonDescription buttonEnhanced : "Options.rsc:buttonGame"
 {
 	Alignment _alignment = MidCenter;
@@ -151,7 +167,7 @@ ContainerDescription enhancedOptions : "Options.rsc:gameOptions"
 	ElementDescription _content = "enhancedOptionsTable";
 }
 
-// The rows: Options.rsc:gameOptionsTable's shape, ten rows (AO combo, AO slider, Better trees, shadow,
+// The rows: Options.rsc:gameOptionsTable's shape, eleven rows (AO combo, AO slider, Better trees, shadow,
 // loops, texture quality (TEXQUALITY), render scale and frame rate cap (P8), the derived-data cache's
 // size and, under it, its "Clear cache" button: COMPRESSAO). The size sits in the control column, not in the label: "0 MB (cleared at the next
 // start)" in the label column made that column, and so the dialog, wider than the retail tabs.
@@ -165,7 +181,7 @@ TableDescription enhancedOptionsTable
 	Alignment _alignment = TopLeft;
 
 	int _width = 2;
-	int _height = 10;
+	int _height = 11;
 
 	TableItem _items
 	[
@@ -177,7 +193,8 @@ TableDescription enhancedOptionsTable
 		{ int _x = 0; int _y = 5; ElementDescription _element = "textTextureQuality"; }
 		{ int _x = 0; int _y = 6; ElementDescription _element = "textRenderScale"; }
 		{ int _x = 0; int _y = 7; ElementDescription _element = "textFpsCap"; }
-		{ int _x = 0; int _y = 8; ElementDescription _element = "textDerivedCache"; }
+		{ int _x = 0; int _y = 8; ElementDescription _element = "textTouchMode"; }
+		{ int _x = 0; int _y = 9; ElementDescription _element = "textDerivedCache"; }
 
 		{ int _x = 1; int _y = 0; ElementDescription _element = "comboAoQuality"; }
 		{ int _x = 1; int _y = 1; ElementDescription _element = "sliderAoOpacity"; }
@@ -187,8 +204,9 @@ TableDescription enhancedOptionsTable
 		{ int _x = 1; int _y = 5; ElementDescription _element = "comboTextureQuality"; }
 		{ int _x = 1; int _y = 6; ElementDescription _element = "comboRenderScale"; }
 		{ int _x = 1; int _y = 7; ElementDescription _element = "comboFpsCap"; }
-		{ int _x = 1; int _y = 8; ElementDescription _element = "textDerivedCacheSize"; }
-		{ int _x = 1; int _y = 9; ElementDescription _element = "buttonDerivedCacheClear"; }
+		{ int _x = 1; int _y = 8; ElementDescription _element = "comboTouchMode"; }
+		{ int _x = 1; int _y = 9; ElementDescription _element = "textDerivedCacheSize"; }
+		{ int _x = 1; int _y = 10; ElementDescription _element = "buttonDerivedCacheClear"; }
 	]
 }
 
@@ -208,6 +226,7 @@ TextDescription textSeamlessLoops : "textAoOption" { String _text = "SeamlessLoo
 TextDescription textTextureQuality : "textAoOption" { String _text = "TextureQuality"; }
 TextDescription textRenderScale : "textAoOption" { String _text = "RenderScale"; }
 TextDescription textFpsCap : "textAoOption" { String _text = "FpsCap"; }
+TextDescription textTouchMode : "textAoOption" { String _text = "TouchMode"; }
 // The cache row's label and size take the combo rows' spacing (a combo row is 26 + 3 high, its label
 // sits 5 down), so the size and the button under it do not crowd the row above.
 TextDescription textDerivedCache : "textAoOption" { String _text = "DerivedCache"; int _topPad = 5; int _bottomPad = 3; }
@@ -280,4 +299,11 @@ ComboDescription comboFpsCap : "Options.rsc:comboAutosave"
 	int _minWidth = 180;
 	int _bottomPad = 3;
 	StringTable _initialData = "EnhancedOptions.rsc:fpsCapItems";
+}
+
+ComboDescription comboTouchMode : "Options.rsc:comboAutosave"
+{
+	int _minWidth = 180;
+	int _bottomPad = 3;
+	StringTable _initialData = "EnhancedOptions.rsc:touchModeItems";
 }
