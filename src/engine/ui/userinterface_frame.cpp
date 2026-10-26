@@ -336,6 +336,7 @@ int32_t UI::UserInterface::Update(const System::Time& timeRef) {
             int32_t rect[4] = {0, 0, layoutW, layoutH};
             _extDialogPlace(kExtPlaceLayout, n->element, layoutW, layoutH, rect);
             n->element->ComputeLayout(rect[0], rect[1], rect[2], rect[3]);
+            _extDialogPlace(kExtPlaceAfterLayout, n->element, layoutW, layoutH, rect);
         }
     }
 

@@ -109,51 +109,135 @@ UNIT_TEST(ext_phone_menu_backdrop_logo_top) {
 }
 
 UNIT_TEST(ext_phone_menu_button_row) {
-    // The labels need the largest padded label ("Achievements", 109 + 16).
+    // The labels need the largest label ("Achievements", 125 with the retail padding) plus the
+    // frame's inset on both sides.
     const int32_t widths[] = {65, 67, 92, 125, 85, 71, 104, 60};
     const int32_t heights[] = {30, 30, 30, 30, 30, 30, 30, 30};
-    CHECK(Ext::PhoneMenu::SquareSide(widths, heights, 8) == 125);
+    CHECK(Ext::PhoneMenu::SquareSide(widths, heights, 8) == 125 + 2 * Ext::PhoneMenu::kSquareInset);
     const int32_t tallW[] = {20};
     const int32_t tallH[] = {40};
-    CHECK(Ext::PhoneMenu::SquareSide(tallW, tallH, 1) == 40);
+    CHECK(Ext::PhoneMenu::SquareSide(tallW, tallH, 1) == 40 + 2 * Ext::PhoneMenu::kSquareInset);
     CHECK(Ext::PhoneMenu::SquareSide(widths, heights, 0) == 0);
-    // The S25 at UI 100, render scale 50: 1170x540 units, margin 24. Eight squares of 125 with
-    // the buttons' and the ribbon's padding: 1062 x 145. The logo ends at 145 (0.22 of a
-    // 658-unit picture), the version line (56 padded) starts at 460.
+    // The S25 at UI 100, render scale 50: 1170x540 units, margin 24; the logo ends at 145 (0.22
+    // of a 658-unit picture), the version line (56 padded) starts at 460.
     CHECK(Ext::PhoneMenu::BackdropHeight(1170, 540, 1600, 900) == 658);
     CHECK(Ext::PhoneMenu::LogoBottom(658) == 145);
     CHECK(Ext::PhoneMenu::VersionTop(1170, 540, 56) == 460);
     CHECK(Ext::PhoneMenu::VersionTop(1170, 540, 0) == -1);
-    CHECK(Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 145, 460));   // rows 197 .. 342
-    CHECK(Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, -1, -1));     // nothing else known
-    // Too wide for the safe area (UI 50: 585x270 units): back to the column.
-    CHECK(!Ext::PhoneMenu::RowFits(585, 270, 1062, 145, 72, 230));
-    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1123, 145, -1, -1));
-    CHECK(Ext::PhoneMenu::RowFits(1170, 540, 1122, 145, -1, -1));
-    // Over the logo, or into the version line's gap.
-    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 220, 460));
-    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 1062, 145, 145, 340));
-    // Not sized.
-    CHECK(!Ext::PhoneMenu::RowFits(1170, 540, 0, 0, -1, -1));
+    // The band between the logo and the version line (less its gap), inside the safe area.
+    const Ext::PhoneMenu::Rect band = Ext::PhoneMenu::RowBand(1170, 540, 145, 460);
+    CHECK(band.x1 == 24);
+    CHECK(band.x2 == 1170 - 24);
+    CHECK(band.y1 == 145);
+    CHECK(band.y2 == 456);
+    CHECK(Ext::PhoneMenu::BlockHeight(1170, 540, 145, 460) == 311);
+    CHECK(Ext::PhoneMenu::BlockHeight(1170, 540, -1, -1) == 492);    // nothing known: the safe area
+    CHECK(Ext::PhoneMenu::BlockHeight(1170, 540, 600, -1) == 0);     // a logo past the safe area
 }
 
-UNIT_TEST(ext_phone_menu_row_square_side) {
-    // The S25 at UI 100, render scale 50 (1170x540 units, safe width 1122): eight squares with
-    // 62 units of padding and gaps around them fill the row at 132 ...
-    CHECK(Ext::PhoneMenu::FitSide(1170, 540, 62, 8) == 132);
-    // ... capped at 0.22 of the safe height (492): 108, more than the labels' 95.
-    CHECK(Ext::PhoneMenu::RowSide(95, 132, 540) == 108);
-    // The owner's UI 35 at render scale 100 (819x378 units, safe width 785, safe height 344):
-    // 90 across; the labels in their own font need 107 (no row), in the small font 71.
-    CHECK(Ext::PhoneMenu::FitSide(819, 378, 62, 8) == 90);
-    CHECK(Ext::PhoneMenu::RowSide(107, 90, 378) == 0);
-    CHECK(Ext::PhoneMenu::RowSide(71, 90, 378) == 75);   // the cap: 0.22 * 344
-    CHECK(Ext::PhoneMenu::RowSide(80, 90, 378) == 80);   // never smaller than the labels
-    CHECK(Ext::PhoneMenu::RowSide(90, 90, 378) == 90);
-    // Nothing fits / nothing to fit.
-    CHECK(Ext::PhoneMenu::FitSide(100, 378, 200, 8) == 0);
-    CHECK(Ext::PhoneMenu::FitSide(1170, 540, 62, 0) == 0);
-    CHECK(Ext::PhoneMenu::RowSide(0, 90, 378) == 0);
+namespace {
+
+// The menus as measured on the S25: the ribbon's 8-unit padding around the row, 2-unit button
+// padding, 2 units between squares. "Achievements" (89 wide in the labels' own font, 68 in the
+// small font) with the frame's inset on both sides.
+constexpr int32_t kOwn = 89 + 2 * Ext::PhoneMenu::kSquareInset;
+constexpr int32_t kSmall = 68 + 2 * Ext::PhoneMenu::kSquareInset;
+
+Ext::PhoneMenu::RowMetrics Menu(int32_t count, int32_t contentSide) {
+    Ext::PhoneMenu::RowMetrics m;
+    m.count = count;
+    m.contentSide = contentSide;
+    m.outerWidth = 16;
+    m.outerHeight = 16;
+    m.buttonPadWidth = 4;
+    m.buttonPadHeight = 4;
+    m.spacing = 2;
+    return m;
+}
+
+// The owner's S25 settings, UI 35 at render scale 100: an 819x378 layout (safe area 17 .. 802 x
+// 17 .. 361), the logo to 101, the version line from 305.
+Ext::PhoneMenu::RowPlan PlanUi35(int32_t count, int32_t contentSide) {
+    return Ext::PhoneMenu::PlanRows(819, 378, Menu(count, contentSide), 101, 305);
+}
+
+// A 2528x1345 window at UI 32: an 808x430 layout (safe area 19 .. 789 x 19 .. 411), the logo to
+// 100, the version line from 355. At 1.88:1 the logo leaves more height than on the phone.
+Ext::PhoneMenu::RowPlan PlanWindow32(int32_t count, int32_t contentSide) {
+    return Ext::PhoneMenu::PlanRows(808, 430, Menu(count, contentSide), 100, 355);
+}
+
+}  // namespace
+
+UNIT_TEST(ext_phone_menu_rows_sizes) {
+    const Ext::PhoneMenu::RowMetrics m = Menu(8, kOwn);
+    CHECK(Ext::PhoneMenu::RowsWidth(m, 8, kOwn) == 16 + 8 * (kOwn + 4) + 7 * 2);
+    CHECK(Ext::PhoneMenu::RowsHeight(m, 1, kOwn) == 16 + kOwn + 4);
+    CHECK(Ext::PhoneMenu::RowsHeight(m, 2, kOwn) == 16 + 2 * (kOwn + 4) + 2);
+    CHECK(Ext::PhoneMenu::BlockHeight(819, 378, 101, 305) == 200);
+    CHECK(Ext::PhoneMenu::BlockHeight(808, 430, 100, 355) == 251);
+}
+
+UNIT_TEST(ext_phone_menu_rows_at_the_owners_ui_35) {
+    // n = 8 to 11 in the labels' own font (99): neither one row (at most 90 across, for 8) nor
+    // two rows (87 down in the 200-unit band) fit; the caller then plans in the small font (78).
+    for (int32_t n = 8; n <= 11; ++n) CHECK(PlanUi35(n, kOwn).rows == 0);
+    // n = 8 (the main menu): one row (90 across), the labels' side (over the 0.22 cap, 75).
+    Ext::PhoneMenu::RowPlan p = PlanUi35(8, kSmall);
+    CHECK(p.rows == 1);
+    CHECK(p.perRow == 8);
+    CHECK(p.side == kSmall);
+    // n = 9 (a button added to the main menu): still one row (79 across).
+    p = PlanUi35(9, kSmall);
+    CHECK(p.rows == 1);
+    CHECK(p.perRow == 9);
+    CHECK(p.side == kSmall);
+    // n = 10 (the pause menu): one row is 71 across, under the labels' 78: two rows of five.
+    p = PlanUi35(10, kSmall);
+    CHECK(p.rows == 2);
+    CHECK(p.perRow == 5);
+    CHECK(p.side == kSmall);
+    // n = 11 (a button added to the pause menu): two rows, six on the first.
+    p = PlanUi35(11, kSmall);
+    CHECK(p.rows == 2);
+    CHECK(p.perRow == 6);
+    CHECK(p.side == kSmall);
+}
+
+UNIT_TEST(ext_phone_menu_rows_wrap_on_a_wide_window) {
+    // n = 8, 9, 10, 11 in the labels' own font: one row does not fit across, two rows do.
+    for (int32_t n = 8; n <= 11; ++n) {
+        const Ext::PhoneMenu::RowPlan p = PlanWindow32(n, kOwn);
+        CHECK(p.rows == 2);
+        CHECK(p.perRow == (n + 1) / 2);
+        CHECK(p.side == kOwn);   // the 0.22 cap (86) is under the labels (99): they get their side
+        CHECK(Ext::PhoneMenu::RowsWidth(Menu(n, kOwn), p.perRow, p.side) <= 789 - 19);
+        CHECK(Ext::PhoneMenu::RowsHeight(Menu(n, kOwn), 2, p.side) <= Ext::PhoneMenu::BlockHeight(808, 430, 100, 355));
+    }
+    // An even count splits in halves, an odd one puts the extra square on the first row.
+    CHECK(PlanWindow32(10, kOwn).perRow == 5);
+    CHECK(PlanWindow32(11, kOwn).perRow == 6);
+    // At UI 100 (2528x1345, safe height 1223) one row of eight fits, at the 0.22 cap.
+    const Ext::PhoneMenu::RowPlan big = Ext::PhoneMenu::PlanRows(2528, 1345, Menu(8, kOwn), 313, 1228);
+    CHECK(big.rows == 1);
+    CHECK(big.side == 269);
+}
+
+UNIT_TEST(ext_phone_menu_rows_give_way_to_the_column) {
+    // The owner's S25 at UI 25 (585x270, safe area 12 .. 573 x 12 .. 258, the logo to 72, the
+    // version line from 202): even two rows of small-font squares (2 x 82 + 18) do not fit the
+    // 126-unit band between the logo and the version line: the column.
+    CHECK(Ext::PhoneMenu::BlockHeight(585, 270, 72, 202) == 126);
+    for (int32_t n = 8; n <= 11; ++n) {
+        CHECK(Ext::PhoneMenu::PlanRows(585, 270, Menu(n, kSmall), 72, 202).rows == 0);
+    }
+    // Nothing to place.
+    CHECK(Ext::PhoneMenu::PlanRows(819, 378, Menu(0, kOwn), 101, 305).rows == 0);
+    CHECK(Ext::PhoneMenu::PlanRows(819, 378, Menu(8, 0), 101, 305).rows == 0);
+    // One button never wraps.
+    const Ext::PhoneMenu::RowPlan one = Ext::PhoneMenu::PlanRows(819, 378, Menu(1, kOwn), 101, 305);
+    CHECK(one.rows == 1);
+    CHECK(one.side == kOwn);
 }
 
 UNIT_TEST(ext_phone_menu_menu_band) {

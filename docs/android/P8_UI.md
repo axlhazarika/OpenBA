@@ -135,3 +135,35 @@ Left / for a ruling:
 - The Options dialog is taller than the screen at UI 35: its tabs are off the top (retail keeps a
   too-tall dialog's bottom on screen). A phone layout for Options is its own item.
 - The "Achievements" label in the small font leaves about one unit to its square's frame.
+
+## 7. Round 3 (owner ruling: the row wraps to two rows)
+
+**Ruled:** when one row of squares does not fit, wrap to two rows (ceil(n / 2) on the first, the rest
+centred under it) instead of falling back to the retail column, so an added menu button never breaks
+the layout; the column only where even two rows cannot fit. Owner's look at round 2, same session:
+"Achievements" crossed its square's frame slightly.
+
+**Done** (`src/ext/phone_menu/`, details in `docs/extensions/handins/PHONEMENU.md` §2):
+- `PlanRows`: one row, two rows, then both in the game's small font, else the column. The small-font
+  step stays: the logo takes the top quarter of the phone's screen, and at UI 35 two own-font rows need
+  more height than the band between the logo and the version line has (without the step the pause menu
+  would fall to the column at the owner's scale). Unit tests for n = 8, 9, 10, 11 at the owner's UI 35,
+  on a wide window where both menus wrap, at the phone's UI 25 (the column) and the edge cases.
+- Two rows from padding plus a move after retail's `ComputeLayout` (a third call point on the existing
+  `_extDialogPlace` seam, `kExtPlaceAfterLayout`); no element is created or reparented.
+- The rows are centred in the band between the logo and the version line (round 2 centred the row in
+  the safe area; the band leaves more room for two rows).
+- Each square keeps 5 units between its label and its edge (`kSquareInset`): "Achievements" stays
+  inside its frame. At the owner's UI 35 this moves both menus to the small font (the own font with the
+  margin needs 99 units, 90 fit across): the main menu is still one row of 8, the pause menu becomes
+  two rows of 5, all squares 78 units = 223 device pixels (about 14 mm).
+
+**Verified:** the S25 at UI 35 (main menu one row, pause menu two rows, a second-row square opens its
+dialog), at UI 25 (both menus the column); Windows at UI 32 (both menus two rows in their own font);
+unit 1490 / 0 / 1 skipped. Screenshots: the session scratchpad's `android-ui-fit/round3/`. The phone was
+left with this branch's debug apk, stopped, and the owner's settings (UI 35).
+
+**Threshold:** on the S25 at render scale 100 the column comes back below about UI 33 % (pause menu)
+and UI 31 % (main menu): two rows of small-font squares no longer fit between the logo and the version
+line, and the column runs off the screen as retail's does at that scale. A third row or a smaller logo
+would be the next step if those scales matter (a ruling).

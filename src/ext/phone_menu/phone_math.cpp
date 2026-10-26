@@ -50,35 +50,56 @@ int32_t SquareSide(const int32_t* labelWidths, const int32_t* labelHeights, int3
         if (labelWidths[i] > side) side = labelWidths[i];
         if (labelHeights[i] > side) side = labelHeights[i];
     }
-    return side;
+    return side > 0 ? side + 2 * kSquareInset : 0;
 }
 
-int32_t FitSide(int32_t width, int32_t height, int32_t fixedWidth, int32_t count) {
-    if (count <= 0) return 0;
+Rect RowBand(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop) {
+    Rect band = InsetLayout(width, height);
+    if (logoBottom > band.y1) band.y1 = logoBottom;
+    if (versionTop >= 0 && versionTop - kVersionGap < band.y2) band.y2 = versionTop - kVersionGap;
+    if (band.y2 < band.y1) band.y2 = band.y1;
+    return band;
+}
+
+int32_t BlockHeight(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop) {
+    const Rect band = RowBand(width, height, logoBottom, versionTop);
+    return band.y2 - band.y1;
+}
+
+int32_t RowsWidth(const RowMetrics& m, int32_t perRow, int32_t side) {
+    if (perRow <= 0) return m.outerWidth;
+    return m.outerWidth + perRow * (side + m.buttonPadWidth) + (perRow - 1) * m.spacing;
+}
+
+int32_t RowsHeight(const RowMetrics& m, int32_t rows, int32_t side) {
+    if (rows <= 0) return m.outerHeight;
+    return m.outerHeight + rows * (side + m.buttonPadHeight) + (rows - 1) * m.spacing;
+}
+
+RowPlan PlanRows(int32_t width, int32_t height, const RowMetrics& m, int32_t logoBottom, int32_t versionTop) {
+    RowPlan plan;
+    if (m.count <= 0 || m.contentSide <= 0) return plan;
     const Rect safe = InsetLayout(width, height);
-    const int32_t room = (safe.x2 - safe.x1) - fixedWidth;
-    return room > 0 ? room / count : 0;
-}
-
-int32_t RowSide(int32_t contentSide, int32_t fitSide, int32_t height) {
-    if (contentSide <= 0 || contentSide > fitSide) return 0;
-    const int32_t m = SafeMargin(height);
-    const int32_t safeHeight = 2 * m < height ? height - 2 * m : height;
-    const int32_t cap = static_cast<int32_t>(static_cast<float>(safeHeight) * kRowSideFraction);
-    int32_t side = fitSide < cap ? fitSide : cap;
-    if (side < contentSide) side = contentSide;
-    return side;
-}
-
-bool RowFits(int32_t width, int32_t height, int32_t rowWidth, int32_t rowHeight, int32_t logoBottom,
-             int32_t versionTop) {
-    const Rect safe = InsetLayout(width, height);
-    if (rowWidth <= 0 || rowHeight <= 0) return false;
-    if (rowWidth > safe.x2 - safe.x1 || rowHeight > safe.y2 - safe.y1) return false;
-    const int32_t top = safe.y1 + ((safe.y2 - safe.y1) - rowHeight) / 2;
-    if (logoBottom >= 0 && top < logoBottom) return false;
-    if (versionTop >= 0 && top + rowHeight > versionTop - kVersionGap) return false;
-    return true;
+    const int32_t safeW = safe.x2 - safe.x1;
+    const int32_t block = BlockHeight(width, height, logoBottom, versionTop);
+    const int32_t cap = static_cast<int32_t>(static_cast<float>(safe.y2 - safe.y1) * kRowSideFraction);
+    for (int32_t rows = 1; rows <= 2 && rows <= m.count; ++rows) {
+        const int32_t perRow = (m.count + rows - 1) / rows;
+        const int32_t across = (safeW - m.outerWidth - (perRow - 1) * m.spacing) / perRow - m.buttonPadWidth;
+        const int32_t down = (block - m.outerHeight - (rows - 1) * m.spacing) / rows - m.buttonPadHeight;
+        int32_t side = across < down ? across : down;
+        if (side > cap) side = cap;
+        if (side < m.contentSide) {
+            // The cap alone may be under the labels: they still get their side if it fits.
+            if (m.contentSide > across || m.contentSide > down) continue;
+            side = m.contentSide;
+        }
+        plan.rows = rows;
+        plan.perRow = perRow;
+        plan.side = side;
+        return plan;
+    }
+    return plan;
 }
 
 Rect MenuBand(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop,
