@@ -23,11 +23,12 @@
 namespace Ext {
 namespace PhoneMenu {
 
-// The part of the loading picture's height its torn bottom border takes, from the picture's bottom:
-// measured on the installed picture (the solid black from 0.897 of the drawn height down, the torn
-// edge reaching up to 0.857), plus a little air. A number about the user's own data; a picture with a
-// taller border shows its edge cut straight at this line.
-constexpr float kLoadingBorderFraction = 0.145f;
+// The part of the loading picture's height the clipped strip takes, from the picture's bottom:
+// measured on the installed pictures (the solid black from about 0.897 of the drawn height down, the
+// torn edge reaching up to between 0.857 and 0.885 depending on the picture). 0.125 sits inside the
+// torn edge: a higher line shows a band of the lower copy's picture above the edge (a visible seam),
+// a lower one cuts the highest peaks of the edge flat. A number about the user's own data.
+constexpr float kLoadingBorderFraction = 0.125f;
 
 // The picture drawn bottom-aligned at the size it has in `top` (its top-aligned rectangle): its bottom
 // on the screen's bottom. Empty ({0, 0, 0, 0}) when `top` does not overhang the screen's bottom (the

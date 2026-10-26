@@ -123,8 +123,9 @@ across the middle (owner's ruling, P8 round 2), inside a 4.5 % safe area clear o
 rounded corners and the camera cut-out, the in-game interface (the toolbar and event notices bottom-right,
 the panels at their default top-left, tooltips, drop-downs) is kept inside the same safe area, and Options >
 User interface scale goes down to 25 % (the UI four times larger than 100 %;
-`docs/extensions/handins/PHONEMENU.md`). The loading screen's picture is placed with its bottom border on
-the screen, the spinner and "Loading..." in that border (P9). The first-run UI scale is the game's own
+`docs/extensions/handins/PHONEMENU.md`). The loading screen looks like the pause menu: its picture top-aligned at
+the menus' scale plus its torn bottom border drawn again at the screen's bottom, the spinner and
+"Loading..." in that border at the Options UI scale (P9). The first-run UI scale is the game's own
 100 in back-buffer pixels, stored in screen units: 50 at the seeded Half (P9, below). Options changes are
 kept as anywhere else.
 

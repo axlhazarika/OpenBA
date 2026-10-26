@@ -21,7 +21,7 @@ text lies in that border. On a wider screen the width-fitted picture is taller t
 so it overhangs top and bottom: on the S25 (19.5:9) by 22 % of the screen height in all, which is more than
 the bottom border; ext.phone_menu's safe area then lifted the group by a further 4.5 %.
 
-**The change** (row `ext.phone_menu`, class A, its existing switch; `src/ext/phone_menu/loading_screen.cpp`,
+**The change, round 1 (replaced by round 2 below)** (row `ext.phone_menu`, class A, its existing switch; `src/ext/phone_menu/loading_screen.cpp`,
 `loading_math.h`, a two-line call in `phone_menu.cpp`'s `Place`). The menus' logo rule mirrored: on a screen
 wider than the picture its bottom goes on the screen's bottom (`BottomOnBottom`), so the border that carries
 the text is whole and the cut moves to the top border; the group keeps retail's bottom-centred rectangle
@@ -40,32 +40,56 @@ does not overhang, nothing moves.
   `p1_18_half.png`); the boot's Loading splash (no picture) unchanged (`p1_9.png` .. `p1_11.png`).
 - Unit: `tests/unit/ext_phone_loading_test.cpp` (2 cases).
 
-**For a ruling.** On the S25 the top border is now entirely off the screen and the picture's top edge meets
+**For a ruling (answered by round 2 below).** On the S25 the top border is now entirely off the screen and the picture's top edge meets
 the screen's top as a straight cut (`p1_18_half.png`). The alternative that keeps both borders is a height
 fit (the whole picture, black side bars of about 9 % of the width each on the S25); it changes retail's
 cover look more and was not built.
 
-**Follow-up after the merge onto `android/p9` (72abd6571): the menus' two-draw look does not carry over.**
-The menus now draw their 16:9 backdrop twice (`kExtPlaceBackdropLower`, `touch_fit.cpp`
-`BackdropLowerDraw`): top-aligned, plus a bottom-aligned copy drawn first, under it. That works for the
-menus because their backdrop is an overlay, transparent between the logo and the borders, over the 3D menu
-scene. The Loading picture (`Dialog/Loading.rsc:gameLoad%i`, 1600x900) is opaque from edge to edge: top-aligned
-at the width-fitted scale it covers the whole screen, and a copy drawn under it never shows. Built and seen
-on Windows (functional dir, 2340x1080 client, UI 40, row on): the top border whole, NO bottom border, and
-"Loading..." on the picture (the session scratchpad's `android-loading-scale/w6_16.png`; the attempt's diff is
-`lower_draw_attempt.diff` there, not committed). `SpriteDraw` carries no source rectangle, so the copy cannot
-be cropped to its border either. The committed fit (bottom-aligned, above) stays; on the merged tree at the
-same settings the main menu and the loading screen side by side are `win_menu_vs_loading_opt1.png` (same
-picture scale, the loading screen's top border cut). The choices left for the owner:
-1. keep the bottom-aligned fit (the bottom border whole with the text in it, the top border cut);
-2. top-aligned plus the lower copy drawn OVER it, clipped to the bottom strip by the sprite context's scissor
-   (an engine-seam change: the extra draw after retail's, with a scissor); the strip's top is either a
-   straight black edge or the torn edge with a seam in the picture just above it;
-3. a height fit: both borders whole, the picture smaller than the menus' with black side bars.
-A different reading of the owner's remark: the loading screen's own UI (spinner, "Loading...") is laid out at
-retail's splash scale, 900 / screen height (0.83 on the S25), not at the Options UI scale (0.40 at UI 40), so
-its text is drawn at a different scale from the menus'. Making it follow the UI scale is possible
-(`GameLoadDialogLoopT::Startup`'s step 5 and ext.load_progress's copy of it); not built pending the ruling.
+**Round 2 (after the merge onto `android/p9` 72abd6571; owner's rulings 2026-10-26).** The owner, watching
+the runs: "the draws in the loading screen dont have the same scale" as the menus. Ruled: (a) the loading
+group (spinner, "Loading...", tip) follows the UI scale, ext.load_progress's screen included; (b) the
+loading screen looks like the pause menu, both torn borders whole at the menus' picture scale (the
+bottom-aligned fit above stays only if that is impossible).
+
+What did not work, and why:
+- The menus' two-draw look (`kExtPlaceBackdropLower`, a bottom-aligned copy drawn first, UNDER the
+  top-aligned backdrop; `touch_fit.cpp`) works for the menus because their backdrop is a see-through overlay
+  over the 3D menu scene. The Loading picture (`Dialog/Loading.rsc:gameLoad%i`, 1600x900) is opaque: top-aligned
+  it covers the screen and the copy under it never shows (`w6_16.png`: top border, no bottom border).
+- Drawing the menus' overlay (`Build/MainMenuBackground.png`, its own one-sprite sheet) over the picture:
+  the overlay is a resource of the menu loop and is freed before a loading screen draws; a kept pointer to
+  it faulted in the draw (ACCESS_VIOLATION reading the freed sheet, `standalone_crash.log`, symbolised to
+  `loading_screen.cpp` `MenuOverlay`). Keeping it alive would need a boot-time load outside the loops'
+  resource lists; not attempted.
+
+The change (row `ext.phone_menu`; `loading_screen.cpp`, `loading_math.h`; one new engine seam):
+- the picture top-aligned at the menus' width-fitted scale (`LogoTop`: its top border whole);
+- the same picture drawn once more, bottom-aligned at the same scale (`LowerCopy`), OVER it, clipped by the
+  sprite scissor to the strip holding its torn bottom border (`BorderStripTop`, 0.125 of the picture's
+  height). Seam: `UI::UserInterface::_extBackdropOver` (`userinterface_draw.cpp`, after retail's backdrop
+  draw; null under the faithful profile; contract in `PHONEMENU.md` §3). A scissor change flushes the
+  sprite batch and forgets its sheet: the first build of this lost the clipped copy until the sheet was
+  bound again on both sides of it;
+- the group keeps retail's bottom-centred rectangle; with the row on its UI scale is the Options UI scale
+  (`LoadingUiScale`, in `GameLoadDialogLoopT::Startup` step 5 and `Ext::LoadProgress::BootBegin`, which now
+  takes the UI scale percent from `game_main.cpp`).
+
+The strip line is a trade-off measured on the installed pictures: the torn edge reaches from about 0.857 to
+0.885 of the drawn height depending on the picture, the solid black starts near 0.897. A line at 0.145 left
+a band of the lower copy's picture above the edge (a visible seam, `ph9_27_bottomleft.png`); 0.125 leaves
+a thin sliver on some pictures and cuts the tallest edge peaks flat (`ph10_26_bottomleft.png`). Open for the
+owner's eye.
+
+Verified:
+- Windows (DX11 debug, functional dir, 2340x1080 client, UI 40, row on): main menu and loading screen
+  side by side `win_menu_vs_loading_final.png` (both borders, the same picture scale, the group at the
+  menus' text size; before round 2: `win_menu_vs_loading_opt1.png`).
+- S25 (this branch's debug apk, the owner's settings UI 42, render scale 100): the pause menu and the
+  loading screen side by side `phone_pause_vs_loading_final.png`; the main menu and loading
+  `phone_menu_pause_loading.png` (0.145 strip).
+- Unit `ext_phone_loading_test.cpp` (2 cases): the top-aligned picture and its lower copy at the menus'
+  scale, the strip; nothing added on a 16:9 screen. Unit total 1511 / 0 / 1 skipped.
+- Not run: ext.load_progress's boot screen (needs an enabled mod) and the quit-to-menu loading screen.
 
 ## 2. Render scale and UI scale coupled: DONE
 
@@ -128,5 +152,5 @@ at Quarter before P9 only because the whole UI was four times larger). Half read
 
 ## 3. Phone state at the end
 
-This branch's debug apk installed, app stopped; `settings.cfg` pushed back byte-identical to the file found
-at the start (UI 42, render scale 100). The phone lock was released.
+This branch's debug apk installed (round 2 build), app stopped; `settings.cfg` pushed back byte-identical to
+the file found at the start of each round (UI 42, render scale 100). The phone lock was released.

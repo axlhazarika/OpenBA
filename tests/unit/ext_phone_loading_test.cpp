@@ -34,7 +34,7 @@ UNIT_TEST(ext_phone_loading_both_borders_at_the_menus_scale) {
     CHECK(lower.x1 == top.x1 && lower.x2 == top.x2);
     // The strip the lower copy is clipped to: kLoadingBorderFraction of the picture, at the bottom.
     const int32_t strip = BorderStripTop(432, lower.y2 - lower.y1);
-    CHECK(strip == 432 - 76);   // 526 * 0.145 = 76.3
+    CHECK(strip == 432 - 66);   // 526 * 0.125 = 65.75
     CHECK(strip > top.y1 && strip < 432);
 }
 

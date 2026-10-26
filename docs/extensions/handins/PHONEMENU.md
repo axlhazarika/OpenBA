@@ -90,16 +90,21 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
   `EventNotify.rsc` (bottom-right), `AutoSave.rsc` (top-left); front end: `ShiningRock.rsc`,
   `Loading.rsc`, `NewGame.rsc`. Known effect: a panel dragged out of the corner moves once the cursor
   has passed the margin (`docs/known_port_issues.md` row 1336).
-* **Loading screen** (P9, `src/ext/phone_menu/loading_screen.cpp`, `loading_math.h`;
-  `docs/android/P9_LOADING_SCALE.md` §1): `Dialog/Loading.rsc` is a 16:9 picture with torn black borders
-  top and bottom and one bottom-centred group (`main`: the spinner, "Loading...", the tip line). On a
-  screen wider than the picture retail's cover fit pushes the bottom border off the screen and the group
-  lands on the picture. With the row on, the picture's bottom goes on the screen's bottom
-  (`BottomOnBottom`, the logo rule mirrored: the border that carries the text is whole, the cut moves to
-  the top border) and the group keeps retail's bottom-centred rectangle (no safe-area inset; bottom centre
-  is clear of the corners and the cut-out). A loading screen is recognised at its first layout by its
-  `loadingImage` element (the Shining Rock splash has none and keeps retail's fit); ext.load_progress's
-  boot screen is the same dialog and gets the same fit.
+* **Loading screen** (P9, owner's rulings 2026-10-26; `src/ext/phone_menu/loading_screen.cpp`,
+  `loading_math.h`; `docs/android/P9_LOADING_SCALE.md` §1): `Dialog/Loading.rsc` is an OPAQUE 16:9
+  picture with torn black borders top and bottom and one bottom-centred group (`main`: the spinner,
+  "Loading...", the tip line). On a screen wider than the picture retail's centred cover fit cuts both
+  borders. With the row on it looks like the pause menu: the picture top-aligned at the menus'
+  width-fitted scale (`LogoTop`, its top border whole), then the same picture once more, bottom-aligned at
+  the same scale (`LowerCopy`), drawn OVER it and clipped by the sprite scissor to the bottom strip that
+  holds its torn bottom border (`BorderStripTop`, `kLoadingBorderFraction` 0.125 of the picture's height;
+  seam `_extBackdropOver`, §3). The group keeps retail's bottom-centred rectangle (no safe-area inset) and,
+  ruled, the Options UI scale instead of retail's splash scale 900 / height (`LoadingUiScale`, in
+  `GameLoadDialogLoopT::Startup` and ext.load_progress's boot screen). The menus' see-through overlay
+  (`MainMenuBackground.png`), which the menus draw a second time instead, cannot be borrowed: it belongs
+  to the menu loop and is freed before a loading screen draws. A loading screen is recognised at its first
+  layout by its `loadingImage` element (the Shining Rock splash has none and keeps retail's fit);
+  ext.load_progress's boot screen is the same dialog and gets the same fit.
 * **UI scale slider**: Options > User interface scale goes below retail's 75 %. On a screen wider than
   the menus' backdrop the minimum is the lowest scale at which both menus still fit as rows of
   squares (P8 round 4, owner's ruling): `UiScaleFloor` runs `PlanRows` for the pause menu (the menu
@@ -185,17 +190,29 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
     not over the game, so the draw order does the masking instead). `phone_menu.cpp` `Place` answers it
     only for the recorded main and pause menus (`BackdropLowerDraw`, `touch_math.h` `LowerBackdrop`:
     the picture's height kept, its bottom on the screen's bottom; nothing when it does not overhang the
-    bottom). Another dialog with a picture that has the same top / bottom borders (the loading screen) can
-    be answered the same way from `Place`. Row off: `Place` returns before this point (its row check);
+    bottom). It does not serve the loading screen: its picture is opaque, so a copy drawn UNDER it never
+    shows (that one uses `_extBackdropOver` below). Row off: `Place` returns before this point (its row check);
     faithful profile: the pointer is null and `Draw` never asks.
   * `TouchFrame` (`touch_fit.cpp`) sees every call first (row on or off): the P9 walk and the fitted UI
     scale. While the scale is fitted, the `width` / `height` every other handler gets at
     `kExtPlaceLayout` / `kExtPlaceAfterLayout` are the fitted layout size, and `rect` at
     `kExtPlaceLayout` is `{0, 0, width, height}` (Update computed its own before the loop).
+* `UI::UserInterface::_extBackdropOver` (P9, engine, null by default and under the faithful profile, set
+  by `Sync`): in `UserInterface::Draw`, just AFTER a dialog's backdrop is added. The hook gets the
+  backdrop's rectangle as drawn and may answer another rectangle and a clip `{x, y, w, h}` (layout units);
+  the same sprite is then drawn once more over the backdrop, before the dialog's elements, inside
+  `SpriteContext::SetScissor(clip)` and with the previous scissor restored after it (w <= 0: no clip). A
+  scissor change flushes the batch and forgets its sheet, so the draw binds the backdrop's sheet again on
+  both sides of the clipped draw (without that the clipped copy is silently dropped, which is likely what
+  the earlier scissored `kExtPlaceBackdropLower` build ran into). `loading_screen.cpp` `BackdropOver`
+  answers it for loading screens only (the picture's torn bottom border, above).
 * `MainMenuDialog::OnOpened` (`mainmenudialog.cpp`): `Ext::PhoneMenu::MenuOpened` records the menu's and
   the version line's dialog descriptions, and whether the menu is the pause menu (`game` set).
 * `OptionsDialog::OnOpened` (`optionsdialog.cpp`): `Ext::PhoneMenu::UiScaleSliderMinimum` after the
   platform hook.
+* `GameLoadDialogLoopT::Startup` (`splash_loop_stubs.cpp`, step 5) and ext.load_progress's `BootBegin`:
+  `Ext::PhoneMenu::LoadingUiScale` picks the splash UI's scale (P9: the Options UI scale with the row on,
+  retail's 900 / height otherwise).
 * `GameContainer::ApplyKeyMapToUI` (`optionsdialog.cpp`, every loop's start and Options' Apply):
   `Ext::PhoneMenu::ClampUiScale` on the settings' UI scale before it becomes `_uiScale` (round 4).
 
