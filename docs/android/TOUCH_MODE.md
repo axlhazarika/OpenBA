@@ -7,6 +7,13 @@ one bar along the bottom, to the right of that cluster, at its own scale: about 
 UI 40 on the S25. Panels, dialogs and tooltips keep the existing UI scale. Sketch: session scratchpad
 `android-touch/mobile_layout_sketch.png`. Phase 1 is this design only; nothing here is built yet.
 
+**Rulings (owner, 2026-10-26).** (1) The per-dialog scale seam in the engine (§2: the null-by-default
+`UI::UserInterface::_extDialogScale`, null in the faithful profile) is RULED; the enlarge-in-place
+alternative is dropped. (2) The toolbar scale is capped at the requested value, then SHRUNK TO FIT beside
+the control cluster (about 1.48x on the S25, §3): RULED; the stacked full-width 2x layout is dropped.
+(3) The right-hand strip above the bottom bar is reserved for the later `touch_pointer` action bar, and
+the camera hooks stay callable from it (§4, §8).
+
 ## 1. Retail mechanisms this hooks
 
 | What | Where | Fact the design relies on |
@@ -71,12 +78,9 @@ and touches no game code:
   ring's dialog can be identified cheaply; otherwise it becomes a known_port_issues row (tutorial plus
   touch mode only).
 
-**Rejected alternative (for a ruling if the seam is unwanted).** Reshape the toolbar instance in one unit
-space, as ext.phone_menu reshapes the menu buttons: min sizes, padding and `ImageElement::SetWidthHeight`
-multiplied by k. That needs no engine seam, and retail's relative placement (sub-toolbar, ribbon, tutorial)
-works unchanged. Against it: text and frame borders do not scale (the speed label stays small), every
-element type needs its own rule, and a later element with its own scale would repeat the work. The engine
-seam is about 30 lines in two engine files with one null test per point on the faithful path.
+**Dropped (ruling 1).** Reshaping the toolbar instance in one unit space (min sizes, padding and
+`ImageElement::SetWidthHeight` times k, as ext.phone_menu reshapes the menu buttons) needs no engine seam,
+but text and frame borders would not scale and every element type would need its own rule.
 
 ## 3. The control cluster: layout in the safe area
 
@@ -115,9 +119,8 @@ render scale.
 about 447 x 51 units: 1065 x 120 device px, 10 buttons. At UI 40 that is 1118 x 128 px, so 2x would be
 2236 x 256 px. That is the whole safe width (2242 px), and it does not fit beside the cluster. The fit
 gives `k = 1652 / 1118 = 1.48`: a 1652 x 189 px bar with buttons about 140 px (8.5 mm) square. The owner's
-sketch draws the bar at about 63 % of the width, roughly 1.3x. **Ruling needed:** keep "fit beside the
-cluster" (recommended, and what the sketch shows), or put 2x first and let the bar run full width with the
-cluster stacked above its left end. Phase 2 confirms the 447 units from the log.
+sketch draws the bar at about 63 % of the width, roughly 1.3x. **RULED (2026-10-26):** k is the
+requested scale, shrunk to fit beside the cluster; the stacked full-width 2x layout is dropped. Phase 2 confirms the 447 units from the log.
 
 **Sub-toolbars** open above the bar at the same k, clamped into the bar region (§2). The cluster's top is at
 y = 557, and a sub-toolbar sits at about y 650..840. They overlap only if a group is wider than the bar
@@ -153,6 +156,16 @@ if (Ext::Ext().touch_mode || Ext::TouchMode::Shown())
   the toolbar root is hidden (ToggleAll). It is not opened in the front end.
 - One pointer only: SDL's mouse emulation carries one touch, so pan and zoom cannot be held together. The
   follow-ups (§8) record this.
+- **Callable from `touch_pointer`** (§8). The camera hold is a source-tagged input, not private state:
+  `struct CameraHold { int8_t panX, panY; int8_t rotate; int8_t zoom; float zoomSteps; }` and
+  `Ext::TouchMode::Hold(Source, const CameraHold&)` with `Source::Pad` (this row's cluster) and
+  `Source::Fingers` (the later extension: two-finger pan, pinch as `zoomSteps`, two-finger spin as
+  `rotate`). `CameraInput` applies the hold of the source that changed last (last device wins); a real
+  mouse or key input is never overridden, it simply keeps working through retail's lines. The hold API
+  works with this row's cluster hidden, so `touch_pointer` does not depend on the D-pad being shown.
+- **Reserved strip.** Nothing of this row is placed in the right-hand strip above the bar, where
+  `touch_pointer`'s action bar (Place / Rotate / Flip / Cancel) will sit. `Ext::TouchMode::BarRect()` and
+  `SubToolbarRect()` (global units) are exported so that bar can sit above whichever is higher.
 
 ## 5. Settings rows
 
@@ -222,12 +235,22 @@ if (Ext::Ext().touch_mode || Ext::TouchMode::Shown())
 - Screencaps at render scale Full / UI 40 and at Half.
 - `adb shell input swipe x y x y 1500` on each D-pad arm, rotate and zoom (a 1.5 s held touch), with
   screencaps before and after.
-- `input tap` on a category button: the sub-toolbar opens.
+- A 200 ms `input swipe` on one spot over a category button (an `input tap` is shorter than a frame and
+  the polled mouse misses it, `docs/reference/android_mouse.md`): the sub-toolbar opens.
 - A tap in the game view still selects and places.
 - A real mouse middle-drag still rotates.
 - Build / unit counts recorded; the DX11 gate and resave stay the coordinator's.
 
 ## 8. Follow-ups (the owner's thoughts, NOT ruled; not built)
+
+- **`touch_pointer` (a later class A extension, not this row's work;
+  `docs/android/TOUCH_PLACEMENT_IDEAS.md`).** It reads SDL finger events. One finger aims while a tool is
+  active, two fingers pan, a pinch zooms, a two-finger spin rotates. Between the finger, the KVM mouse and
+  this row's D-pad, the last device wins. Its action bar sits on the RIGHT side above the bottom toolbar.
+  This row keeps that strip free (§4 "Reserved strip"), exports `BarRect` / `SubToolbarRect`, and its
+  camera hold (`Hold(Source::Fingers, ...)`, §4) is the entry point that extension calls for pan, zoom
+  and rotate. The ideas below that it covers (place-then-confirm, pick radius, multi-touch) are tracked
+  there.
 
 - **Place-then-confirm** for buildings and roads: the ghost follows the finger, and an on-screen tick /
   cross confirms or cancels. Hooks: the build and road tools' `OnKey` / `Update` (`src/game/Player/`),
