@@ -108,10 +108,56 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
   row (DESIGN.md §2), on for the phone by its first-run settings and available to a desktop player
   with a small high-resolution screen.
 
+* **P9: the game's dialogs for a finger** (owner's rulings 2026-10-26, `src/ext/phone_menu/touch_fit.cpp`,
+  arithmetic `touch_math.cpp`, session log `docs/android/P9_DIALOGS.md`). Done once a frame per
+  UserInterface, on its first dialog's `kExtPlaceLayout` call, over every open dialog's element tree:
+  * **Scroll bars 4x thicker** (`kScrollBarFactor`). Retail's bar (`UI::ScrollElement`) is as thick as its
+    track sprite (12 units for `SharedElements.rsc:verticalScrollbar`); the scrolling list
+    (`UI::ContainerElement`) gives it its padded width raised to its `_minWidth`, and the clip region the
+    rest of the requested width. The row sets the bar's `_minWidth` (`_minHeight` for a bottom bar) to 4x
+    the sprite and its stretch flag (`Element::_flags` bit 2 / 3), and grows the container's requested
+    width (height) by what the bar gained, so the rows keep their width (`Mod.rsc`'s rows are
+    `_minWidth = 580`, the clip's width exactly). 48 units = 120 device pixels on the S25 at UI 40.
+  * **Close buttons twice the size** (`kCloseButtonFactor`): an element named `buttonClose`
+    (`StandardDialog.rsc`'s title bar: a 20-unit button around a 16-unit `ImageElement`) gets its icon's
+    `_width` / `_height` set to twice the sprite; the button, its frame and the title bar grow around it.
+  * **A dialog larger than the safe area is shown whole.** Retail lays a too-tall dialog out with its
+    bottom on the screen's (`DialogInstance::ComputeLayout`), so the Options dialog (437 x 427 units)
+    lost its tab row below UI 45 at render scale Full (a 432-unit-high layout at UI 40). Its tallest page,
+    Video, is a plain ribbon with no scrolling list (`graphicsOptions`, 327 units), so capping the lists
+    cannot give the height back. Instead, while such a dialog is open, its UserInterface is laid out and
+    drawn at the lowest UI scale (in whole percent) at which every open window fits the safe area
+    (`FitScale`); the player's own scale comes back when it closes. Options at UI 40 on the S25 shows at
+    44 %, the Fixes and Extensions dialog at 52 %. A "window" is a dialog with a description, shown, with
+    no full-screen backdrop and a root not sized to the screen (the menus, the loading screen, combo
+    drop-downs and tooltips are not windows). One `[PhoneMenu] UI ...: a dialog larger than the safe
+    area, laid out at UI scale ...` line each time the fit changes, and `back to the player's UI scale`.
+    A value the Options slider applies while the fit is in force becomes the player's scale and shows once
+    the dialog closes.
+  * **Undone from the description.** Each change is on the element instance; with the row switched off the
+    next frames walk the open dialogs and put back the values of the element's own description
+    (`Element::_description`, the values `ElementDescription::CreateInstance` copied: the scroll bar's
+    `_minWidth` / `_minHeight` and stretch bits, the icon's `ImageDescription::_width` / `_height`), the
+    container's requested size by the same amount it grew, and the UI scale. An element built without a
+    description is never changed.
+* **The menus' backdrop's bottom border** (P9, the owner: "the black fringe image is missing"). `LogoTop`
+  keeps the 16:9 picture's top on the screen's top, so on a 19.5:9 screen its bottom border (the dark torn
+  edge, the last tenth or so of the picture) fell 94 units below a 432-unit layout. The picture is now
+  drawn twice for the main and pause menus: an extra copy with its BOTTOM on the screen's bottom
+  (`LowerBackdrop`), drawn BEFORE retail's (moved) draw, whose opaque top border then covers what the
+  extra copy has above (the lower edge of a second logo) while its transparent middle lets the extra
+  copy's bottom border through. Both borders are at the menu picture's own scale.
+* **The version line in that border** (the owner, P9: "the version text could be farther down to be all
+  in the black area"): with the bottom border drawn (a screen wider than the backdrop) the version line's
+  rectangle is the safe area with its bottom on the screen's bottom edge (`LowVersionLayout`; a landscape
+  phone's rounded corners and camera cut-out are not under the middle of the bottom edge, where the
+  centred line is), and the rows' band ends above it (`LowVersionTop`). The UI scale floor still uses the
+  higher placement (conservative).
+
 ## 3. The seams
 
 * `UI::UserInterface::_extDialogPlace` (engine, null by default and under the faithful profile, set by
-  `Ext::PhoneMenu::Sync` at boot): one function pointer, three call points.
+  `Ext::PhoneMenu::Sync` at boot): one function pointer, four call points.
   * `kExtPlaceLayout` in `UserInterface::Update` (`userinterface_frame.cpp`): the rectangle each dialog
     is laid out in (`ComputeLayout(x, y, right, bottom)`), retail's `{0, 0, w, h}` unless the row moves
     a recorded menu dialog or puts another dialog in its safe area. With the pointer null the loop is retail's line.
@@ -119,6 +165,21 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
     second row of squares is moved into place.
   * `kExtPlaceBackdrop` in `UserInterface::Draw` (`userinterface_draw.cpp`): the backdrop rectangle after
     retail's cover fit.
+  * `kExtPlaceBackdropLower` (P9) in `UserInterface::Draw`, just BEFORE a dialog's backdrop is drawn,
+    after `kExtPlaceBackdrop`: `rect` holds the backdrop's rectangle as it will be drawn (four ints). If
+    the hook answers a different, non-empty rectangle, the same sprite (same sheet, index and tint) is
+    drawn there first, under retail's draw; an unchanged or empty answer draws nothing extra. No scissor
+    (an earlier build scissored the extra copy to the screen's lower half: it showed in the front end but
+    not over the game, so the draw order does the masking instead). `phone_menu.cpp` `Place` answers it
+    only for the recorded main and pause menus (`BackdropLowerDraw`, `touch_math.h` `LowerBackdrop`:
+    the picture's height kept, its bottom on the screen's bottom; nothing when it does not overhang the
+    bottom). Another dialog with a picture that has the same top / bottom borders (the loading screen) can
+    be answered the same way from `Place`. Row off: `Place` returns before this point (its row check);
+    faithful profile: the pointer is null and `Draw` never asks.
+  * `TouchFrame` (`touch_fit.cpp`) sees every call first (row on or off): the P9 walk and the fitted UI
+    scale. While the scale is fitted, the `width` / `height` every other handler gets at
+    `kExtPlaceLayout` / `kExtPlaceAfterLayout` are the fitted layout size, and `rect` at
+    `kExtPlaceLayout` is `{0, 0, width, height}` (Update computed its own before the loop).
 * `MainMenuDialog::OnOpened` (`mainmenudialog.cpp`): `Ext::PhoneMenu::MenuOpened` records the menu's and
   the version line's dialog descriptions, and whether the menu is the pause menu (`game` set).
 * `OptionsDialog::OnOpened` (`optionsdialog.cpp`): `Ext::PhoneMenu::UiScaleSliderMinimum` after the
@@ -191,9 +252,10 @@ right-aligned on the safe edge, the Town panel opened at the safe top-left corne
 |---|---|
 | `src/ext/phone_menu/phone_math.{h,cpp}` | the pure decisions (unit-tested) |
 | `src/ext/phone_menu/phone_menu.{h,cpp}` | the hook, the recorded dialogs, the slider minimum |
+| `src/ext/phone_menu/touch_math.{h,cpp}`, `touch_fit.{h,cpp}` | P9: scroll bars, close buttons, the fitted UI scale, the backdrop's extra draw, the low version line |
 | `src/engine/ui/UserInterface.h`, `userinterface_frame.cpp`, `userinterface_draw.cpp` | the seam |
 | `src/game/Dialog/mainmenudialog.cpp`, `optionsdialog.cpp` | the two game seams |
 | `src/ext/sharp_ui/sharp_math.{h,cpp}` | §4 |
 | `src/ext/registry.{h,cpp}`, `registry_boot.cpp` | the row (class A, default off), `Sync` |
 | `src/platform/android/app_android.cpp` | `ext.phone_menu=1` in the first-run settings |
-| `tests/unit/ext_phone_menu_test.cpp`, `ext_registry_test.cpp`, `ext_sharp_ui_test.cpp`, `sources.cmake` | tests |
+| `tests/unit/ext_phone_menu_test.cpp`, `ext_phone_touch_test.cpp`, `ext_registry_test.cpp`, `ext_sharp_ui_test.cpp`, `sources.cmake` | tests |

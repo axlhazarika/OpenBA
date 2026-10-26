@@ -120,6 +120,12 @@ User interface scale goes down to 25 % (the UI four times larger than 100 %;
 `docs/extensions/handins/PHONEMENU.md`). The first-run UI scale is the game's own
 100. Options changes are kept as anywhere else.
 
+**Dialogs for a finger** (P9, same row). Scroll bars are four times thicker, dialog close buttons twice
+the size, a dialog larger than the safe area (Options and Fixes and Extensions below about UI 45 at render
+scale Full) is shown whole at a fitted UI scale while it is open, and the main and pause menus show the
+backdrop's bottom border with the version line inside it (`docs/extensions/handins/PHONEMENU.md` §2,
+`docs/android/P9_DIALOGS.md`).
+
 **Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
 window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
 1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key at window creation; since P8
