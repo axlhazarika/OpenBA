@@ -1000,11 +1000,12 @@ purpose or not yet closed, as of P6 (2026-10-25).
   the shadow map's depth-only pass draws with pixel shaders that write `SV_Target` into no colour
   attachment (a validation warning, not an error), exactly as D3D11 binds a null render target. The
   Galaxy S25 run is validation-clean of errors since P7 (`docs/android/P7_FIRST_PASS.md` §A).
-- **AO on the tiler MSAA path (P4).** `ext.ambient_occlusion` does not run when the main targets use
-  `VK_EXT_multisampled_render_to_single_sampled` (`caps.msrtss`): the depth is never stored
-  multisampled there, so there is nothing to resolve. The pass is skipped and logged once. Desktop
-  GPUs take the resolve-attachment path, where AO runs. On the S25 (P7) both MSAA and AO are off by the
-  phone defaults, so the case does not arise there; AO with tiler MSAA stays unanswered.
+- **AO on the tiler MSAA path (P4): FIXED (P8 round 3, owner ruling).** On
+  `VK_EXT_multisampled_render_to_single_sampled` (`caps.msrtss`) the main depth image is single-sampled:
+  every main pass stores it through the implicit resolve (`SAMPLE_ZERO`), and the depth discard is off
+  while AO asks for a readable depth. The AO pass reads that depth through ASSAO's non-MSAA resolve
+  (`PSResolveDepth1x`); its apply runs in a main pass at the MSAA count. Verified on the S25 at MSAA 2x
+  with AO on: validation clean of errors, the AO visible (`docs/android/P8_VULKAN.md` §7.1).
 - **Update on a shared or BC4 image (P4).** `ImageBufferData::Update` answers false for an image that
   ext.share_gpu_data shares or ext.compress_ao made BC4 (the Metal backend's rule). D3D11 refuses the
   write to its IMMUTABLE texture without reporting it. No engine route updates a seeded texture.

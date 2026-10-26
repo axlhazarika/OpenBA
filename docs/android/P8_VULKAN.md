@@ -338,9 +338,76 @@ conversion is ruled out too: the pair census shows t5+s5 (the sun map's slot) co
    - camera moved the same way.
 4. The time of day and weather (the sun direction changes the snap grid's orientation through the day).
 
+## 7. Round 3: two owner rulings
+
+### 7.1 AO on the tiler MSAA path: BUILT (`359c1c379`)
+
+**The change.**
+- `assao_pass.cpp`: the msrtss case is no longer skipped. The depth resolve picks `PSResolveDepth1x`
+  when `t.msrtss` (the main depth image is single-sampled there), `PSResolveDepthMs` only for a real
+  multisampled depth. The apply's pipeline is made at the MSAA count, as every main pass on that path.
+- `draw.cpp` `DrawAoBegin`: on msrtss a memory barrier from the colour-output stage (where an implicit
+  resolve writes) to the AO pass's fragment reads, before the depth's move to `SHADER_READ_ONLY`.
+
+**Checked on the way.**
+- (a) Stored with a resolve mode: `BeginPass` already gives every msrtss pass's depth and stencil
+  `SAMPLE_ZERO` with `STORE`. Nothing was `DONT_CARE` except through the depth discard.
+- (b) The depth discard: `MainDepthPass(loads, allowed = !g_readableRequested)`. With AO on, the frame
+  lines read `depth 0/3 discarded` (none).
+- (c) The depth view: `DrawAoBegin` hands the `depthSampled` view (depth aspect) of the single-sampled
+  image, in `SHADER_READ_ONLY`. The next main pass loads it back.
+
+**Verified on the S25** (debug apk of `359c1c379`, seeded autostart, camera pinned on the town).
+- Validation on, MSAA 2x + AO Low, 90 s: no validation error. The only message is the known shadow-pass
+  warning (a depth-only pass whose pixel shader writes `SV_Target`), present since P7.
+- The log: `the main target uses the tiler's MSAA ...: the AO pass reads its single-sampled depth
+  (sample 0) as the non-MSAA path`, then `first AO frame 2340x1080 x2`.
+- Screenshots, AO High, render scale 100, the same pin: MSAA 0 off / on and MSAA 2x off / on. AO
+  darkens the building bases and the ground under the stockpile the same way at 0x and 2x. The mean
+  luminance of the town crop drops 2.6 (0x) and 3.8 (2x) levels with AO on. The screenshots are not
+  in the tree.
+
+**GPU cost** (render scale 50, MSAA 2x, town pinned, the frame cap at 60, two alternated runs of each,
+40 one-second kgsl samples after 50 s; machine load: other agents building on the PC):
+
+| | GPU busy | GPU clock |
+|---|---|---|
+| MSAA 2x | 65.3 %, 65.0 % | 160, 162 MHz |
+| MSAA 2x + AO Low | 78.0 %, 77.7 % | 166, 165 MHz |
+
+The governor stays at its lowest step in both. At 60 fps, 12.7 points of busy are about 2.1 ms of GPU time
+a frame at that clock.
+
+**The Enhanced AO rows** stay enabled on this path. They show disabled only when the driver refuses an
+AO pipeline (§6.1).
+
+### 7.2 Texture filter: "(next start)" on the choices (`6728bebee`)
+
+- Retail's Options > Video "Texture Filtering" combo writes `Video::Configuration::textureFilter`. Both
+  backends read it when a texture is created, so a new choice reaches the game's textures at the next
+  start (§6.2).
+- `src/ext/enhanced_tab/texture_filter_note.cpp`, called at the end of `OptionsDialog::PopulateFilterCombo`
+  (an `EXT SEAM`). Every choice other than the filter the textures were made with gets the suffix
+  `(next start)`, as the Enhanced tab's own `On (next start)` / `Half (next start)` items.
+- The suffix is ours: `NextStartSuffix` in `Dialog/ExtensionsStringTable.rsc`. Retail's string table is
+  not edited.
+- **The owner.** No extension changed retail's Options text before this. The note rides on the Enhanced
+  tab's host (`Ext::EnhancedTab::Offered()`: everywhere except `/profile:faithful`), the extension
+  that owns the Options dialog's additions.
+- The filter "in effect" is the configuration's value at the first Options open. Only this dialog's Apply
+  changes it, and a later Apply does not change the textures already made.
+- Trace: `[EnhancedTab] Texture Filter: N of M choices marked "(next start)" (textures made with filter F)`.
+
+**Verified on Windows DX11** (debug build, functional game dir, Options > Video):
+- The closed combo reads `Anisotropic 4x`, the filter in effect, with no suffix.
+- The trace reads `10 of 11 choices marked`.
+- A throwaway build that showed the last item reads `Anisotropic 16x (next start)`. The widest item
+  fits the 180-wide combo, its last letter at the drop arrow's edge (UI scale 100, 2560x1440).
+- Under `/profile:faithful` the combo is retail's and there is no trace.
+
 ## Phone state at the end
 
-- Installed: the DEBUG apk of `d38986100` (this branch, round 2; `adb install -r -d`).
+- Installed: the DEBUG apk of `359c1c379` (this branch, round 3; `adb install -r -d`).
 - Validation off.
 - The app stopped.
 - `settings.cfg`: the owner's own file, restored byte for byte from the copy taken before round 2 (`cmp`
