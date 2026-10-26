@@ -4,8 +4,8 @@
 // NOT RETAIL (docs/extensions/handins/TEXQUALITY.md). Retail creates every file-seeded texture from
 // all the mip levels its resource file holds. With the row on, a texture that qualifies (2D,
 // mipmapped, at least 512 x 512, render/common/texture_quality/texture_quality.h has the rule) is
-// created without its ext.texture_quality_drop largest levels (the key takes 0 = Full or 1 = Half; the
-// code takes any drop N, Quarter was removed from the key by the user's ruling): a quarter of the memory, the dropped levels' bytes never decoded where the stream can skip them. The game's
+// created without its ext.texture_quality_drop (1 or 2) largest levels: a quarter (or a sixteenth) of
+// the memory, the dropped levels' bytes never decoded where the stream can skip them. The game's
 // image (its size, flags, the save) is unchanged; only the GPU texture and its sampler differ.
 //
 // WHERE IT RUNS.

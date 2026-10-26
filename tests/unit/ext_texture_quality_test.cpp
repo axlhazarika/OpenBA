@@ -112,14 +112,13 @@ UNIT_TEST(ext_texture_quality_drop_key) {
     if (k == nullptr) return;
     CHECK_STREQ(k->owner, "texture_quality");
     CHECK_EQ(k->minValue, 0);
-    CHECK_EQ(k->maxValue, 1);       // Full / Half: Quarter (2) removed by the user's ruling
+    CHECK_EQ(k->maxValue, 2);
     CHECK_EQ(k->defaultValue, 0);   // Full: the row or profile=all alone drops nothing (the user's ruling)
-    CHECK(k->choices == nullptr);   // a range key: an older 2 clamps to 1, it does not fall back to 0
     CHECK_EQ(Ext::Values{}.texture_quality_drop, 0);
     CHECK_EQ(Resolved("").val.texture_quality_drop, 0);
     CHECK_EQ(Resolved("ext.texture_quality_drop=1\n").val.texture_quality_drop, 1);
-    CHECK_EQ(Resolved("ext.texture_quality_drop=2\n").val.texture_quality_drop, 1);    // an older Quarter: Half
-    CHECK_EQ(Resolved("ext.texture_quality_drop=7\n").val.texture_quality_drop, 1);    // clamped
+    CHECK_EQ(Resolved("ext.texture_quality_drop=2\n").val.texture_quality_drop, 2);
+    CHECK_EQ(Resolved("ext.texture_quality_drop=7\n").val.texture_quality_drop, 2);    // clamped
     CHECK_EQ(Resolved("ext.texture_quality_drop=-1\n").val.texture_quality_drop, 0);   // clamped
     CHECK_EQ(Resolved("ext.texture_quality_drop=x\n").val.texture_quality_drop, 0);    // malformed: default
     // profile=all turns the row on and leaves the key at its default: Full.

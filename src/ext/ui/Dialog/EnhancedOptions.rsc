@@ -117,15 +117,15 @@ ButtonDescription buttonEnhanced : "Options.rsc:buttonGame"
 	ElementDescription _content = "labelEnhanced";
 }
 
-// Texture quality (TEXQUALITY): 0 = the bool row ext.texture_quality off (every level, retail), 1 = on
-// with ext.texture_quality_drop 1 (seen after the next start). Full and Half only: Quarter was removed by
-// the user's ruling (too blurry).
+// Texture quality (TEXQUALITY): 0 = the bool row ext.texture_quality off (every level, retail), 1 / 2 =
+// on with ext.texture_quality_drop 1 / 2 (seen after the next start).
 StringTable textureQualityItems
 {
 	Entry _strings
 	[
 		{ String _name = "Item0";		String _text = "Full";					}
 		{ String _name = "Item1";		String _text = "Half (next start)";		}
+		{ String _name = "Item2";		String _text = "Quarter (next start)";	}
 	]
 }
 

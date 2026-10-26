@@ -164,9 +164,9 @@ UNIT_TEST(ext_rsc_text_parse_enhanced_and_strings) {
           page->body.Find("_content")->tokens[0].text == "enhancedOptionsTable");
     const Object* table = e.Find("enhancedOptionsTable");
     CHECK(table && table->body.Find("_items") && table->body.Find("_items")->blocks.size() == 21);   // ten labels, eleven controls (COMPRESSAO: the cache size and, under it, its button; TEXQUALITY: texture quality; P8: render scale, frame rate cap; TOUCHMODE: touch controls)
-    // TEXQUALITY: the Texture quality combo offers Full / Half only (Quarter removed by the user's ruling).
+    // TEXQUALITY: the Texture quality combo offers Full / Half / Quarter (Quarter restored in this fork).
     const Object* tqItems = e.Find("textureQualityItems");
-    CHECK(tqItems && tqItems->body.Find("_strings") && tqItems->body.Find("_strings")->blocks.size() == 2);
+    CHECK(tqItems && tqItems->body.Find("_strings") && tqItems->body.Find("_strings")->blocks.size() == 3);
     const Object* opt = e.Find("textAoOption");
     CHECK(opt && opt->body.Find("_color") && opt->body.Find("_color")->tokens[0].text == "0xFFC0C0C0");
 

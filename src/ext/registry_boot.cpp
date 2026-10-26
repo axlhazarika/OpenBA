@@ -339,9 +339,8 @@ int32_t TextureQualityChoice() {
 int32_t SetTextureQualityAndRecord(int32_t drop) {
     const Entry& row = *FindEntry("texture_quality");
     const ValueKey& key = *FindValueKey("texture_quality_drop");
-    if (drop > 0) {
-        const int32_t stored = ClampValue(key, drop);   // 0..1: Quarter was removed by ruling
-        if (Value(key) != stored) SetValueAndRecord(key, stored);
+    if (drop == 1 || drop == 2) {
+        if (Value(key) != drop) SetValueAndRecord(key, drop);
         if (!Requested(row)) SetAndRecord(row, true);
     } else if (Requested(row)) {
         SetAndRecord(row, false);
