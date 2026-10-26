@@ -24,6 +24,7 @@
 #include "ext/menu_entry/menu_entry.h"             // ext.menu_entry: the mod scan and remount seams
 #include "ext/phone_menu/phone_menu.h"             // ext.phone_menu: the menu safe area and backdrop seam
 #include "ext/fps_cap/fps_cap.h"                     // ext.fps_cap: the frame limiter's settings cap
+#include "ext/touch_mode/touch_mode.h"               // ext.touch_mode: the UserInterface::_extDialogScale seam
 #include "ext/decode_ahead/decode_ahead.h"       // ext.decode_ahead: the CompressedStream decode seam
 #include "ext/async_gpu_create/async_gpu_create.h"   // ext.async_gpu_create: the backend's request follows the toggle
 #include "ext/compress_ao/compress_ao.h"   // ext.compress_ao: the backend's request + the derived cache, at boot
@@ -170,6 +171,8 @@ void InitFromSettings() {
     Ext::PhoneMenu::KeepVSyncOnFixedSurface();
     // ext.fps_cap (class A, live): the frame limiter's settings cap (src/app/frame_limiter.h).
     Ext::FpsCap::Sync();
+    // ext.touch_mode (class A, live): the UI::UserInterface::_extDialogScale seam (TOUCH_MODE.md).
+    Ext::TouchMode::Sync();
     // ext.ambient_occlusion (class A, live): the main depth's format + the per-frame arm.
     Ext::AmbientOcclusion::Sync();
     // ext.better_trees (class A, live): the VideoDX11::g_extFoliageAA seam + the mode, and the
@@ -363,6 +366,25 @@ int32_t SetFpsCapAndRecord(int32_t fps) {
         SetAndRecord(row, false);
     }
     return FpsCapChoice();
+}
+
+int32_t TouchModeChoice() {
+    const Entry* row = FindEntry("touch_mode");
+    const ValueKey* scale = FindValueKey("touch_mode_toolbar_scale");
+    return Requested(*row) ? Value(*scale) : 0;
+}
+
+int32_t SetTouchModeAndRecord(int32_t percent) {
+    const Entry& row = *FindEntry("touch_mode");
+    const ValueKey& key = *FindValueKey("touch_mode_toolbar_scale");
+    if (percent > 0) {
+        const int32_t stored = ClampValue(key, percent);   // one of 100 .. 200 in steps of 25, else 200
+        if (Value(key) != stored) SetValueAndRecord(key, stored);
+        if (!Requested(row)) SetAndRecord(row, true);
+    } else if (Requested(row)) {
+        SetAndRecord(row, false);
+    }
+    return TouchModeChoice();
 }
 
 void PersistSettings() {

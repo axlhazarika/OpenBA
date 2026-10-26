@@ -23,6 +23,7 @@
 #include "ext/phone_menu/phone_menu.h"
 #include "ext/phone_menu/phone_math.h"
 #include "ext/registry.h"
+#include "ext/touch_mode/touch_mode.h"   // ext.touch_mode places its dialogs first (docs/android/TOUCH_MODE.md)
 
 #include <atomic>
 #include <cstdio>
@@ -498,6 +499,7 @@ void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, 
 void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32_t height,
            int32_t* rect) {
     if (dialog == nullptr) return;
+    if (TouchMode::Place(point, dialog, width, height, rect)) return;   // ext.touch_mode first (TOUCH_MODE.md)
     if (!Ext().phone_menu) {
         // Switched off while a menu is open: its retail values back before retail lays it out.
         // (A recorded menu at that address went through MenuOpened, which forgets the old one.)
