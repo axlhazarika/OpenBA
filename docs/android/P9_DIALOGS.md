@@ -55,7 +55,7 @@ The Options dialog is 437 x 427 (dumped), Fixes and Extensions taller. Retail's
 went off the top (`opt_before0.png`; with the row off, `ext_rowoff0.png`).
 
 **The two options, and the choice.** (a) Cap the dialog to the safe height by shortening its scrolling
-lists. The Options tab element sizes itself to its TALLEST page (`TabElement::ComputeSize` 0x1800d9a..,
+lists. The Options tab element sizes itself to its TALLEST page (`TabElement::ComputeSize` 0x1800d9ea0,
 max over all pages, shown or not), and the pages are: Game, Input, Enhanced = scrolling containers 318
 high; Audio = a 120-unit table; **Video = a plain ribbon of two tables, 327 high, no scroll** (dumped
 `graphicsOptions` 413 x 327). Shortening the lists cannot move the dialog below Video's 327 units, and
