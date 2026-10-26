@@ -167,3 +167,33 @@ left with this branch's debug apk, stopped, and the owner's settings (UI 35).
 and UI 31 % (main menu): two rows of small-font squares no longer fit between the logo and the version
 line, and the column runs off the screen as retail's does at that scale. A third row or a smaller logo
 would be the next step if those scales matter (a ruling).
+
+## 8. Round 4 (owner rulings: small font kept, a UI scale floor, larger icons)
+
+**Small font at UI 35: accepted** as round 3 left it.
+
+**The UI scale floor: DONE (computed).** The ext's slider minimum is the lowest UI scale at which
+the pause menu (the menu with the most buttons) still fits as rows of squares on the current back
+buffer: `UiScaleFloor` runs the same `PlanRows` at every percent and rounds the first that fits UP to
+a multiple of 5. Computed rather than a constant because it follows the screen and the render scale:
+the S25 lands on 35 at render scale 100 (the rows fit from 33) and on 70 at render scale 50. The
+pause menu's measurements are fixed numbers (`PauseMenuMetrics`, its small-font size on retail's
+labels); a translated or modded label wider than "Achievements" would need them measured again. A
+lower `settings.cfg` value is raised at every loop's start (`GameContainer::ApplyKeyMapToUI`, the same
+path the game uses to apply the setting, so the boot of the phone and Options' Apply both pass it);
+the Options slider opens at the floor and stops there. On a screen narrower than the menus' backdrop
+(a 16:10 desktop) there is no floor and the minimum stays 25. Unit tests: the S25 at render scale
+100 and 50, a 16:10 screen, the rounding.
+
+**Larger icons: DONE.** The icon above each label takes about 0.45 of the square (`IconSide`), rounded
+down to a whole multiple of the 16-pixel sprite: 32 units in the S25's 78-unit squares at UI 35
+(91 device pixels; 46 before). They stay readable but show as enlarged pixel art beside the text
+(`r4_icons_crop.png`): the game has no larger icon art, and a whole multiple keeps the pixels even.
+Both menus still fit at UI 35: the main menu one row of 8, the pause menu two rows of 5.
+
+**Verified on the S25** (owner's settings, UI 35 at render scale 100): both menus after the change
+(`r4_p_menu35.png`, `r4_p_pause35.png`; before: `before_r3_p_menu35.png`, `before_r3_p_pause35.png`);
+a `settings.cfg` at 25 boots at 35 (`[PhoneMenu] UI scale 25 % raised to 35 %`) and Options shows the
+slider at 35, its minimum (`r4_p_options_clamped.png`). Screenshots: the session scratchpad's
+`android-ui-fit/round4/`. Unit 1492 / 0 / 1 skipped. The phone was left with this branch's debug apk,
+stopped, and the owner's settings (UI 35).

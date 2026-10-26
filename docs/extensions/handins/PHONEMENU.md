@@ -58,10 +58,17 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
   pixels per unit) both menus use the small font, 78-unit squares = 223 device pixels (about 14 mm): the
   main menu one row of 8, the pause menu two rows of 5. At the seeded UI 100 / render scale 50 (1170 x
   540, 2 px per unit) both are one own-font row: main menu 108 units = 216 px (the 0.22 cap), pause menu
-  104 units = 208 px. The column comes back on the S25 (render scale 100) below about UI 33 % for the
-  pause menu and below about UI 31 % for the main menu: there even two rows of small-font squares
-  (2 x 82 + 18 units) are taller than the band between the logo and the version line (126 units at
-  UI 25), and the column then runs off the screen as retail's does at that scale.
+  104 units = 208 px. Below about UI 33 % (the pause menu) and UI 31 % (the main menu) on the S25 at
+  render scale 100 even two rows of small-font squares (2 x 82 + 18 units) are taller than the band
+  between the logo and the version line (126 units at UI 25), and the column would run off the
+  screen: since P8 round 4 the UI scale cannot go there (the slider's floor, below).
+  The icon above each label is drawn larger (round 4, the owner: "the icons could be a bit larger in
+  mobile mode"): about 0.45 of the square's side (`IconSide`), the text and the 5-unit inset still
+  inside the square, rounded down to a whole multiple of the sprite's size. The icons are 16-pixel
+  sprites: in a 78-unit square (the S25 at UI 35) they are 32 units (twice the sprite), 91 device
+  pixels, against 46 at their own size; a whole multiple keeps every sprite pixel the same size, so
+  the edges stay even, but the icons read as enlarged pixel art next to the rasterised text (no
+  sharper source exists in the game's data).
 * **Centred layout** (any other screen and any screen where the rows do not fit). Retail's cover fit;
   the menu and the version line are laid out inside the safe area; the column is centred between the
   logo's bottom (0.22 of the overlay) and the version line when it fits there, else above the version
@@ -83,9 +90,19 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
   `EventNotify.rsc` (bottom-right), `AutoSave.rsc` (top-left); front end: `ShiningRock.rsc`,
   `Loading.rsc`, `NewGame.rsc`. Known effect: a panel dragged out of the corner moves once the cursor
   has passed the margin (`docs/known_port_issues.md` row 1336).
-* **UI scale slider**: Options > User interface scale goes down to 25 % instead of 75 %.
-  `_uiScale = percent / 100` is layout units per device pixel, so 25 % draws the UI four times larger
-  than 100 %. The platform hook `Platform::Display::UiScaleSliderRange` stays what it is (a density
+* **UI scale slider**: Options > User interface scale goes below retail's 75 %. On a screen wider than
+  the menus' backdrop the minimum is the lowest scale at which both menus still fit as rows of
+  squares (P8 round 4, owner's ruling): `UiScaleFloor` runs `PlanRows` for the pause menu (the menu
+  with the most buttons; `PauseMenuMetrics`, its small-font measurements) on the current back buffer
+  at every percent and rounds the first that fits UP to a multiple of 5. On the S25 that is 35 at
+  render scale 100 (the rows fit from 33) and 70 at render scale 50 (the layout is half the size).
+  It is computed, not a constant: it follows the screen and the render scale; it does not follow a
+  translation's label widths (the measurements are retail's English labels). A `settings.cfg` holding
+  less (written before the floor, or by hand) is raised at every loop's start
+  (`GameContainer::ApplyKeyMapToUI`, `Ext::PhoneMenu::ClampUiScale`, one `[PhoneMenu] UI scale ...
+  raised to ...` line), so the Options slider opens at the floor. On any other screen the minimum
+  stays 25 %. `_uiScale = percent / 100` is layout units per device pixel, so 25 % draws the UI four
+  times larger than 100 %. The platform hook `Platform::Display::UiScaleSliderRange` stays what it is (a density
   compensation that keeps retail's physical range on a high-density window; the identity on Android,
   whose window is not created high-density): a wider range is a feature retail lacks, so it is this
   row (DESIGN.md §2), on for the phone by its first-run settings and available to a desktop player
@@ -106,6 +123,8 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
   the version line's dialog descriptions, and whether the menu is the pause menu (`game` set).
 * `OptionsDialog::OnOpened` (`optionsdialog.cpp`): `Ext::PhoneMenu::UiScaleSliderMinimum` after the
   platform hook.
+* `GameContainer::ApplyKeyMapToUI` (`optionsdialog.cpp`, every loop's start and Options' Apply):
+  `Ext::PhoneMenu::ClampUiScale` on the settings' UI scale before it becomes `_uiScale` (round 4).
 
 The hooks read the row on every call (live). The menus' layout is decided from THIS frame's sizes: the
 hook sizes the menu's tree and the version line's (`ComputeSize`, which retail's `ComputeLayout` runs
