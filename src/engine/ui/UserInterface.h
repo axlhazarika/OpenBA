@@ -415,15 +415,24 @@ public:
     static const bool* _extFixScaleLayout;
 
     // EXT SEAM (NOT RETAIL, docs/extensions/handins/PHONEMENU.md; DESIGN.md hook rule 5): ext.phone_menu.
-    // Null by default (always under the faithful profile). One pointer, three call points:
+    // Null by default (always under the faithful profile). One pointer, four call points:
     //   kExtPlaceLayout      Update, before a dialog's ComputeLayout: `rect` holds {0, 0, w, h}
     //                        (retail's call) and may come back inset (a safe area);
     //   kExtPlaceAfterLayout Update, after that ComputeLayout (`rect` as laid out; ignored on
     //                        return): the ext may move elements of the laid-out tree;
     //   kExtPlaceBackdrop    Draw, after the backdrop's cover fit: `rect` holds retail's
     //                        {x1, y1, x2, y2} and may come back moved.
+    //   kExtPlaceBackdropLower Draw, just before the backdrop is drawn (P9): `rect` holds the
+    //                        backdrop's {x1, y1, x2, y2} (after kExtPlaceBackdrop); a different
+    //                        non-empty answer is drawn first, under it (the menus' backdrop's bottom
+    //                        border on a wide screen).
     // `width` / `height` are the layout-space screen. src/engine never includes src/ext.
-    enum : int32_t { kExtPlaceLayout = 0, kExtPlaceBackdrop = 1, kExtPlaceAfterLayout = 2 };
+    enum : int32_t {
+        kExtPlaceLayout = 0,
+        kExtPlaceBackdrop = 1,
+        kExtPlaceAfterLayout = 2,
+        kExtPlaceBackdropLower = 3
+    };
     static void (*_extDialogPlace)(int32_t point, const DialogInstance* dialog, int32_t width,
                                    int32_t height, int32_t* rect);
 

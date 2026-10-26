@@ -128,6 +128,12 @@ the screen, the spinner and "Loading..." in that border (P9). The first-run UI s
 100 in back-buffer pixels, stored in screen units: 50 at the seeded Half (P9, below). Options changes are
 kept as anywhere else.
 
+**Dialogs for a finger** (P9, same row). Scroll bars are four times thicker, dialog close buttons twice
+the size, a dialog larger than the safe area (Options and Fixes and Extensions below about UI 45 at render
+scale Full) is shown whole at a fitted UI scale while it is open, and the main and pause menus show the
+backdrop's bottom border with the version line inside it (`docs/extensions/handins/PHONEMENU.md` §2,
+`docs/android/P9_DIALOGS.md`).
+
 **Render scale** (P7). `VideoRenderScale=<percent>` (25..100) sizes the engine's back buffer against the
 window: the phone's 50 renders 1170x540 and the present pass scales it up (linear) while turning it into the
 1080x2340 swap-chain images. `Platform::Window::RenderScale` reads the key at window creation; since P8

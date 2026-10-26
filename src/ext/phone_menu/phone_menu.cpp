@@ -23,6 +23,8 @@
 #include "ext/phone_menu/phone_menu.h"
 #include "ext/phone_menu/phone_math.h"
 #include "ext/phone_menu/loading_screen.h"   // PlaceLoading (P9)
+#include "ext/phone_menu/touch_fit.h"
+#include "ext/phone_menu/touch_math.h"
 #include "ext/registry.h"
 
 #include <atomic>
@@ -60,6 +62,7 @@ std::atomic<const UI::Dialog*> g_buildIds[kMaxDialogs] = {};
 // after it). Main thread only.
 bool g_rowActive = false;
 bool g_versionAside = false;
+bool g_versionLow = false;    // P9: the backdrop's bottom border is drawn, the version line sits in it
 int32_t g_versionWidth = -1;
 
 void Record(std::atomic<const UI::Dialog*>* set, const UI::Dialog* dialog) {
@@ -472,7 +475,8 @@ void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, 
     int32_t versionW = -1;
     int32_t versionH = -1;
     VersionSize(dialog, versionW, versionH);
-    const int32_t versionTop = VersionTop(width, height, versionH);
+    g_versionLow = wide;
+    const int32_t versionTop = wide ? LowVersionTop(height, versionH) : VersionTop(width, height, versionH);
 
     // The rows on a screen wider than the backdrop, when they fit; retail's column otherwise. The
     // shape stays on the instance, so it is only decided again when the layout size changes.
@@ -501,6 +505,8 @@ void PlaceMenu(const UI::DialogInstance* dialog, int32_t width, int32_t height, 
 void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32_t height,
            int32_t* rect) {
     if (dialog == nullptr) return;
+    // P9: scroll bars, close buttons and a dialog larger than the safe area (touch_fit.h).
+    TouchFrame(point, dialog, width, height, rect);
     if (!Ext().phone_menu) {
         // Switched off while a menu is open: its retail values back before retail lays it out.
         // (A recorded menu at that address went through MenuOpened, which forgets the old one.)
@@ -525,6 +531,11 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         Store(LogoTop(Rect{rect[0], rect[1], rect[2], rect[3]}), rect);
         return;
     }
+    if (point == UI::UserInterface::kExtPlaceBackdropLower) {
+        // P9: the menus' backdrop's bottom border, drawn again at the screen's bottom (touch_fit.h).
+        if (menu || pause) BackdropLowerDraw(width, height, rect);
+        return;
+    }
     if (point == UI::UserInterface::kExtPlaceAfterLayout) {
         // A menu in two rows: its second row moved under the first.
         if ((menu || pause) && dialog == g_row.dialog && g_rowActive) WrapRows(width, height);
@@ -537,8 +548,11 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         return;
     }
     if (version) {
-        Store(g_versionAside ? VersionAsideLayout(width, height, g_versionWidth) : InsetLayout(width, height),
-              rect);
+        if (g_versionAside) {
+            Store(VersionAsideLayout(width, height, g_versionWidth), rect);
+            return;
+        }
+        Store(g_versionLow ? LowVersionLayout(width, height) : InsetLayout(width, height), rect);
         return;
     }
     // Every other dialog: the in-game HUD, its panels, tooltips, drop-downs and the front
@@ -566,6 +580,7 @@ void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause) {
     g_row = RowState();
     g_rowActive = false;
     g_versionAside = false;
+    g_versionLow = false;
     g_versionWidth = -1;
     std::fprintf(stderr, "[PhoneMenu] %s %p buildId %p recorded (row %s)\n", pause ? "pause menu" : "menu",
                  (const void*)menu, (const void*)buildId, Ext().phone_menu ? "on" : "off");
