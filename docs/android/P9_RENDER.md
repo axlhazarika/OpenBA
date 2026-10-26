@@ -93,3 +93,5 @@ ratio images on Windows match each other feature for feature.
 Evidence files (session scratchpad, not in the tree): the phone and Windows screenshots and ratio images
 (`phone_ao_on/off/on0`, `phone_half_on/off`, `phone_live1`, `live1_after`, `win_vk_on/off`, `win_dx_on/off`,
 `ratio_*.png`).
+
+**Ruled 2026-10-26 (owner):** AO stays identical to DX11 on every platform; no foliage fade. Closed.
