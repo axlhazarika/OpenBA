@@ -15,9 +15,9 @@
 //   * On a screen WIDER than the overlay (a 19.5:9 phone) retail's centred cover
 //     fit cuts the logo's top off. There the overlay is drawn with its top on
 //     the screen's top (LogoTop: the logo whole, centred at the top) and, when
-//     it fits, the menu's buttons become ONE HORIZONTAL ROW OF SQUARE BUTTONS
-//     across the middle of the safe area (FitSide, RowSide, RowFits), the
-//     version line centred at the bottom.
+//     it fits, the menu's buttons become a HORIZONTAL ROW OF SQUARE BUTTONS
+//     across the middle of the safe area, wrapped to two rows when one does not
+//     fit (PlanRows), the version line centred at the bottom.
 //   * Otherwise (a desktop's 16:9 or 16:10, or a row too wide for the screen)
 //     the overlay keeps retail's fit on a desktop and the column stays centred,
 //     kept inside the safe area and clear of the logo and the version line
@@ -92,32 +92,56 @@ int32_t LogoBottom(int32_t backdropHeight);
 
 // ---- the button row (a screen wider than the backdrop) ----------------------
 
-// The side the labels need: the largest of their padded widths and heights (`count` of each),
-// so every label fits inside its square. 0 when there is none.
+// The room kept between a label and its square's edge (layout units): the button frame's own
+// inset (MainMenu.rsc's `button*BorderPad` frames are padded 3 in from the button), so the
+// longest label ("Achievements") keeps 2 units of air inside the frame instead of touching it.
+constexpr int32_t kSquareInset = 5;
+
+// The side the labels need: the largest of their padded widths and heights (`count` of each)
+// plus kSquareInset on both sides, so every label fits inside its square's frame. 0 when there
+// is none.
 int32_t SquareSide(const int32_t* labelWidths, const int32_t* labelHeights, int32_t count);
 
-// The largest square side the row reaches as a fraction of the safe area's height: the squares
-// fill the row across the safe area up to this, so on a large screen they stay buttons, not
-// tiles. On the S25 it is about 216 device pixels (13 mm) at its seeded UI.
+// The largest square side as a fraction of the safe area's height: the squares fill the row
+// across the safe area up to this, so on a large screen they stay buttons, not tiles.
 constexpr float kRowSideFraction = 0.22f;
 
-// The square side that makes `count` squares fill the safe area's width, the row's other extent
-// (`fixedWidth`: the padding and gaps around and between the squares, padded as laid out) aside;
-// 0 when nothing fits.
-int32_t FitSide(int32_t width, int32_t height, int32_t fixedWidth, int32_t count);
+// The band the rows are centred in (their dialog's root is MidCenter, handed this rectangle):
+// the safe area below the logo (`logoBottom`) and kVersionGap above the version line
+// (`versionTop`); either < 0: unknown, the safe area's edge.
+Rect RowBand(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop);
 
-// The row's square side: as large as fits across (`fitSide`), but no larger than
-// kRowSideFraction of the safe area's height and never smaller than the labels need
-// (`contentSide`); 0 when the labels need more than fits (the caller tries a smaller font, then
-// the column).
-int32_t RowSide(int32_t contentSide, int32_t fitSide, int32_t height);
+// RowBand's height, the tallest the rows' dialog may be; 0 when there is no room.
+int32_t BlockHeight(int32_t width, int32_t height, int32_t logoBottom, int32_t versionTop);
 
-// The row's dialog (rowWidth x rowHeight, padded, as laid out) is centred in the safe area
-// (its root is MidCenter-aligned and handed InsetLayout); true when it fits there across, and
-// its top is at or below `logoBottom` (< 0: unknown) and its bottom kVersionGap above
-// `versionTop` (< 0: unknown). False sends the menu back to the column.
-bool RowFits(int32_t width, int32_t height, int32_t rowWidth, int32_t rowHeight, int32_t logoBottom,
-             int32_t versionTop);
+// What the row is made of, measured on the menu with its buttons `contentSide` square in ONE
+// row (all in layout units).
+struct RowMetrics {
+    int32_t count = 0;            // visible buttons
+    int32_t contentSide = 0;      // the side the labels need (SquareSide)
+    int32_t outerWidth = 0;       // the dialog's padded width less the buttons and the gaps between them
+    int32_t outerHeight = 0;      // the dialog's padded height less one row of buttons
+    int32_t buttonPadWidth = 0;   // a button's left + right padding
+    int32_t buttonPadHeight = 0;  // a button's top + bottom padding
+    int32_t spacing = 0;          // the gap between two squares, across a row and between the rows
+};
+
+// The dialog's padded size with `perRow` squares of `side` across and `rows` rows.
+int32_t RowsWidth(const RowMetrics& m, int32_t perRow, int32_t side);
+int32_t RowsHeight(const RowMetrics& m, int32_t rows, int32_t side);
+
+struct RowPlan {
+    int32_t rows = 0;     // 1 or 2; 0: no row fits (the caller tries the small font, then the column)
+    int32_t perRow = 0;   // squares on the first row: ceil(count / rows); the second has the rest
+    int32_t side = 0;     // the square side
+};
+
+// The row for a width x height screen. One row if it fits, else TWO rows (the first ceil(n / 2)
+// squares, the rest centred under them: a button added to the menu wraps, it never breaks the
+// layout). The side fills the safe width for the longer row, is capped by kRowSideFraction of the
+// safe height and by the band the rows must fit in between the logo and the version line
+// (BlockHeight), and is never smaller than the labels need. Nothing fits: rows 0.
+RowPlan PlanRows(int32_t width, int32_t height, const RowMetrics& m, int32_t logoBottom, int32_t versionTop);
 
 // ---- the centred column (any other screen, and the pause menu) ---------------
 
