@@ -20,30 +20,49 @@ the version line (`Dialog/BuildId.rsc`, bottom centre) are centred on the screen
 Measured on the installed overlay: the logo spans 0.330 .. 0.675 of the drawn width (centred on the
 overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
 
-* **Logo at the top, a row of square buttons** (a screen wider than the overlay; owner's ruling
-  2026-10-25, P8 round 2, which replaced the first "logo left, buttons right" layout). The overlay keeps
-  retail's width fit but its top goes on the screen's top (`LogoTop`), so the logo is whole and centred
-  at the top and the cut moves to the bottom border. The pause menu has the same backdrop and gets the
-  same treatment. A menu's button list (MainMenu.rsc `buttonList`; Pause.rsc's root; `RibbonElement`s
-  laid out top-to-bottom, `_vertical` 1) becomes one horizontal row: on the menu INSTANCE (the description
-  is not touched) the ribbon's `_vertical` is cleared, every button's `_minWidth` / `_minHeight` set to
-  one side, and each label centred (alignment 4) with its icon above its text (`LabelElement::_mode` 3,
-  `_align` 4) and no padding of its own (the square's frame is the margin). The side fills the row
-  across the safe area (`FitSide`) up to 0.22 of the safe height (`RowSide`), never less than the widest
-  label needs ("Achievements" decides it); when the labels do not fit in their own font they switch to
-  `Font/FontSmall.rsc` (the game's own small font), and when they still do not fit the menu goes back
-  to the centred column (retail's values restored). The buttons keep retail's art (the bordered button
-  frames are nine-sliced, so they draw at any size). The row's dialog is centred in the safe area and
-  must clear the logo and the version line (`RowFits`); the version line stays centred at the bottom.
-  `standalone_error.log` gets one `[PhoneMenu] <w>x<h>: button row | column (...)` line per decision.
-  Touch targets on the S25 (owner's settings, UI 35 at render scale 100: an 819 x 378 layout, 2.86
-  device pixels per unit): main menu 8 squares of 89 units = 254 device pixels (about 15 mm), labels
-  in their own font; pause menu 10 squares of 71 units = 203 device pixels (about 12 mm), small font.
-  At the seeded UI 100 / render scale 50 (1170 x 540, 2 px per unit) the squares reach the 0.22 cap,
-  108 units = 216 px. Below about UI 33 % (render scale 100) the pause menu's ten labels no longer fit
-  even in the small font and it falls back to the column (main menu: below about 27 %).
-* **Centred layout** (any other screen, a row that does not fit, and the pause menu, whose ten buttons
-  stay a column). Retail's cover fit;
+* **Logo at the top, the buttons as rows of squares** (a screen wider than the overlay; owner's rulings
+  2026-10-25: P8 round 2 replaced the first "logo left, buttons right" layout, round 3 made the row wrap
+  to two rows). The overlay keeps retail's width fit but its top goes on the screen's top (`LogoTop`),
+  so the logo is whole and centred at the top and the cut moves to the bottom border. The pause menu has
+  the same backdrop and gets the same treatment. A menu's button list (MainMenu.rsc `buttonList`;
+  Pause.rsc's root; `RibbonElement`s laid out top-to-bottom, `_vertical` 1) is reshaped on the menu
+  INSTANCE (the description is not touched): the ribbon's `_vertical` cleared, every button's
+  `_minWidth` / `_minHeight` set to one side, each label centred (alignment 4) with its icon above its
+  text (`LabelElement::_mode` 3, `_align` 4) and no padding of its own. `PlanRows` picks, in order:
+  1. one row in the labels' own font;
+  2. two rows in the labels' own font: the first ceil(n / 2) squares, the rest centred under them (an
+     even count splits in halves), so a button added to a menu wraps instead of breaking the layout
+     (unit-tested for n = 8, 9, 10, 11);
+  3. one row, then two rows, in `Font/FontSmall.rsc` (the game's own small font);
+  4. else retail's column (retail's values restored).
+  The small-font step stays (round 3 asked to pick): on the phone the logo takes the top quarter of the
+  screen, so two own-font rows need more height than the S25 has at its smaller UI scales (at UI 35,
+  two rows need 87 units down, 99 per square); without the step the pause menu would fall to the
+  column there.
+  The square side fills the safe width for the longer row, is capped at 0.22 of the safe height and by
+  the band between the logo and the version line (`RowBand` / `BlockHeight`; the rows are centred in
+  that band), and is never smaller than the labels need: the widest label ("Achievements") plus
+  `kSquareInset` (5 units) on each side, so the text keeps 2 units of air inside the button frame (the
+  owner saw it cross the frame in round 2). The buttons keep retail's art (the bordered button frames
+  are nine-sliced, so they draw at any size).
+  Two rows are made without new elements: the ribbon still lays its squares out left to right, but a
+  first-row square's bottom padding reserves the second row's height and the ribbon's right padding
+  takes the second row's width back, so the dialog (and the panel behind the squares) is sized for two
+  rows; after retail's `ComputeLayout` the hook moves every square into its row
+  (`UI::Element::AdjustUpperLeft`) and puts each button's frame back around its square (the seam's third
+  call point, `kExtPlaceAfterLayout`, right after `DialogInstance::ComputeLayout` in
+  `UserInterface::Update`).
+  `standalone_error.log` gets one `[PhoneMenu] <w>x<h>: <n> row(s) of square buttons (...)` or
+  `... column (...)` line per decision.
+  Touch targets on the S25: at the owner's UI 35 (render scale 100, an 819 x 378 layout, 2.86 device
+  pixels per unit) both menus use the small font, 78-unit squares = 223 device pixels (about 14 mm): the
+  main menu one row of 8, the pause menu two rows of 5. At the seeded UI 100 / render scale 50 (1170 x
+  540, 2 px per unit) both are one own-font row: main menu 108 units = 216 px (the 0.22 cap), pause menu
+  104 units = 208 px. The column comes back on the S25 (render scale 100) below about UI 33 % for the
+  pause menu and below about UI 31 % for the main menu: there even two rows of small-font squares
+  (2 x 82 + 18 units) are taller than the band between the logo and the version line (126 units at
+  UI 25), and the column then runs off the screen as retail's does at that scale.
+* **Centred layout** (any other screen and any screen where the rows do not fit). Retail's cover fit;
   the menu and the version line are laid out inside the safe area; the column is centred between the
   logo's bottom (0.22 of the overlay) and the version line when it fits there, else above the version
   line, and the version line moves to the bottom-left corner when the column cannot sit above it.
@@ -75,10 +94,12 @@ overlay's own centre line, within 0.3 %) and 0.039 .. 0.210 of its height.
 ## 3. The seams
 
 * `UI::UserInterface::_extDialogPlace` (engine, null by default and under the faithful profile, set by
-  `Ext::PhoneMenu::Sync` at boot): one function pointer, two call points.
+  `Ext::PhoneMenu::Sync` at boot): one function pointer, three call points.
   * `kExtPlaceLayout` in `UserInterface::Update` (`userinterface_frame.cpp`): the rectangle each dialog
     is laid out in (`ComputeLayout(x, y, right, bottom)`), retail's `{0, 0, w, h}` unless the row moves
     a recorded menu dialog or puts another dialog in its safe area. With the pointer null the loop is retail's line.
+  * `kExtPlaceAfterLayout` in the same loop, right after that `ComputeLayout` (P8 round 3): the menus'
+    second row of squares is moved into place.
   * `kExtPlaceBackdrop` in `UserInterface::Draw` (`userinterface_draw.cpp`): the backdrop rectangle after
     retail's cover fit.
 * `MainMenuDialog::OnOpened` (`mainmenudialog.cpp`): `Ext::PhoneMenu::MenuOpened` records the menu's and
@@ -103,6 +124,16 @@ magnified advances (seen at 25 %). It now keeps retail's scaled quads there, as 
 did (`kRetailRatioMax`); inside 75 .. 150 % the selection is unchanged (the existing unit test sweeps it).
 
 ## 5. Verified (Windows, debug, functional game dir)
+
+P8 round 3 (2026-10-26; screenshots in the session scratchpad `android-ui-fit/round3/`):
+* S25, the owner's UI 35 at render scale 100: the main menu one row of 8 small-font squares with
+  "Achievements" inside its frame (`r3_p_menu35.png`); the pause menu two rows of 5
+  (`r3_p_pause35.png`); a tap on a second-row square (Extensions) opens its dialog
+  (`r3_p_pause35_ext.png`). At UI 25 both menus are the column (`r3_p_pause25.png`, the log's
+  `585x270: column` lines).
+* Windows, 2528 x 1345 window at UI 32 (an 808 x 430 layout): the main menu two rows of 4 and the pause
+  menu two rows of 5, own font, 99-unit squares (`r3_win_menu32.png`, `r3_win_pause32.png`; the
+  hovered square shows its highlight and tooltip).
 
 P8 round 2 (2026-10-25; screenshots in the session scratchpad `android-ui-fit/round2/`):
 * S25, owner's settings (UI 35, render scale 100): the main menu as a row of 8 squares under the whole
