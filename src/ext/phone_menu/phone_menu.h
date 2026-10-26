@@ -52,7 +52,8 @@ void MenuOpened(const UI::Dialog* menu, const UI::Dialog* buildId, bool pause);
 float UiScaleSliderMinimum(float platformMinPercent);
 
 // The lowest UI scale (percent, a multiple of 5) at which the menus still fit as rows of squares
-// on the current back buffer (phone_math.h UiScaleFloor); 0 before the video device exists or
+// on the screen the current back buffer stands for (phone_math.h UiScaleFloor; P9: in screen units,
+// platform/common/ui_render_scale.h); 0 before the video device exists or
 // on a screen not wider than the backdrop.
 int32_t UiScaleFloorNow();
 

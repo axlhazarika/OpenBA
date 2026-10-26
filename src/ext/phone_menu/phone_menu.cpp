@@ -22,6 +22,7 @@
 
 #include "ext/phone_menu/phone_menu.h"
 #include "ext/phone_menu/phone_math.h"
+#include "ext/phone_menu/loading_screen.h"   // PlaceLoading (P9)
 #include "ext/registry.h"
 
 #include <atomic>
@@ -37,6 +38,8 @@
 #include "ui/SpriteSheet.h"
 #include "ui/UserInterface.h"
 #include "video/Device.h"   // Video::Device::_singleton: the back buffer the UI scale floor is for
+#include "platform/common/display_density.h"   // Platform::Display::RenderPercent (P9)
+#include "platform/common/ui_render_scale.h"   // ScreenExtent: the floor is in screen units (P9)
 
 namespace Ext {
 namespace PhoneMenu {
@@ -508,6 +511,8 @@ void Place(int32_t point, const UI::DialogInstance* dialog, int32_t width, int32
         }
         return;
     }
+    // P9: the loading screen (loading_screen.cpp): its picture's bottom border on the screen.
+    if (PlaceLoading(point, dialog, width, height, rect)) return;
     const bool menu = In(g_menus, dialog->_dialog);
     const bool pause = !menu && In(g_pauses, dialog->_dialog);
     const bool version = !menu && !pause && In(g_buildIds, dialog->_dialog);
@@ -574,9 +579,13 @@ float UiScaleSliderMinimum(float platformMinPercent) {
 int32_t UiScaleFloorNow() {
     const ::Video::Device* device = ::Video::Device::_singleton;
     if (device == nullptr) return 0;
-    // The menus' backdrop is the 16:9 overlay (Dialog/MainMenu.rsc, Dialog/Pause.rsc).
-    return UiScaleFloor(device->backBufferWidth, device->backBufferHeight, PauseMenuMetrics(), 16, 9,
-                        kVersionHeight);
+    // The menus' backdrop is the 16:9 overlay (Dialog/MainMenu.rsc, Dialog/Pause.rsc). P9: the UI
+    // scale is in screen units (ui_render_scale.h), so the floor is taken on the screen the back
+    // buffer stands for: 35 on the S25 at every render scale.
+    const int32_t render = Platform::Display::RenderPercent();
+    return UiScaleFloor(Platform::Display::ScreenExtent(device->backBufferWidth, render),
+                        Platform::Display::ScreenExtent(device->backBufferHeight, render), PauseMenuMetrics(),
+                        16, 9, kVersionHeight);
 }
 
 int32_t ClampUiScale(int32_t percent) {

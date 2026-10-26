@@ -1025,7 +1025,9 @@ purpose or not yet closed, as of P6 (2026-10-25).
   and pixel density by it so the mouse agrees, and the present pass scales the frame up (linear). Since
   P8 it is the Options > Enhanced row "Render scale" (Full / Half / Quarter), changed live
   (`docs/android/P8_INPUT_OPTIONS.md`).
-- **Android: the UI grows with a smaller render scale (P8).** The UI is laid out in engine pixels and
+- **Android: the UI grows with a smaller render scale (P8) — FIXED in P9.** The UI scale is now in
+  screen units (`src/platform/common/ui_render_scale.h`, `docs/android/P9_LOADING_SCALE.md` §2): the
+  interface keeps its size at Full, Half and Quarter. What P8 recorded: the UI was laid out in engine pixels and
   the render scale shrinks the engine's back buffer, so at User interface scale 100 the UI covers twice
   the screen share at Half (the phone's default since P7) and four times at Quarter: on the S25 at
   Quarter the Options dialog no longer fits (its tab row is above the screen; the Enhanced rows, Apply

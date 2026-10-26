@@ -24,11 +24,23 @@ namespace Platform {
 namespace Display {
 
 // The UI scale (percent) to use when no "UIScale" is saved. `defaultPercent` is what the
-// game would use otherwise; returned unchanged at density 1.
+// game would use otherwise; returned unchanged at density 1 and render scale 100. P9: times the
+// render scale (FirstRunPercentAt), so a phone's first run at Half gets 50.
 int FirstRunUiScalePercent(int defaultPercent);
 
 // The UI-scale slider's range (percent). In/out: pass retail's 75 / 150. Unchanged at density 1.
+// Not moved by the render scale: the setting is in screen units (ui_render_scale.h).
 void UiScaleSliderRange(float* minPercent, float* maxPercent);
+
+// P9 (ui_render_scale.h, docs/android/P9_LOADING_SCALE.md §2): the render scale as a percent
+// (Platform::Window::RenderScale; 100 on every desktop).
+int RenderPercent();
+
+// P9: UserInterface::_uiScale for the setting `uiPercent` (GameSettings::uiScale, the UI scale at
+// Full render scale): uiPercent / RenderPercent(), which is retail's uiPercent / 100.0f at 100.
+// Callers: GameContainer::ApplyKeyMapToUI and OptionsDialog::ApplyGameSettings (optionsdialog.cpp),
+// the Enhanced tab's Render scale row (render_scale_entry.cpp).
+float UiScaleRatio(int uiPercent);
 
 }  // namespace Display
 }  // namespace Platform
