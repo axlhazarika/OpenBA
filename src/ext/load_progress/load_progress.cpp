@@ -41,6 +41,8 @@
 #include "video/Context.h"
 #include "video/Device.h"
 #include "Dialog/LoaderDialog.h"
+#include "ext/phone_menu/loading_screen.h"        // LoadingUiScale (P9)
+#include "platform/common/display_density.h"     // UiScaleRatio (P9)
 
 #include <atomic>
 #include <cstdint>
@@ -148,7 +150,7 @@ bool Hook(Engine::LoaderLoop& /*loop*/, int32_t point, const System::Time* time)
 
 }  // namespace
 
-void BootBegin(const UI::Dialog* loadingDialog) {
+void BootBegin(const UI::Dialog* loadingDialog, int32_t uiScalePercent) {
     if (!Ext().load_progress || loadingDialog == nullptr)
         return;
     const int32_t mods = EnabledMods();
@@ -182,7 +184,10 @@ void BootBegin(const UI::Dialog* loadingDialog) {
     // buffer height against 900 pixels, truncated to a whole percent.
     const float heightRatio =
         900.0f / static_cast<float>(::Video::Device::_singleton->backBufferHeight);
-    g_ui->_uiScale = static_cast<float>(static_cast<int32_t>(heightRatio * 100.0f)) / 100.0f;
+    // P9: with ext.phone_menu on, the Options UI scale instead (phone_menu's loading_screen.h).
+    g_ui->_uiScale = Ext::PhoneMenu::LoadingUiScale(
+        static_cast<float>(static_cast<int32_t>(heightRatio * 100.0f)) / 100.0f,
+        Platform::Display::UiScaleRatio(uiScalePercent));
 
     g_line = FindLine(dlg);
     if (g_line != nullptr) {

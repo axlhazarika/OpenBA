@@ -32,8 +32,9 @@ namespace LoadProgress {
 
 // game_main.cpp, after the splash preloads and before MainLoop::Run (main thread, the
 // loader idle): builds the screen and installs the seams when the row is on and a mod
-// is enabled. `loadingDialog` is Dialog/Loading.rsc (the Loading splash's _dialogExternal).
-void BootBegin(const UI::Dialog* loadingDialog);
+// is enabled. `loadingDialog` is Dialog/Loading.rsc (the Loading splash's _dialogExternal);
+// `uiScalePercent` the Options UI scale (P9: the screen follows it with ext.phone_menu on).
+void BootBegin(const UI::Dialog* loadingDialog, int32_t uiScalePercent);
 
 // GameLoadDialogLoopT::Startup, first thing (main thread, the loader idle): removes the
 // seams and frees the screen. A no-op when BootBegin did not install it.

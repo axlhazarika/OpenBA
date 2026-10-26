@@ -466,6 +466,36 @@ void UI::UserInterface::Draw(Video::Context& context) {
                             }
                         }
                         sc->AddSpriteDraw(sd);          // dialog backdrop
+                        // EXT SEAM (NOT RETAIL, P9, docs/extensions/handins/PHONEMENU.md §3):
+                        // ext.phone_menu may draw the backdrop once more over it, clipped (the
+                        // loading picture's torn bottom border). Null pointer: retail's one draw.
+                        if (_extBackdropOver != nullptr) {
+                            int32_t r[4] = {x1, y1, x2, y2};
+                            int32_t clip[4] = {0, 0, 0, 0};
+                            if (_extBackdropOver(d, width, height, r, clip) && r[2] > r[0] && r[3] > r[1]) {
+                                SpriteDraw over = sd;
+                                over.x1 = r[0];
+                                over.y1 = r[1];
+                                over.x2 = r[2];
+                                over.y2 = r[3];
+                                if (clip[2] > 0 && clip[3] > 0) {
+                                    Video::Viewport v;
+                                    v.x = clip[0];
+                                    v.y = clip[1];
+                                    v.width = clip[2];
+                                    v.height = clip[3];
+                                    // A scissor change flushes and forgets the batch's sheet:
+                                    // the sheet is bound again on each side of the clipped draw.
+                                    const Video::Viewport saved = sc->SetScissor(v);
+                                    selectSheet(sheet);
+                                    sc->AddSpriteDraw(over);
+                                    (void)sc->SetScissor(saved);
+                                    selectSheet(sheet);
+                                } else {
+                                    sc->AddSpriteDraw(over);
+                                }
+                            }
+                        }
                     }
                 }
 
